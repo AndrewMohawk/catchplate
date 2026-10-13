@@ -787,6 +787,11 @@ def log_request(
 def publish_decision_gate_grant(approval: dict[str, Any]) -> dict[str, Any]:
     if not DECISION_GATE_BASE:
         return {"enabled": False, "ok": False, "error": "decision gate base is not configured"}
+    # A recorded vote can still be pending below the approval threshold.
+    # Only the authority's completed approval state permits grant publication;
+    # do not construct or send a grant for a pending, terminal, or absent status.
+    if approval.get("status") != "approved":
+        return {"enabled": True, "ok": False, "error": "approval is not approved"}
     required = [
         "id",
         "principal_id",

@@ -501,3 +501,33 @@ The durable `native-jit-preparation-rust.JBZM7oyC` record retains that result an
 11 byte-verified receipts. All 49 owned containers have terminal cleanup
 receipts and are absent; both warm build caches and the previous normal binary
 were preserved.
+
+### Next real integration boundary
+
+The next useful write slice is a durable/JIT request without an existing grant:
+one parent `release.reserve` operation atomically retains its encrypted review,
+admission evidence, pending child, capacity and audit, and returns the committed
+approval ID without releasing the credential. This is not implemented by the
+preparation exchange above. In particular:
+
+- Native source/configuration/deployment/TTL pins must be independently admitted
+  before the actual broker's `PreparedReleasePair` can support purpose-specific
+  signing and fresh-quote verification. Static-credential custody is a useful
+  ownership pattern, not reusable JIT authority.
+- Literal custody evidence must stay outside BusinessIntent and be independently
+  checked by both verifier and planner. Removing the service's unconditional
+  refusal alone would leave the receipt-driven release transition and mutation
+  allowlist unable to retain a pending child atomically.
+- The planner and executor's public-input guards still reject every non-null
+  nested JIT request. A complete admitted path needs an exact commitment-only
+  parent validator at those sites while preserving the raw-document refusal.
+- Retain the full versioned encrypted pair, including wrapped keys, nonces and
+  scope. The current legacy approval reader cannot open native ciphertext;
+  authenticated current-reviewer opening needs its own native owner.
+
+Calling standalone `jit.request` separately would not provide the required
+atomic parent/child write. The similarly named `authority_jit_compound_*`
+modules implement `jit.assertion.issue`, not pending-request creation. Existing
+SERIALIZABLE execution and bounded pending projections can be reused only after
+the new purpose's actual admission and transition contracts are connected.
+This map is source analysis, not an admission, migration or acceptance result.

@@ -723,6 +723,7 @@ def expect_http_error(call, *, status_code: int, detail: str, label: str) -> Non
 def exercise_grant_publish_acknowledgement_binding(runtime) -> None:
     approval = {
         "id": "approval:ack-binding",
+        "status": "approved",
         "principal_id": "agent:demo",
         "route_id": "demo.npm.publish.jit",
         "credential_id": "cred-demo-bearer",

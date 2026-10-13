@@ -1,4 +1,5 @@
-// Rendered UI only: every HTTP request and navigator.credentials.get is synthetic.
+// Rendered Approve/Deny UI only (historical filename retained): every HTTP
+// request and navigator.credentials.get is synthetic.
 // No browser launcher, app import, backend, real authority, provider or hardware.
 // Prefer Playwright MCP when its runtime permits loading this module. The MCP
 // runtime tested here has neither require nor dynamic import; in that runtime,
@@ -37,15 +38,33 @@ const BYTES = {
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const digest = char => 'sha256:' + char.repeat(64);
 const response = value => ({status: 200, contentType: 'application/json', body: JSON.stringify(value)});
+const CASES = [
+  {name: 'desktop-panel-denial', kind: 'deny'},
+  {name: 'mobile-queue-denial', kind: 'deny', mobile: true, queue: true},
+  {name: 'unknown-reload-recovery', kind: 'deny', unknown: true},
+  {name: 'desktop-panel-approval', kind: 'approve'},
+  {name: 'mobile-queue-approval-vote', kind: 'approve', mobile: true, queue: true, votePending: true},
+  {name: 'unknown-approval-reload-recovery', kind: 'approve', unknown: true},
+];
 
-function fixtures() {
+function fixtures(spec) {
   const now = Date.now();
   const at = offset => new Date(now + offset).toISOString();
+  // Independent literals matching db.approval_public_summary and the stored
+  // serverware.jitApproverPolicy/v1 DTO, not a production-function-derived oracle.
+  const policy = {schema: 'serverware.jitApproverPolicy/v1', requiredRoles: ['approver'], roleMatch: 'any',
+    allowedApproverIds: spec.votePending ? ['oidc:synthetic-reviewer', 'oidc:synthetic-second'] : ['oidc:synthetic-reviewer'],
+    allowAnyApproverId: false, requireWebAuthn: true, threshold: spec.votePending ? 2 : 1,
+    credentialPolicy: {allowedCredentialRecordIds: ['synthetic-record'], allowedAuthenticatorClasses: ['hardware'],
+      allowedAaguids: [], requireAttestationTrusted: true, requiredTrustBundleDigest: null,
+      minimumTrustBundleSequence: null, rpId: new URL(ORIGIN).hostname, origins: [ORIGIN],
+      requireUserPresence: true, requireUserVerification: true, counterPolicy: 'strict-or-zero', maxAssertionAgeSeconds: 120}};
   const item = {id: ID, status: 'pending', route_id: 'synthetic-route', principal_id: 'user:fixture',
     credential_id: 'synthetic-credential', credential_version: 1, policy_hash: digest('a'),
     request_digest: digest('b'), operation_digest: digest('c'), method: 'POST', url: digest('d'),
     requested_at: at(-10000), expires_at: at(120000), grant_ttl_seconds: 30, grant_max_uses: 1,
-    approved_until: null, decision_note: null};
+    approved_until: null, decision_note: null, approver_policy_digest: digest('f'),
+    verified_assertion_receipt_digest: null, approved_by: null, approver_policy: policy};
   const review = {id: ID, status: item.status, route_id: item.route_id, principal_id: item.principal_id,
     credential_ref: item.credential_id, credential_version: item.credential_version,
     policy_hash: item.policy_hash, method: item.method, requested_at: item.requested_at,
@@ -58,8 +77,8 @@ function fixtures() {
     review_receipt: {id: RECEIPT, expires_at: at(90000)}};
   const options = {publicKey: {challenge: BYTES.challenge, rpId: new URL(ORIGIN).hostname,
     allowCredentials: [{type: 'public-key', id: CREDENTIAL}], timeout: 120000, userVerification: 'required'},
-  serverware: {operation: 'jit.deny', authorityChallengeId: CHALLENGE}};
-  return {item, review, options};
+  serverware: {operation: spec.kind === 'approve' ? 'jit.decide' : 'jit.deny', authorityChallengeId: CHALLENGE}};
+  return {item, review, options, approvedUntil: at(30000)};
 }
 
 async function storage(page) {
@@ -72,33 +91,36 @@ async function textIs(page, selector, text) {
 }
 
 async function runCase(browser, html, spec, evidenceDir) {
-  const context = await browser.newContext({viewport: spec.mobile ? {width: 390, height: 844}
-    : {width: 1280, height: 900}, serviceWorkers: 'block', reducedMotion: 'reduce'});
-  let page;
-  try { page = await context.newPage(); } catch (error) { await context.close(); throw error; }
-  page.setDefaultTimeout(4000);
-  page.setDefaultNavigationTimeout(5000);
-  const source = fixtures();
+  let context = null, page = null;
+  const source = fixtures(spec);
+  const terminal = spec.kind === 'approve' ? 'approved' : 'denied';
+  const label = spec.kind === 'approve' ? 'Approve' : 'Deny';
   const ledger = [], events = [], errors = [], unexpected = [];
-  const record = {name: spec.name, syntheticOnly: true, passed: false, contextClosed: false,
-    unknownOutcomeScenario: spec.unknown === true,
+  const record = {name: spec.name, decision: spec.kind, syntheticOnly: true, passed: false, contextClosed: false,
+    unknownOutcomeScenario: spec.unknown === true, thresholdVoteScenario: spec.votePending === true,
     requests: ledger, events, errors, unexpected, screenshots: [], phase: 'fixture-setup', timings: []};
   const started = Date.now();
   const phase = name => { record.phase = name; record.timings.push({phase: name, elapsedMs: Date.now() - started}); };
   let status = 'pending', terminalOnNextMetadata = false, timedOut = false, failure = null;
-  const timeout = setTimeout(() => { timedOut = true; context.close().catch(() => {}); }, 18000);
+  const timeout = setTimeout(() => { timedOut = true; context?.close().catch(() => {}); }, 18000);
   const count = (method, endpoint) => ledger.filter(item => item.method === method && item.path === endpoint).length;
   const endpoint = `/api/approvals/${ID}`;
-  const optionsPath = endpoint + '/deny/webauthn/options';
-  const metadata = () => ({...source.item, status});
+  const optionsPath = endpoint + (spec.kind === 'approve' ? '/webauthn/options' : '/deny/webauthn/options');
+  const finalPath = endpoint + '/' + spec.kind;
+  const metadata = () => ({...source.item, status, approved_until: status === 'approved' ? source.approvedUntil : null});
+  try {
+  context = await browser.newContext({viewport: spec.mobile ? {width: 390, height: 844}
+    : {width: 1280, height: 900}, serviceWorkers: 'block', reducedMotion: 'reduce'});
+  page = await context.newPage();
+  page.setDefaultTimeout(4000);
+  page.setDefaultNavigationTimeout(5000);
   page.on('pageerror', () => errors.push('pageerror'));
   page.on('console', message => { if (message.type() === 'error') errors.push('console.error'); });
   page.on('dialog', dialog => { unexpected.push('dialog'); dialog.dismiss().catch(() => {}); });
   context.on('page', popup => { if (popup !== page) { unexpected.push('popup'); popup.close().catch(() => {}); } });
-  try {
-  await context.exposeBinding('__syntheticDenialAssertion', async (_, actual) => {
+  await context.exposeBinding('__syntheticDecisionAssertion', async (_, actual) => {
     assert.equal(count('POST', optionsPath), 1, 'assertion must follow exactly one matching options POST');
-    assert.equal(count('POST', endpoint + '/deny'), 0, 'assertion must precede final POST');
+    assert.equal(count('POST', finalPath), 0, 'assertion must precede final POST');
     assert.deepEqual(actual.fields, ['publicKey']);
     assert.deepEqual(actual.publicKeyFields, ['allowCredentials', 'challenge', 'rpId', 'timeout', 'userVerification']);
     assert.equal(actual.challenge, BYTES.challenge);
@@ -119,7 +141,7 @@ async function runCase(browser, html, spec, evidenceDir) {
     }
     Object.defineProperty(navigator.credentials, 'get', {configurable: true, value: async options => {
       const key = options.publicKey;
-      const value = await window.__syntheticDenialAssertion({fields: Object.keys(options).sort(),
+      const value = await window.__syntheticDecisionAssertion({fields: Object.keys(options).sort(),
         publicKeyFields: Object.keys(key).sort(), challenge: encode(key.challenge), rpId: key.rpId,
         userVerification: key.userVerification, timeout: key.timeout,
         allowCredentials: key.allowCredentials.map(item => ({type: item.type, id: encode(item.id)}))});
@@ -130,7 +152,7 @@ async function runCase(browser, html, spec, evidenceDir) {
   });
   await context.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url()), method = request.method();
-    ledger.push({method, path: url.pathname});
+    ledger.push({method, path: url.pathname, query: url.search});
     try {
       assert(ledger.length <= 160, 'request budget exceeded');
       assert.equal(url.origin, ORIGIN, 'external origin attempted');
@@ -149,7 +171,8 @@ async function runCase(browser, html, spec, evidenceDir) {
         return await route.fulfill(response({error: 'Synthetic UI check; no attestation'}));
       }
       const limited = ['/api/control-plane/approvals', '/api/setup/sessions'].includes(url.pathname);
-      assert.equal(url.search, limited ? '?limit=100' : '');
+      const decisionQuery = spec.kind === 'approve' && method === 'POST' && url.pathname === finalPath;
+      assert.equal(url.search, limited ? '?limit=100' : decisionQuery ? '?ttl_seconds=30' : '');
       if (method === 'GET') {
         let value;
         switch (url.pathname) {
@@ -169,7 +192,7 @@ async function runCase(browser, html, spec, evidenceDir) {
             if (terminalOnNextMetadata) {
               assert.equal(spec.unknown, true);
               assert.equal(count('GET', '/api/approvals'), 3);
-              status = 'denied';
+              status = terminal;
               terminalOnNextMetadata = false;
             }
             events.push('metadata'); value = [metadata()]; break;
@@ -178,28 +201,35 @@ async function runCase(browser, html, spec, evidenceDir) {
         }
         return await route.fulfill(response(value));
       }
-      assert.equal(method, 'POST', 'only synthetic denial POSTs are allowed');
+      assert.equal(method, 'POST', 'only synthetic decision POSTs are allowed');
       assert.equal(request.headers()['x-serverware-csrf-token'], CSRF);
       assert.equal(request.headers()['content-type'], 'application/json');
       const body = request.postDataJSON();
       if (url.pathname === optionsPath) {
         assert.equal(count('POST', optionsPath), 1);
-        assert.deepEqual(body, {reason: REASON, reviewReceiptId: RECEIPT});
+        assert.deepEqual(body, spec.kind === 'approve' ? {reviewReceiptId: RECEIPT, ttlSeconds: 30}
+          : {reason: REASON, reviewReceiptId: RECEIPT});
         assert.deepEqual(events, ['private-review']);
         events.push('options');
         return await route.fulfill(response(source.options));
       }
-      assert.equal(url.pathname, endpoint + '/deny', 'unexpected mutation');
-      assert.equal(count('POST', endpoint + '/deny'), 1);
+      assert.equal(url.pathname, finalPath, 'unexpected mutation');
+      assert.equal(count('POST', finalPath), 1);
       assert.deepEqual(events, ['private-review', 'options', 'mock-assertion']);
-      assert.deepEqual(body, {reason: REASON, reviewReceiptId: RECEIPT, authorityChallengeId: CHALLENGE,
+      assert.deepEqual(body, {...(spec.kind === 'deny' ? {reason: REASON} : {}),
+        reviewReceiptId: RECEIPT, authorityChallengeId: CHALLENGE,
         assertion: {id: CREDENTIAL, rawId: CREDENTIAL, type: 'public-key', response: {
           clientDataJSON: BYTES.clientDataJSON, authenticatorData: BYTES.authenticatorData, signature: BYTES.signature}}});
       assert.deepEqual(await storage(page), {session: [[MARKER, ID]], local: []}, 'pre-POST hold must contain only the UUID');
-      events.push('deny');
-      if (!spec.unknown) status = 'denied';
-      // Deliberately unconfirmed response: the real UI must not call it success.
-      return await route.fulfill(response({id: ID, status}));
+      events.push(spec.kind);
+      if (spec.unknown) {
+        // This deliberately incomplete response cannot prove approval/vote/denial.
+        return await route.fulfill(response({id: ID, status: 'pending'}));
+      }
+      if (!spec.votePending) status = terminal;
+      const result = spec.kind === 'approve' ? {...metadata(), data_plane_grant_publish: {
+        enabled: !spec.votePending, ok: !spec.votePending, error: null}} : {id: ID, status};
+      return await route.fulfill(response(result));
     } catch (_) {
       unexpected.push(`${method} ${url.pathname}`);
       await route.abort('blockedbyclient');
@@ -216,30 +246,48 @@ async function runCase(browser, html, spec, evidenceDir) {
     const queue = page.locator('#approvals');
     await queue.getByRole('button', {name: 'Review', exact: true}).waitFor({state: 'visible'});
     assert(await queue.getByRole('button', {name: 'Deny', exact: true}).isDisabled());
+    assert(await queue.getByRole('button', {name: 'Approve', exact: true}).isDisabled());
     assert.equal(count('GET', endpoint + '/review'), 0);
     phase('review-click');
     await queue.getByRole('button', {name: 'Review', exact: true}).click();
     const note = page.locator(`#approval-review-deny-note-${ID}`);
-    const deny = page.locator(`#approval-review-deny-${ID}`);
+    const panelAction = page.locator(`#approval-review-${spec.kind}-${ID}`);
     await note.waitFor({state: 'visible'});
     assert.equal(page.url(), ORIGIN + `/approvals/${ID}`);
-    assert(await deny.isEnabled());
+    assert(await panelAction.isEnabled());
     assert((await page.locator('#approval-review').innerText()).includes(PRIVATE_REVIEW));
-    await note.fill('  ' + REASON + '  ');
+    if (spec.kind === 'deny') await note.fill('  ' + REASON + '  ');
     assert.equal(await queue.locator('input').count(), 0, 'queue must share the visible review note');
     await page.locator('#approval-review-actions').scrollIntoViewIfNeeded();
     await screenshot('decision');
-    phase('deny-click');
-    const action = spec.queue ? queue.getByRole('button', {name: 'Deny', exact: true}) : deny;
+    phase(spec.kind + '-click');
+    const action = spec.queue ? queue.getByRole('button', {name: label, exact: true}) : panelAction;
     await action.click();
-    await textIs(page, '#operator-status', spec.unknown ? 'Denial outcome is unknown' : `Approval ${ID} was denied.`);
+    const expectedMessage = spec.unknown ? (spec.kind === 'approve' ? 'Approval' : 'Denial') + ' outcome is unknown'
+      : spec.votePending ? 'Approval vote recorded; waiting for additional approvers. No grant is ready yet.'
+        : spec.kind === 'approve' ? 'Approval recorded and proxy grant delivery acknowledged.' : `Approval ${ID} was denied.`;
+    await textIs(page, '#operator-status', expectedMessage);
+    record.decisionStatus = await page.locator('#operator-status').innerText();
+    assert.equal(await page.locator('#operator-status').getAttribute('class'),
+      'operator-status ' + (spec.unknown ? 'error' : spec.votePending ? 'pending' : 'success'));
     assert.equal(count('POST', optionsPath), 1);
-    assert.equal(count('POST', endpoint + '/deny'), 1);
+    assert.equal(count('POST', finalPath), 1);
     assert.equal(count('GET', endpoint + '/review'), 1);
     assert.equal(events.filter(item => item === 'mock-assertion').length, 1);
     assert(events.includes('metadata'));
     assert.equal(await page.locator('#approval-review-actions').isHidden(), true);
     assert(!(await page.locator('body').innerText()).includes(PRIVATE_REVIEW));
+    if (spec.unknown || spec.votePending) {
+      assert(await queue.getByRole('button', {name: 'Deny', exact: true}).isDisabled());
+      assert(await queue.getByRole('button', {name: 'Approve', exact: true}).isDisabled());
+    } else {
+      assert.equal(await queue.getByRole('button', {name: 'Deny', exact: true}).count(), 0);
+      assert.equal(await queue.getByRole('button', {name: 'Approve', exact: true}).count(), 0);
+    }
+    if (spec.votePending) {
+      assert.equal(status, 'pending');
+      assert.equal(metadata().approved_until, null);
+    }
     if (spec.unknown) {
       phase('unknown-reload');
       assert.deepEqual(await storage(page), {session: [[MARKER, ID]], local: []});
@@ -261,16 +309,21 @@ async function runCase(browser, html, spec, evidenceDir) {
       await screenshot('reload-held');
       terminalOnNextMetadata = true;
       await queue.getByRole('button', {name: 'Review', exact: true}).click();
-      await textIs(page, '#operator-status', 'Current approval status: denied. No decision or private review was retried.');
+      await textIs(page, '#operator-status', `Current approval status: ${terminal}. No decision or private review was retried.`);
+      assert.equal(await queue.getByRole('button', {name: 'Deny', exact: true}).count(), 0);
+      assert.equal(await queue.getByRole('button', {name: 'Approve', exact: true}).count(), 0);
+      await screenshot('terminal-recovered');
     } else {
       await queue.scrollIntoViewIfNeeded();
-      await screenshot('denied');
+      await screenshot(spec.votePending ? 'vote-pending' : terminal);
     }
     assert.deepEqual(await storage(page), {session: [], local: []});
     assert.equal(count('GET', '/api/approvals'), spec.unknown ? 3 : 1);
     assert.equal(count('GET', `/approvals/${ID}`), spec.unknown ? 1 : 0);
     assert.equal(count('POST', optionsPath), 1);
-    assert.equal(count('POST', endpoint + '/deny'), 1);
+    assert.equal(count('POST', finalPath), 1);
+    assert.equal(count('POST', endpoint + (spec.kind === 'approve' ? '/deny' : '/approve')), 0);
+    assert.equal(count('POST', endpoint + (spec.kind === 'approve' ? '/deny/webauthn/options' : '/webauthn/options')), 0);
     assert.equal(count('GET', endpoint + '/review'), 1);
     assert.equal(events.filter(item => item === 'mock-assertion').length, 1);
     assert.deepEqual(unexpected, []);
@@ -278,7 +331,8 @@ async function runCase(browser, html, spec, evidenceDir) {
     assert.equal(timedOut, false);
     record.passed = true;
     phase('complete');
-    record.counts = {optionsPosts: 1, syntheticAssertions: 1, denialPosts: 1, privateReviewGets: 1,
+    record.counts = {optionsPosts: 1, syntheticAssertions: 1, decisionPosts: 1,
+      approvalPosts: count('POST', endpoint + '/approve'), denialPosts: count('POST', endpoint + '/deny'), privateReviewGets: 1,
       metadataRecoveryGets: count('GET', '/api/approvals')};
     return record;
   } catch (error) {
@@ -314,8 +368,8 @@ async function runCase(browser, html, spec, evidenceDir) {
   } finally {
     clearTimeout(timeout);
     let cleanupFailure = null;
-    try { await context.close(); } catch (error) { cleanupFailure = error; }
-    record.contextClosed = !browser.contexts().includes(context);
+    try { if (context) await context.close(); } catch (error) { cleanupFailure = error; }
+    record.contextClosed = context === null || !browser.contexts().includes(context);
     if (cleanupFailure || !record.contextClosed) {
       record.passed = false;
       record.cleanupFailure = 'owned-context-close-failed';
@@ -328,7 +382,7 @@ async function runCase(browser, html, spec, evidenceDir) {
 
 async function check(browser, configuration) {
   const {fixturePath, fixtureSha256, appSha256, evidenceDir} = configuration;
-  assert(browser && browser.isConnected(), 'requires the existing MCP browser');
+  assert(browser && browser.isConnected(), 'requires a connected caller-owned browser');
   assert(/^[0-9a-f]{64}$/.test(fixtureSha256) && /^[0-9a-f]{64}$/.test(appSha256));
   assert(path.isAbsolute(fixturePath) && path.isAbsolute(evidenceDir));
   assert(evidenceDir.startsWith('/tmp/') && !fs.existsSync(evidenceDir), 'use a fresh owned /tmp output directory');
@@ -345,12 +399,17 @@ async function check(browser, configuration) {
   const before = browser.contexts();
   const result = {schema: 'serverware.approvalDenialBrowserResult/v1', syntheticOnly: true,
     actualBackendVerified: false, nativeAuthorityVerified: false, hardwareVerified: false,
+    decisionsCovered: ['approve', 'deny'],
     passed: false, fixtureSha256, htmlSha256: fixture.htmlSha256, sourceSha256: fixture.sourceSha256,
     groups: [], contextsPreserved: false};
   try {
-    for (const spec of [{name: 'desktop-panel-denial'}, {name: 'mobile-queue-denial', mobile: true, queue: true},
-      {name: 'unknown-reload-recovery', unknown: true}]) {
-      assert.equal(spec.unknown === true, spec.name === 'unknown-reload-recovery');
+    assert.equal(CASES.length, 6);
+    assert.equal(new Set(CASES.map(spec => spec.name)).size, 6);
+    assert.equal(CASES.filter(spec => spec.kind === 'approve').length, 3);
+    assert.equal(CASES.filter(spec => spec.kind === 'deny').length, 3);
+    for (const spec of CASES) {
+      assert.equal(spec.unknown === true, ['unknown-reload-recovery', 'unknown-approval-reload-recovery'].includes(spec.name));
+      assert.equal(spec.votePending === true, spec.name === 'mobile-queue-approval-vote');
       try {
         result.groups.push(await runCase(browser, fixture.html, spec, evidenceDir));
       } catch (error) {

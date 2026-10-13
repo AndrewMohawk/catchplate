@@ -18096,7 +18096,11 @@ def approve(
         raise HTTPException(
             status_code=409, detail="approval state changed before it could be approved"
         )
-    gate_publish = runtime.publish_decision_gate_grant(updated)
+    gate_publish = (
+        runtime.publish_decision_gate_grant(updated)
+        if updated.get("status") == "approved"
+        else {"enabled": False, "ok": False, "error": None}
+    )
     if gate_publish.get("enabled"):
         db.record_audit_event(
             "data_plane.grant.publish",
@@ -29561,6 +29565,7 @@ UI_HTML = r"""
     }
     function beginApprovalDecision(id, kind) {
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id)) throw new Error('Approval identifier is invalid');
+      if (!['approve', 'deny'].includes(kind)) throw new Error('Approval decision is invalid');
       if (approvalDecisionInFlight) throw new Error('Another approval decision is in progress');
       if (approvalDecisionUnsent.has(id)) clearApprovalDecisionHold(id);
       const hold = approvalDecisionHoldReason(id);
@@ -29596,15 +29601,18 @@ UI_HTML = r"""
           || JSON.stringify(canonicalValue(state.approvalReview)) !== decision.reviewFingerprint
           || JSON.stringify(canonicalValue(item)) !== decision.itemFingerprint
           || approvalDecisionAuthContext() !== decision.authContext
-          || denialReason(decision.id) !== decision.reason) throw new Error('Approval review, reason or authentication changed; no new denial was submitted');
+          || decision.kind === 'deny' && denialReason(decision.id) !== decision.reason) {
+        throw new Error('Approval review, reason or authentication changed; no new decision was submitted');
+      }
       const blocked = approvalReviewActionBlockReason(item, decision);
       if (blocked) throw new Error(blocked);
     }
-    function denialRequestOptions(options) {
+    function approvalDecisionRequestOptions(options, kind) {
       const key = options?.publicKey;
       const encoded = value => typeof value === 'string' && value.length > 0 && value.length <= 4096
         && /^[A-Za-z0-9_-]+$/.test(value) && bytesToB64(b64ToBytes(value)) === value;
-      if (!options || options.serverware?.operation !== 'jit.deny'
+      if (!['approve', 'deny'].includes(kind) || !options
+          || options.serverware?.operation !== (kind === 'approve' ? 'jit.decide' : 'jit.deny')
           || typeof options.serverware?.authorityChallengeId !== 'string'
           || !options.serverware.authorityChallengeId.length || options.serverware.authorityChallengeId.length > 512
           || !key || !encoded(key.challenge) || typeof key.rpId !== 'string' || !key.rpId.length
@@ -29612,7 +29620,7 @@ UI_HTML = r"""
           || !Number.isInteger(key.timeout) || key.timeout < 1 || key.timeout > 120000
           || !Array.isArray(key.allowCredentials) || !key.allowCredentials.length || key.allowCredentials.length > 64
           || !key.allowCredentials.every(item => item?.type === 'public-key' && encoded(item.id))) {
-        throw new Error('Eligible authority-bound denial options are unavailable');
+        throw new Error('Eligible authority-bound decision options are unavailable');
       }
       return {challengeId: options.serverware.authorityChallengeId,
         credentialIds: key.allowCredentials.map(item => item.id), publicKey: prepareRequestOptions(options)};
@@ -29627,7 +29635,7 @@ UI_HTML = r"""
         // an unknown server outcome, even if storage cleanup also needs recovery.
         approvalDecisionUnsent.add(decision.id);
         clearApprovalDecisionHold(decision.id);
-        throw new Error('Cannot retain decision recovery marker; no denial was submitted');
+        throw new Error('Cannot retain decision recovery marker; no decision was submitted');
       }
       approvalDecisionUncertain.add(decision.id);
       decision.holdInstalled = true;
@@ -29742,50 +29750,40 @@ UI_HTML = r"""
         </div>` : '';
     }
     async function approve(id) {
-      const decision = beginApprovalDecision(id, 'approve');
-      try {
-        const item = state.approvals.find((approval) => approval.id === id) || {id};
-        const blockReason = approvalReviewBlockReason(item);
-        if (!state.approvalReview || state.approvalReview.id !== id) {
-          await loadApprovalReview(id);
-          setStatus(`Review loaded for approval ${id}.`, 'pending');
-          return {pending: true, reviewLoaded: true};
-        }
-        if (blockReason) {
-          setStatus(`Approval ${id} cannot be approved: ${blockReason}.`, 'error');
-          return {blocked: true, reason: blockReason};
-        }
-        const reviewReceiptId = state.approvalReview?.review_receipt?.id;
-        if (!reviewReceiptId) {
-          await loadApprovalReview(id);
-          setStatus(`Review receipt refreshed for approval ${id}. Inspect it before approving.`, 'pending');
-          return {pending: true, reviewLoaded: true};
-        }
-        const grantTtlSeconds = Number(item.grant_ttl_seconds || state.approvalReview?.retry_semantics?.grant_ttl_seconds || 30);
-        const options = await api(`/api/approvals/${id}/webauthn/options`, {
-          method: 'POST',
-          body: JSON.stringify({reviewReceiptId, ttlSeconds: grantTtlSeconds})
-        });
-        let body = {
-          reviewReceiptId,
-          authorityChallengeId: options.serverware.authorityChallengeId
-        };
-        if (window.PublicKeyCredential && (options.publicKey.allowCredentials || []).length) {
-          const assertion = await navigator.credentials.get({publicKey: prepareRequestOptions(options)});
-          body.assertion = credentialToJson(assertion);
-        }
-        await api(`/api/approvals/${id}/approve?ttl_seconds=${encodeURIComponent(grantTtlSeconds)}`, {
-          method: 'POST',
-          body: JSON.stringify(body)
-        });
-        await refresh();
-        await loadApprovalReview(id);
-      } finally {
-        finishApprovalDecision(decision);
-      }
+      return submitApprovalDecision(id, 'approve');
     }
     async function deny(id) {
-      const decision = beginApprovalDecision(id, 'deny');
+      return submitApprovalDecision(id, 'deny');
+    }
+    function approvalDecisionResult(result, decision) {
+      if (!result || result.id !== decision.id) throw new Error('Decision response unavailable');
+      if (decision.kind === 'deny') {
+        if (result.status !== 'denied') throw new Error('Decision response unavailable');
+        return {uiHandled: true, denied: true};
+      }
+      const original = JSON.parse(decision.itemFingerprint);
+      if (!['pending', 'approved'].includes(result.status)
+          || ['route_id', 'principal_id', 'credential_id', 'credential_version', 'policy_hash',
+            'request_digest', 'operation_digest', 'grant_ttl_seconds', 'grant_max_uses', 'approver_policy_digest',
+            'requested_at', 'expires_at', 'method', 'url'].some(field => result[field] !== original[field])
+          || JSON.stringify(canonicalValue(result.approver_policy)) !== JSON.stringify(canonicalValue(original.approver_policy))) {
+        throw new Error('Approval response binding is unavailable');
+      }
+      const publication = result.data_plane_grant_publish;
+      if (!publication || typeof publication.enabled !== 'boolean' || typeof publication.ok !== 'boolean'
+          || !(publication.error === null || typeof publication.error === 'string')) throw new Error('Approval response publication status is unavailable');
+      if (result.status === 'pending') {
+        if (original.approver_policy.threshold <= 1 || result.approved_until !== null) throw new Error('Approval vote response is unavailable');
+        return {uiHandled: true, pending: true, voteRecorded: true};
+      }
+      if (typeof result.approved_until !== 'string' || !Number.isFinite(Date.parse(result.approved_until))
+          || Date.parse(result.approved_until) <= Date.now()) throw new Error('Approval grant response is unavailable');
+      return {uiHandled: true, approved: true, grantDeliveryAcknowledged: publication.enabled && publication.ok};
+    }
+    async function submitApprovalDecision(id, kind) {
+      const decision = beginApprovalDecision(id, kind);
+      const approving = kind === 'approve';
+      const label = approving ? 'Approval' : 'Denial';
       try {
         const item = (state.approvals || []).find(value => value.id === id);
         const review = state.approvalReview;
@@ -29793,22 +29791,30 @@ UI_HTML = r"""
             || !Number.isFinite(Date.parse(review.review_receipt?.expires_at))
             || Date.parse(review.review_receipt.expires_at) <= Date.now()) {
           const loaded = await loadApprovalReview(id);
-          setStatus(loaded ? `Review loaded for approval ${id}. Inspect it before denying.` : 'Review selection changed. Inspect the selected review before deciding.', 'pending');
+          setStatus(loaded ? `Review loaded for approval ${id}. Inspect it before ${approving ? 'approving' : 'denying'}.` : 'Review selection changed. Inspect the selected review before deciding.', 'pending');
           return {pending: true, reviewLoaded: loaded};
         }
         const blocked = item ? approvalReviewActionBlockReason(item, decision) : 'Approval is no longer in the current queue';
         if (blocked) throw new Error(blocked);
         if (typeof window.PublicKeyCredential !== 'function' || typeof navigator.credentials?.get !== 'function') {
-          throw new Error('WebAuthn is unavailable; no denial was submitted');
+          throw new Error(`WebAuthn is unavailable; no ${label.toLowerCase()} was submitted`);
         }
-        Object.assign(decision, {review, generation: approvalReviewGeneration, reason: denialReason(id),
+        if (approving && (!Number.isInteger(item.grant_ttl_seconds) || item.grant_ttl_seconds < 1
+            || item.grant_ttl_seconds > 3600 || item.grant_ttl_seconds !== review.retry_semantics?.grant_ttl_seconds
+            || !Number.isInteger(item.approver_policy?.threshold) || item.approver_policy.threshold < 1
+            || item.approver_policy.threshold > 16)) throw new Error('Reviewed approval TTL or approver threshold is unavailable');
+        Object.assign(decision, {review, generation: approvalReviewGeneration, reason: approving ? null : denialReason(id),
           reviewFingerprint: JSON.stringify(canonicalValue(review)), itemFingerprint: JSON.stringify(canonicalValue(item)),
-          authContext: approvalDecisionAuthContext(), reviewReceiptId: review.review_receipt.id});
+          authContext: approvalDecisionAuthContext(), reviewReceiptId: review.review_receipt.id,
+          grantTtlSeconds: approving ? item.grant_ttl_seconds : null});
         const checkContext = () => assertApprovalDecisionCurrent(decision);
         checkContext();
-        const options = denialRequestOptions(await api(`/api/approvals/${encodeURIComponent(id)}/deny/webauthn/options`, {
-          method: 'POST', body: JSON.stringify({reason: decision.reason, reviewReceiptId: decision.reviewReceiptId}), checkContext
-        }));
+        const optionsBody = approving
+          ? {reviewReceiptId: decision.reviewReceiptId, ttlSeconds: decision.grantTtlSeconds}
+          : {reason: decision.reason, reviewReceiptId: decision.reviewReceiptId};
+        const options = approvalDecisionRequestOptions(await api(`/api/approvals/${encodeURIComponent(id)}/${approving ? '' : 'deny/'}webauthn/options`, {
+          method: 'POST', body: JSON.stringify(optionsBody), checkContext
+        }), kind);
         checkContext();
         options.publicKey.timeout = Math.min(options.publicKey.timeout,
           Date.parse(review.expires_at) - Date.now(), Date.parse(review.review_receipt.expires_at) - Date.now());
@@ -29817,10 +29823,10 @@ UI_HTML = r"""
           credential = await navigator.credentials.get({publicKey: options.publicKey});
         } catch (error) {
           if (error?.name === 'NotAllowedError' || error?.name === 'AbortError') {
-            setStatus('Denial cancelled or timed out. No denial was submitted.', 'pending');
+            setStatus(`${label} cancelled or timed out. No ${label.toLowerCase()} was submitted.`, 'pending');
             return {uiHandled: true, cancelled: true};
           }
-          throw new Error('WebAuthn denial assertion is unavailable; no denial was submitted');
+          throw new Error(`WebAuthn ${label.toLowerCase()} assertion is unavailable; no ${label.toLowerCase()} was submitted`);
         }
         checkContext();
         if (!credential || credential.type !== 'public-key' || !options.credentialIds.includes(credential.id)
@@ -29828,27 +29834,32 @@ UI_HTML = r"""
             || !['clientDataJSON', 'authenticatorData', 'signature'].every(field =>
               credential.response?.[field] instanceof ArrayBuffer && credential.response[field].byteLength > 0
               && credential.response[field].byteLength <= 65536)) {
-          throw new Error('Eligible WebAuthn denial assertion is unavailable; no denial was submitted');
+          throw new Error(`Eligible WebAuthn ${label.toLowerCase()} assertion is unavailable; no ${label.toLowerCase()} was submitted`);
         }
-        const body = {reason: decision.reason, reviewReceiptId: decision.reviewReceiptId,
+        const body = {...(approving ? {} : {reason: decision.reason}), reviewReceiptId: decision.reviewReceiptId,
           authorityChallengeId: options.challengeId, assertion: credentialToJson(credential)};
         checkContext();
         retainApprovalDecisionHold(decision);
         try {
-          const result = await api(`/api/approvals/${encodeURIComponent(id)}/deny`, {
+          const result = await api(`/api/approvals/${encodeURIComponent(id)}/${approving ? 'approve?ttl_seconds=' + decision.grantTtlSeconds : 'deny'}`, {
             method: 'POST', body: JSON.stringify(body), checkContext
           });
-          if (!result || result.id !== id || result.status !== 'denied') throw new Error('Decision response unavailable');
+          const outcome = approvalDecisionResult(result, decision);
           clearApprovalDecisionHold(id);
           try { await recoverApprovalDecision(decision); } catch (_) { state.approvalReview = null; }
-          setStatus(`Approval ${id} was denied.`, 'success');
-          return {uiHandled: true, denied: true};
+          if (outcome.voteRecorded) setStatus('Approval vote recorded; waiting for additional approvers. No grant is ready yet.', 'pending');
+          else if (outcome.approved) setStatus(outcome.grantDeliveryAcknowledged
+            ? 'Approval recorded and proxy grant delivery acknowledged.'
+            : 'Approval recorded, but proxy grant delivery was not confirmed. Check status; do not resubmit.',
+            outcome.grantDeliveryAcknowledged ? 'success' : 'pending');
+          else setStatus(`Approval ${id} was denied.`, 'success');
+          return outcome;
         } catch (_) {
           let current = null;
           try { current = await recoverApprovalDecision(decision); } catch (_) { /* Preserve the recovery hold. */ }
           setStatus(current && ['approved', 'denied', 'expired', 'superseded'].includes(current.status)
             ? `Submission response unavailable. Current approval status: ${current.status}. No decision was retried.`
-            : 'Denial outcome is unknown. The decision is held for status recovery; no decision was retried.', 'error');
+            : `${label} outcome is unknown. The decision is held for status recovery; no decision was retried.`, 'error');
           return {uiHandled: true, uncertain: true};
         }
       } finally {

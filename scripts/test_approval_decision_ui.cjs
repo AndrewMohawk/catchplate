@@ -39,8 +39,8 @@ const actual = [
     busy: () => approvalDecisionInFlight, held: id => approvalDecisionUncertain.has(id)};`
 ].join('\n');
 
-// Public contracts independently checked against ApprovalDenyOptionsRequest,
-// ApprovalDeny, _authority_jit_decision_options and the full-review producer.
+// Public contracts independently checked against the decision DTOs,
+// _authority_jit_decision_options and the public-summary/full-review producers.
 const ID = '11111111-1111-4111-8111-111111111111';
 const OTHER = '44444444-4444-4444-8444-444444444444';
 const RECEIPT = '22222222-2222-4222-8222-222222222222';
@@ -55,7 +55,8 @@ function metadata(id = ID) {
     credential_id: 'synthetic-credential', credential_version: 1, policy_hash: digest('a'),
     request_digest: digest('b'), operation_digest: digest('c'), method: 'POST',
     url: digest('d'), requested_at: date(-10000), expires_at: date(60000),
-    grant_ttl_seconds: 30, grant_max_uses: 1, approved_until: null, decision_note: null};
+    grant_ttl_seconds: 30, grant_max_uses: 1, approved_until: null, decision_note: null,
+    approver_policy_digest: digest('f'), approver_policy: {principals: ['user:fixture'], threshold: 1}};
 }
 function review(id = ID) {
   const item = metadata(id);
@@ -69,11 +70,16 @@ function review(id = ID) {
       grant_ttl_seconds: 30, grant_max_uses: 1}, review_digest: digest('e'),
     review_receipt: {id: RECEIPT, expires_at: date(30000)}};
 }
-function options() {
+function options(kind = 'deny') {
   return {publicKey: {challenge: Buffer.alloc(32, 3).toString('base64url'),
     rpId: 'serverware.example.test', allowCredentials: [{type: 'public-key', id: credentialId, transports: ['usb']}],
     timeout: 120000, userVerification: 'required'},
-  serverware: {authorityChallengeId: CHALLENGE, operation: 'jit.deny'}};
+  serverware: {authorityChallengeId: CHALLENGE, operation: kind === 'approve' ? 'jit.decide' : 'jit.deny'}};
+}
+function approvalResult(status = 'approved', threshold = 1) {
+  return {...metadata(), status, approved_until: status === 'approved' ? date(30000) : null,
+    approver_policy: {principals: threshold > 1 ? ['user:fixture', 'user:second'] : ['user:fixture'], threshold},
+    data_plane_grant_publish: {enabled: status === 'approved', ok: status === 'approved', error: null}};
 }
 const buffer = value => Uint8Array.from(Buffer.from(value)).buffer;
 function assertion() {
@@ -166,10 +172,12 @@ function fixture(config = {}) {
       let result;
       if (control.fetch) result = await control.fetch(call);
       if (result === undefined) {
-        if (path.endsWith('/webauthn/options')) result = {value: options()};
+        if (path.endsWith('/webauthn/options')) result = {value: options(path.includes('/deny/') ? 'deny' : 'approve')};
         else if (path.endsWith('/deny')) result = {value: {id: ID, status: 'denied'}};
+        else if (path === `/api/approvals/${ID}/approve?ttl_seconds=30`) result = {value: approvalResult()};
         else if (path.endsWith('/review')) result = {value: review(path.split('/')[3])};
-        else if (path === '/api/approvals') result = {value: [{...metadata(), status: 'denied'}]};
+        else if (path === '/api/approvals') result = {value: [{...metadata(),
+          status: calls.some(call => call.path.includes('/approve?')) ? 'approved' : 'denied'}]};
         else throw Error(`unexpected synthetic route: ${path}`);
       }
       return {ok: (result.status || 200) < 400, status: result.status || 200,
@@ -187,7 +195,9 @@ function fixture(config = {}) {
 }
 const writes = f => f.calls.filter(call => call.method === 'POST');
 const finals = f => f.calls.filter(call => call.path.endsWith('/deny'));
+const approveFinals = f => f.calls.filter(call => call.path.includes('/approve?'));
 async function refused(f) { await assert.rejects(f.ui.deny(ID)); assert.equal(finals(f).length, 0); assert.equal(f.ui.busy(), null); }
+async function refusedApprove(f) { await assert.rejects(f.ui.approve(ID)); assert.equal(approveFinals(f).length, 0); assert.equal(f.ui.busy(), null); }
 function noPrivateStorage(f) {
   for (const entry of f.events.filter(event => event[0] === 'store')) assert.deepEqual(entry, ['store', MARKER, ID]);
   for (const [key, value] of f.storage) assert.deepEqual([key, value], [MARKER, ID]);
@@ -435,6 +445,180 @@ group('automatic deep-link loading cannot replace selection or issue receipts wh
   released.resolve(); assert.equal(await explicit, true); assert.equal(racing.calls.length, 1);
   assert.match(source, /loadApprovalReview\(directApprovalId,\s*\{automatic:\s*true\}\)/,
     'actual refresh must delegate to the guarded automatic-load helper');
+});
+
+group('approval requires the exact authority-bound assertion and policy TTL', async () => {
+  const f = fixture();
+  const result = await f.ui.approve(ID);
+  assert.equal(result.uiHandled, true); assert.equal(result.approved, true);
+  assert.deepEqual(f.calls.map(call => [call.method, call.path]), [
+    ['POST', `/api/approvals/${ID}/webauthn/options`],
+    ['POST', `/api/approvals/${ID}/approve?ttl_seconds=30`], ['GET', '/api/approvals']]);
+  assert.deepEqual(writes(f)[0].body, {reviewReceiptId: RECEIPT, ttlSeconds: 30});
+  assert.deepEqual(approveFinals(f)[0].body, {reviewReceiptId: RECEIPT, authorityChallengeId: CHALLENGE,
+    assertion: {id: credentialId, rawId: credentialId, type: 'public-key',
+      response: Object.fromEntries(['clientDataJSON', 'authenticatorData', 'signature'].map(key =>
+        [key, Buffer.from(assertion().response[key]).toString('base64url')]))}});
+  assert.equal(f.prompts.length, 1); assert.equal(f.prompts[0].publicKey.userVerification, 'required');
+  assert.equal(f.prompts[0].publicKey.timeout, 30000);
+  assert.ok(f.events.findIndex(event => event[0] === 'store')
+    < f.events.findIndex(event => event[0] === 'fetch' && event[1].includes('/approve?')));
+  assert.equal(f.state.approvalReview, null); assert.equal(f.storage.size, 0); assert.equal(f.ui.held(ID), false);
+  noPrivateStorage(f);
+});
+group('approval refreshes missing or expired review and waits for inspection', async () => {
+  for (const change of [f => { f.state.approvalReview = null; },
+    f => { f.state.approvalReview.review_receipt.expires_at = date(0); }]) {
+    const f = fixture(); change(f); const result = await f.ui.approve(ID);
+    assert.equal(result.pending, true); assert.equal(result.reviewLoaded, true);
+    assert.deepEqual(f.calls.map(call => [call.method, call.path]), [['GET', `/api/approvals/${ID}/review`]]);
+    assert.equal(f.prompts.length, 0); assert.equal(f.storage.size, 0);
+  }
+});
+group('approval TTL is an exact bounded integer shared by metadata and review', async () => {
+  for (const ttl of [0, 3601, 1.5, '30', null, undefined]) {
+    const f = fixture(); f.state.approvals[0].grant_ttl_seconds = ttl;
+    f.state.approvalReview.retry_semantics.grant_ttl_seconds = ttl;
+    await refusedApprove(f); assert.equal(f.calls.length, 0);
+  }
+  const f = fixture(); f.state.approvalReview.retry_semantics.grant_ttl_seconds = 31;
+  await refusedApprove(f); assert.equal(f.calls.length, 0);
+  for (const threshold of [0, 17, 1.5, '2', undefined]) {
+    const f = fixture(); f.state.approvals[0].approver_policy.threshold = threshold;
+    await refusedApprove(f); assert.equal(f.calls.length, 0);
+  }
+});
+group('approval cannot omit WebAuthn or continue after authority options refusal', async () => {
+  for (const missing of ['window', 'navigator']) {
+    const f = fixture();
+    if (missing === 'window') f.context.window.PublicKeyCredential = undefined;
+    else f.context.navigator.credentials.get = undefined;
+    await refusedApprove(f); assert.equal(writes(f).length, 0);
+  }
+  const f = fixture({fetch: async () => ({status: 503, value: {detail: 'synthetic authority unavailable'}})});
+  await refusedApprove(f); assert.equal(writes(f).length, 1); assert.equal(f.prompts.length, 0);
+});
+group('approval rejects wrong operation, unbound credentials and malformed options', async () => {
+  const changes = [o => { o.serverware.operation = 'jit.deny'; }, o => { o.serverware.operation = 'jit.approve'; },
+    o => { o.serverware.authorityChallengeId = ''; }, o => { o.publicKey.allowCredentials = []; },
+    o => { o.publicKey.allowCredentials[0].id = 'AB'; }, o => { o.publicKey.allowCredentials[0].type = 'other'; },
+    o => { o.publicKey.challenge = ''; }, o => { o.publicKey.userVerification = 'preferred'; },
+    o => { o.publicKey.rpId = 'bad host'; }, o => { o.publicKey.timeout = 120001; }];
+  for (const change of changes) {
+    const value = options('approve'); change(value); const f = fixture({fetch: async () => ({value})});
+    await refusedApprove(f); assert.equal(f.prompts.length, 0); assert.equal(f.storage.size, 0);
+  }
+});
+group('approval cancellation cannot create a final decision or recovery hold', async () => {
+  for (const name of ['NotAllowedError', 'AbortError']) {
+    const f = fixture({get: async () => { const error = Error('synthetic cancellation'); error.name = name; throw error; }});
+    const result = await f.ui.approve(ID); assert.equal(result.uiHandled, true); assert.equal(result.cancelled, true);
+    assert.equal(approveFinals(f).length, 0); assert.equal(f.storage.size, 0); assert.equal(f.ui.busy(), null);
+  }
+});
+group('approval refuses missing or ineligible assertion bytes', async () => {
+  const changes = [a => null, a => ({...a, id: 'other'}), a => ({...a, rawId: buffer('other')}),
+    a => ({...a, response: {...a.response, signature: new ArrayBuffer(0)}}),
+    a => ({...a, response: {...a.response, authenticatorData: new Uint8Array(3)}}),
+    a => ({...a, response: {...a.response, clientDataJSON: new ArrayBuffer(65537)}})];
+  for (const change of changes) {
+    const f = fixture({get: async () => change(assertion())}); await refusedApprove(f); assert.equal(f.storage.size, 0);
+  }
+});
+for (const phase of ['options', 'assertion']) group(`approval review, auth, TTL and receipt stay fresh through ${phase}`, async () => {
+  const changes = [f => { f.state.approvalReview = clone(f.state.approvalReview); }, f => { f.ui.bumpGeneration(); },
+    f => { f.state.approvalReview.review_receipt.id = OTHER; }, f => { f.state.approvalReview.review_digest = digest('f'); },
+    f => { f.state.approvals[0].status = 'denied'; }, f => { f.state.approvals[0].policy_hash = digest('f'); },
+    f => { f.state.approvals[0].grant_ttl_seconds = 31; },
+    f => { f.state.approvalReview.retry_semantics.grant_ttl_seconds = 31; },
+    f => { f.state.authStatus.userId = 'user:changed'; }, f => { f.state.authStatus.roles = []; },
+    f => { f.state.authStatus.sessionState = 'inactive'; }, f => { f.node('admin-token').value = 'synthetic-changed-token'; },
+    f => { f.control.now = NOW + 30000; }];
+  for (const change of changes) {
+    const entered = deferred(), released = deferred();
+    const f = fixture(phase === 'options' ? {fetch: async call => {
+      if (call.path.endsWith('/webauthn/options')) { entered.resolve(); await released.promise; return {value: options('approve')}; }
+    }} : {get: async () => { entered.resolve(); await released.promise; return assertion(); }});
+    const pending = f.ui.approve(ID), rejected = assert.rejects(pending);
+    await entered.promise; change(f); released.resolve(); await rejected;
+    assert.equal(approveFinals(f).length, 0); assert.equal(f.ui.busy(), null);
+  }
+});
+group('approval transport rechecks context after CSRF and options decoding', async () => {
+  for (const stage of ['csrf', 'text']) {
+    let f;
+    f = fixture(stage === 'csrf'
+      ? {csrf: async () => { f.state.authStatus.userId = 'user:changed'; return 'synthetic-csrf'; }}
+      : {text: async (call, result) => { f.state.authStatus.userId = 'user:changed'; return JSON.stringify(result.value); }});
+    await refusedApprove(f); assert.equal(f.prompts.length, 0); assert.equal(writes(f).length, stage === 'csrf' ? 0 : 1);
+  }
+});
+group('unknown approval blocks both decisions and recovers metadata without replay', async () => {
+  for (const bad of ['lost', null, {id: ID, status: 'approved'}, {id: OTHER, status: 'approved'}]) {
+    const f = fixture({fetch: async call => {
+      if (call.path.includes('/approve?')) { if (bad === 'lost') throw Error('synthetic lost reply'); return {value: bad}; }
+      if (call.path === '/api/approvals') return {value: [metadata()]};
+    }});
+    assert.equal((await f.ui.approve(ID)).uncertain, true);
+    assert.equal(approveFinals(f).length, 1); assert.equal(f.state.approvalReview, null);
+    assert.deepEqual(f.calls.slice(2).map(call => [call.method, call.path]), [['GET', '/api/approvals']]);
+    assert.equal(f.storage.get(MARKER), ID); noPrivateStorage(f);
+    await assert.rejects(f.ui.approve(ID)); await assert.rejects(f.ui.deny(ID)); assert.equal(f.calls.length, 3);
+    const reloaded = fixture({storage: f.storage, fetch: async () => ({value: [metadata()]})});
+    await assert.rejects(reloaded.ui.approve(ID)); await assert.rejects(reloaded.ui.deny(ID));
+    await reloaded.ui.loadApprovalReviewAction(ID);
+    assert.deepEqual(reloaded.calls.map(call => [call.method, call.path]), [['GET', '/api/approvals']]);
+    assert.equal(reloaded.storage.get(MARKER), ID); assert.equal(reloaded.state.approvalReview, null);
+  }
+});
+group('known threshold vote remains pending without claiming a usable grant', async () => {
+  const value = approvalResult('pending', 2);
+  const f = fixture({fetch: async call => {
+    if (call.path.includes('/approve?')) return {value};
+    if (call.path === '/api/approvals') return {value: [{...metadata(), approver_policy: clone(value.approver_policy)}]};
+  }});
+  f.state.approvals[0].approver_policy = clone(value.approver_policy);
+  const result = await f.ui.runUiAction('Approve request', () => f.ui.approve(ID));
+  assert.equal(result.uiHandled, true); assert.equal(result.pending, true); assert.notEqual(result.approved, true);
+  assert.match(f.node('operator-status').textContent, /vote|threshold/i);
+  assert.match(f.node('operator-status').textContent, /pending|no grant|waiting|await/i);
+  assert.notEqual(f.node('operator-status').className, 'operator-status success');
+  assert.equal(approveFinals(f).length, 1); assert.equal(f.calls.length, 3);
+  assert.equal(f.state.approvalReview, null); assert.equal(f.storage.size, 0); assert.equal(f.ui.held(ID), false);
+});
+group('approval response must preserve reviewed identity and valid decision semantics', async () => {
+  const changes = [r => { r.route_id = 'other'; }, r => { r.principal_id = 'user:other'; },
+    r => { r.credential_version = 2; }, r => { r.policy_hash = digest('f'); }, r => { r.request_digest = digest('f'); },
+    r => { r.operation_digest = digest('f'); }, r => { r.approved_until = date(0); },
+    r => { r.status = 'pending'; r.approved_until = null; }, r => { r.approver_policy.threshold = 2; },
+    r => { r.data_plane_grant_publish.enabled = 'true'; }, r => { r.data_plane_grant_publish.ok = null; },
+    r => { delete r.data_plane_grant_publish; }];
+  for (const change of changes) {
+    const value = approvalResult(); change(value);
+    const f = fixture({fetch: async call => {
+      if (call.path.includes('/approve?')) return {value};
+      if (call.path === '/api/approvals') return {value: [metadata()]};
+    }});
+    assert.equal((await f.ui.approve(ID)).uncertain, true);
+    assert.equal(approveFinals(f).length, 1); assert.equal(f.storage.get(MARKER), ID);
+    assert.equal(f.state.approvalReview, null); assert.equal(f.calls.length, 3);
+  }
+});
+group('known approval with failed grant publication warns without retrying decision', async () => {
+  const value = approvalResult(); value.data_plane_grant_publish = {enabled: true, ok: false, error: 'synthetic delivery unavailable'};
+  const f = fixture({fetch: async call => call.path.includes('/approve?') ? {value} : undefined});
+  const result = await f.ui.runUiAction('Approve request', () => f.ui.approve(ID));
+  assert.equal(result.uiHandled, true); assert.equal(result.approved, true); assert.notEqual(result.uncertain, true);
+  assert.match(f.node('operator-status').textContent, /publish|publication|deliver/i);
+  assert.notEqual(f.node('operator-status').className, 'operator-status success');
+  assert.equal(approveFinals(f).length, 1); assert.equal(f.calls.length, 3); assert.equal(f.storage.size, 0);
+});
+group('approval installs a durable hold before submission or fails without a final POST', async () => {
+  for (const config of [{storageGetError: true}, {storageSetError: true}, {storageDropWrite: true}]) {
+    const f = fixture(config); await refusedApprove(f);
+    assert.equal(f.calls.some(call => call.path === '/api/approvals'), false);
+    assert.equal(writes(f).length, config.storageGetError ? 0 : 1); noPrivateStorage(f);
+  }
 });
 
 (async () => {

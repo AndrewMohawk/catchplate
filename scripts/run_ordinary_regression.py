@@ -52,6 +52,7 @@ SUITES = (
     Suite("backend", "test_operator_catalog_body_routing.py"),
     Suite("backend", "test_operator_catalog_header_replacement.py"),
     Suite("backend", "test_jit_denial_api.py", seconds=60),
+    Suite("backend", "test_runtime_grant_publication.py", seconds=60),
     Suite("backend", "test_authority_jit_denial.py", seconds=60),
     Suite("backend", "test_authority_jit_approval.py", seconds=60),
     Suite("backend", "test_authority_jit_request.py", seconds=60),

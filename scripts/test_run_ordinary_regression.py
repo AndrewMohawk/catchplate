@@ -23,7 +23,7 @@ class RunnerTests(unittest.TestCase):
         paths = [row.script for row in runner.SUITES]
         self.assertEqual(len(paths), len(set(paths)))
         self.assertEqual({row.category for row in runner.SUITES}, {"backend", "notifications", "ui_contract"})
-        for script in ("test_jit_denial_api.py", "test_authority_jit_denial.py",
+        for script in ("test_jit_denial_api.py", "test_runtime_grant_publication.py", "test_authority_jit_denial.py",
                 "test_authority_jit_approval.py", "test_authority_jit_request.py",
                 "test_authority_jit_private_request.py", "test_native_jit_review_material.py",
                 "test_native_jit_review_owner.py",

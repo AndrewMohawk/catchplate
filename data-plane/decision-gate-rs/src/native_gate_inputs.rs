@@ -72,6 +72,20 @@ pub(super) fn validate_native_gate_static_inputs(inputs: &GateStateInputs) -> Re
     }
     if let Some(config) = &inputs.secret_broker { config.validate()?; }
     let pending_tokens = super::native_service_tokens::pending(inputs)?;
+    if let Some(config) = &inputs.measured_jit_review {
+        config.validate()?;
+        if !pending_tokens || inputs.credential_currentness.as_ref().is_none_or(|v| v.deployment_id != config.deployment_id())
+            || !measured || inputs.server_instance_id.as_deref() != Some(config.instance_id())
+            || inputs.measured_static_credential.is_some() || inputs.measured_static_credential_rotation.is_some()
+            || inputs.measured_issuance.is_some() || inputs.measured_setup.is_some() || inputs.measured_reconnect.is_some()
+            || inputs.measured_succession.is_some() || inputs.measured_refresh.is_some() || inputs.measured_cleanup.is_some()
+            || inputs.measured_capture_retirement.is_some() || inputs.measured_pending_retirement.is_some()
+            || inputs.measured_canary_delivery.is_some() || inputs.historical_broker.is_some() {
+            return Err("JIT requires its separate encrypted cold purpose and exact instance/deployment".into());
+        }
+    } else if inputs.jit_review_assignment.is_some() {
+        return Err("JIT assignment has no selected cold purpose".into());
+    }
     if [inputs.measured_static_credential.is_some(), inputs.measured_issuance.is_some(), inputs.measured_setup.is_some(), inputs.measured_reconnect.is_some(), inputs.measured_succession.is_some()]
         .into_iter().filter(|selected| *selected).count() > 1 {
         return Err("native cold configuration requires one browser/helper purpose".to_owned());

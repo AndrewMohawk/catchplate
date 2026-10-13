@@ -147,6 +147,7 @@ impl NativeSettingsV1 {
             enrollment_authorizer,
             workload_trust: None,
             postboot_audit_port: None,
+            postboot_jit_review_port: None,
             attempt_ledger_directory: self.attempt_ledger_directory,
             relay_assignments: self.relay_assignments.into_iter().map(|relay|
                 NativeRelayAssignmentV1 { host: relay.host, endpoint: relay.endpoint,

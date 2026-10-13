@@ -240,7 +240,12 @@ fn lifetime_and_reachable_terminal_boundary_do_not_grant_native_authority() {
     assert!(caller[branch..old_prepare].contains("return Err(native_release_jit_preparation::UNAVAILABLE.to_owned())"));
     let consumer = include_str!("native_release_jit_preparation.rs");
     let terminal = consumer.split("pub(super) fn prepare_and_refuse(").nth(1).unwrap();
-    assert!(terminal.contains("retained.check()?;\n    Err(UNAVAILABLE.to_owned())"));
+    assert!(terminal.contains("let _retained = (retained, evidence);\n    Err(UNAVAILABLE.to_owned())"));
+    let freeze = terminal.find("native_jit_review::freeze_deadline(").unwrap();
+    let http = terminal.find("post_release_authorization_http_on_deadline(").unwrap();
+    let prepare = terminal.find("native_jit_review::prepare(").unwrap();
+    assert!(freeze < http && http < prepare);
+    assert!(terminal[prepare..].contains("retained.check()?;"));
     assert!(!consumer.contains("prepare_release_jit_review("));
     assert!(!consumer.contains("configure_jit_review("));
 }

@@ -43,6 +43,7 @@ from serverware import authority_credential_currentness_policy as credential_cur
 from serverware import authority_static_credential_create as static_create
 from serverware import authority_static_credential_rotate as static_rotate
 from serverware import authority_static_credential_custody as static_custody
+from serverware import authority_native_jit_review_custody as jit_review_custody
 from serverware import authority_oauth_revocation_policy as oauth_revocation_policy
 from serverware import authority_recovery_configuration as recovery_configuration
 from serverware import authority_challenge_policy as challenge_maintenance_policy
@@ -765,7 +766,7 @@ def validate_configuration_payload(
             for optional_field in (genesis_policy.FIELD, evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, finalization_policy.FIELD, native_readiness_policy.FIELD, native_activation.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD):
                 if optional_field in value:
                     expected_fields = expected_fields | {optional_field}
-            for optional_field in (static_create.FIELD, static_rotate.FIELD, static_custody.FIELD):
+            for optional_field in (static_create.FIELD, static_rotate.FIELD, static_custody.FIELD, jit_review_custody.FIELD):
                 if optional_field in value:
                     expected_fields = expected_fields | {optional_field}
     payload = _closed(
@@ -1023,6 +1024,12 @@ def validate_configuration_payload(
             oauth_revocation_policy.validate_policy(payload.get(oauth_revocation_policy.FIELD), payload=payload, root_key=root_key)
         except (TypeError, ValueError) as exc:
             raise GeneratorError("authority OAuth purpose policy is invalid") from exc
+        try:
+            jit_review_custody.validate_policy(
+                payload.get(jit_review_custody.FIELD), payload=payload, root_key=root_key,
+            )
+        except jit_review_custody.AdmissionError as exc:
+            raise GeneratorError("authority native JIT review custody policy is invalid") from exc
     payload_bytes = canonical_json_bytes(payload)
     if expected_payload_schema == SERVICE_CONFIGURATION_PAYLOAD_SCHEMA:
         # Service configuration identity uses the service protocol's NUL

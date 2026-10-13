@@ -27,6 +27,8 @@ class RunnerTests(unittest.TestCase):
                 "test_authority_jit_approval.py", "test_authority_jit_request.py",
                 "test_authority_jit_private_request.py", "test_native_jit_review_material.py",
                 "test_native_jit_review_owner.py",
+                "test_authority_native_jit_review_custody.py",
+                "test_authority_native_jit_review_registration.py",
                 "test_authority_release_private_input.py", "test_authority_release_private_request.py",
                 "test_authority_release_private_ingress.py", "test_native_jit_prepare.py",
                 "test_approval_history_metadata.py"):

@@ -131,6 +131,13 @@ pub(super) fn prepare_native_tls_gate_state(
             &binary_digest, &snapshot.hash, deadline)?;
     }
     native_service_tokens::ready(&inputs)?;
+    let native_jit_review = match inputs.measured_jit_review.take() {
+        Some(config) => Some(signer.transport.configure_jit_review(config,
+            &inputs.jit_review_assignment.take().ok_or("JIT postboot assignment absent")?,
+            secret_broker.as_mut().ok_or("JIT actual broker absent")?, &mut identity,
+            &binary_digest, deadline)?),
+        None => None,
+    };
     let measured_refresh = match inputs.measured_refresh.take() {
         Some(config) => Some(native_oauth_refresh::prepare(config, &inputs,
             secret_broker.as_mut().ok_or("native refresh broker absent")?, &mut identity,
@@ -217,6 +224,7 @@ pub(super) fn prepare_native_tls_gate_state(
     state.native_policy_bytes = Some(Arc::from(policy_bytes));
     state.native_upstream_relays = Some(held_relays);
     state.native_secret_broker = secret_broker.map(Mutex::new);
+    state.native_jit_review = native_jit_review.map(Mutex::new);
     state.measured_refresh = measured_refresh.map(Mutex::new);
     state.measured_cleanup = measured_cleanup.map(Mutex::new);
     state.measured_pending_retirement = measured_pending_retirement.map(Mutex::new);

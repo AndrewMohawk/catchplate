@@ -63,6 +63,8 @@ pub mod native_static_credential_v1;
 pub mod native_static_credential_browser_v1;
 pub mod native_static_credential_rotation_v1;
 pub mod native_static_credential_rotation_browser_v1;
+pub mod native_jit_review_v1;
+mod native_jit_review_custody;
 pub mod native_oauth_reconnect_v1;
 pub mod native_oauth_succession_v1;
 pub mod native_oauth_browser_v1;

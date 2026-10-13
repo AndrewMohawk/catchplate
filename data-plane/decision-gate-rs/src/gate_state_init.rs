@@ -22,6 +22,8 @@ pub(super) struct GateStateInputs {
     pub(super) native_serving_privileges: Option<Arc<serverware_decision_gate::native_serving_privileges::Owner>>,
     pub(super) prepared_secret_broker: Option<serverware_decision_gate::native_secret_broker_v1::PreparedBroker>,
     pub(super) secret_broker: Option<serverware_decision_gate::native_secret_broker_v1::Configuration>,
+    pub(super) measured_jit_review: Option<serverware_decision_gate::native_jit_review_v1::Configuration>,
+    pub(super) jit_review_assignment: Option<Vec<u8>>,
     pub(super) historical_broker: Option<serverware_decision_gate::native_secret_broker_v1::history::HistoricalConfiguration>,
     pub(super) measured_refresh: Option<serverware_decision_gate::native_oauth_refresh_v1::Configuration>,
     pub(super) measured_cleanup: Option<serverware_decision_gate::native_oauth_cleanup_v1::Configuration>,
@@ -95,6 +97,7 @@ impl GateStateInputs {
         Ok(GateState {
             native_serving_privileges: self.native_serving_privileges,
             native_secret_broker: None,
+            native_jit_review: None,
             measured_refresh: None,
             measured_cleanup: None,
             measured_pending_retirement: None,

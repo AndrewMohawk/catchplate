@@ -1,18 +1,18 @@
-//! Reachable read-only compound preparation, NOT native admission or custody.
+//! Reachable compound preparation and separately selected native custody.
 //!
 //! The signed CP response supplies unadmitted originals. We retain its actual
 //! bytes and the real buffered CONNECT/request owner, repeat pure derivation,
-//! and compare the claims with this request's current policy. No broker, key,
-//! PreparedReleasePair, reservation, shadow mutation, or writer is accessible
-//! here. Independent contract/configuration and reservation-TTL cold pins are
-//! still absent; even a completely valid response ends in UNAVAILABLE.
+//! and compare the claims with this request's current policy. Only the explicit
+//! v26 owner can admit its independent pins, prepare the actual broker pair,
+//! and obtain its purpose signature/fresh quote. Atomic pending retention is
+//! still absent; even valid custody evidence ends in UNAVAILABLE.
 use super::*;
 use serde_json::value::RawValue;
 use std::collections::BTreeMap;
 
 pub(super) const PATH: &str = "/api/data-plane/release-authorizations/native-jit-prepare";
 pub(super) const MAX_RESPONSE_BYTES: u64 = 512 * 1024;
-pub(super) const UNAVAILABLE: &str = "native compound JIT admission and atomic retention are unavailable";
+pub(super) const UNAVAILABLE: &str = "native compound JIT atomic retention is unavailable";
 const SCHEMA: &str = "serverware.nativeReleaseJitPreparation/v1";
 
 fn require(ok: bool) -> Result<(), String> {
@@ -302,11 +302,13 @@ impl UnadmittedPreparation<'_> {
     }
 }
 
-/// Actual signed HTTP preparation followed by unconditional terminal refusal.
+/// Actual signed HTTP preparation and selected v26 custody, followed by
+/// unconditional terminal refusal before reserve/atomic pending retention.
 /// The original request deadline is never restarted or installed on a shared
 /// key/identity. No locks are acquired here across control-plane HTTP.
 pub(super) fn prepare_and_refuse(request: Request<'_>) -> Result<(), String> {
     request.check()?;
+    let original_boottime_deadline = native_jit_review::freeze_deadline(request.deadline)?;
     let response = post_release_authorization_http_on_deadline(request.state, request.authentication,
         "native-jit-prepare", &request.payload()?, || {}, Some(request.deadline))?;
     request.check()?;
@@ -314,6 +316,13 @@ pub(super) fn prepare_and_refuse(request: Request<'_>) -> Result<(), String> {
     let wire = decode_wire(&response.body)?;
     let retained = UnadmittedPreparation { request, response, wire };
     retained.check()?;
+    let evidence = native_jit_review::prepare(retained.request.state, retained.wire.runtime_input.as_bytes(),
+        retained.wire.parent_request.as_bytes(), retained.wire.child_request.as_bytes(),
+        retained.request.deadline, original_boottime_deadline)?;
+    retained.check()?;
+    // Keep both actual owners/originals and evidence until the terminal refusal.
+    // This is not a proof-carrying permit or a legacy reserve fallback.
+    let _retained = (retained, evidence);
     Err(UNAVAILABLE.to_owned())
 }
 

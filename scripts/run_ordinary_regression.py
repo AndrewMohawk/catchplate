@@ -61,6 +61,9 @@ SUITES = (
     Suite("backend", "test_authority_jit_private_request.py", seconds=60),
     Suite("backend", "test_native_jit_review_material.py", seconds=60),
     Suite("backend", "test_native_jit_review_owner.py", seconds=60),
+    # Real crypto with synthetic keys/quotes; loader stops before native admission.
+    Suite("backend", "test_authority_native_jit_review_custody.py", seconds=60),
+    Suite("backend", "test_authority_native_jit_review_registration.py", seconds=60),
     Suite("backend", "test_authority_release_private_input.py", seconds=60),
     Suite("backend", "test_authority_release_private_request.py", seconds=60),
     Suite("backend", "test_authority_release_private_ingress.py", seconds=60),

@@ -1680,6 +1680,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_secret_broker_helper.py \
 	serverware/native_jit_review_owner.py \
 	serverware/native_jit_review_material.py \
+	serverware/authority_native_jit_review_assignment.py \
+	serverware/authority_native_jit_review_custody.py \
 	serverware/authority_jit_private_request.py \
 	serverware/authority_jit_request.py \
 	serverware/authority_approver_policy.py \
@@ -4872,6 +4874,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_secret_broker_helper.py \
 				serverware/native_jit_review_owner.py \
 				serverware/native_jit_review_material.py \
+				serverware/authority_native_jit_review_assignment.py \
+				serverware/authority_native_jit_review_custody.py \
 				serverware/authority_jit_private_request.py \
 				serverware/authority_jit_request.py \
 				serverware/authority_approver_policy.py \
@@ -11458,6 +11462,14 @@ verify-native-jit-review-material:
 
 verify-native-jit-review-owner:
 	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_native_jit_review_owner.py
+
+# Synthetic cryptography and signed configuration checks only. Service loading
+# deliberately refuses before runtime admission; neither target starts native custody.
+verify-authority-native-jit-review-custody:
+	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_native_jit_review_custody.py
+
+verify-authority-native-jit-review-registration:
+	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_native_jit_review_registration.py
 
 # No image build, native startup, database or provider effects. The package
 # probe imports only the explicit staged broker roster, not the source tree.

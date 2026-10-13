@@ -1,8 +1,8 @@
 //! Actual retained broker exchange for JIT storage, NOT caller admission.
 //!
-//! No startup profile, public RPC, proof signer, open/release operation or
-//! authenticated service caller is added here. Cold configuration must still
-//! be independently admitted by that future caller. `Prepared` records only
+//! No public RPC or open/release operation is added here. The separate v26
+//! native_jit_review_v1 owner admits its own cold configuration/assignment and
+//! custody signer; this primitive alone grants none of that authority. `Prepared` records only
 //! successful material preparation by this same retained process/identity; it
 //! is unsigned and cannot be deserialized or constructed from supplied replies.
 use super::*;
@@ -43,6 +43,8 @@ pub fn validate_release_jit_review_originals(runtime: &[u8], parent: &[u8], chil
     -> Result<(), String> {
     release::read(runtime, parent, child).map(|_| ())
 }
+
+pub(crate) fn assignment_document(raw: &[u8]) -> Result<Value, String> { document(raw, 64 * 1024) }
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -254,6 +256,11 @@ fn validate_correlations(config: &Value, original: &originals::Originals, contro
 }
 
 impl Owner {
+    pub(crate) fn jit_review_marker(&mut self, identity: &mut EnclaveRuntimeIdentityV1,
+        deadline: u64) -> Result<Arc<()>, String> {
+        self.check_jit_identity(identity, deadline).map(|(_, marker, _, _)| marker)
+    }
+    pub(crate) fn poison_jit_review(&mut self) { self.poisoned = true; self.process.terminate(); }
     pub(crate) fn configure_jit_review(&mut self, config: Configuration, identity: &mut EnclaveRuntimeIdentityV1,
         boot: &str, key: &str, cp_key: &str, binary: &str, deadline: u64) -> Result<(), String> {
         let result = (|| {

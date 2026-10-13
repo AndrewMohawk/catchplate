@@ -40,6 +40,7 @@ pub(super) struct NativeStartupParametersV1 {
     pub(super) enrollment_authorizer: Option<native_enrollment_authorizer::NativeEnrollmentAuthorizer>,
     pub(super) workload_trust: Option<native_workload_identity_trust::Pending>,
     pub(super) postboot_audit_port: Option<u32>,
+    pub(super) postboot_jit_review_port: Option<u32>,
     pub(super) attempt_ledger_directory: PathBuf,
     pub(super) relay_assignments: Vec<NativeRelayAssignmentV1>,
     pub(super) listener_port: u32,
@@ -212,9 +213,18 @@ fn run_owned(
         if parameters.postboot_audit_port.is_none() || parameters.postboot_audit_port == Some(port)
             || parameters.listener_port == port
             || parameters.enrollment_authorizer.as_ref().is_some_and(|v| v.listener_port() == port)
-            || browser_port.is_none_or(|selected| selected == port) {
+            || !(browser_port.is_some_and(|selected| selected != port)
+                || (browser_port.is_none() && inputs.measured_jit_review.is_some()
+                    && parameters.postboot_jit_review_port.is_some_and(|selected| selected != port))) {
             return Err("public identity export requires one postboot purpose and a distinct fixed listener".into());
         }
+    }
+    if inputs.measured_jit_review.is_some() != parameters.postboot_jit_review_port.is_some()
+        || parameters.postboot_jit_review_port.is_some_and(|port| port < 1024 || port == u32::MAX
+            || parameters.postboot_audit_port.is_none() || Some(port) == parameters.postboot_audit_port
+            || port == parameters.listener_port || response_proof_identity_export == ResponseProofIdentityExport::None
+            || parameters.enrollment_authorizer.as_ref().is_some_and(|v| v.listener_port() == port)) {
+        return Err("JIT startup requires its own postboot receiver and original identity export".into());
     }
     if let Some(authorizer) = &parameters.enrollment_authorizer {
         authorizer.check()?;
@@ -356,6 +366,8 @@ fn run_owned(
     startup.check()?;
     let postboot_receiver = parameters.postboot_audit_port
         .map(|port| native_postboot_assignment::Receiver::bind(port, startup.as_ref())).transpose()?;
+    let jit_receiver = parameters.postboot_jit_review_port
+        .map(|port| native_postboot_assignment::Receiver::bind_jit_review(port, startup.as_ref())).transpose()?;
     match response_proof_identity_export {
         ResponseProofIdentityExport::None => {},
         ResponseProofIdentityExport::Stdout => {
@@ -384,6 +396,12 @@ fn run_owned(
         let pending = inputs.measured_audit.take().ok_or("postboot audit configuration absent")?;
         inputs.measured_audit = Some(pending.admit_postboot(&original, &mut identity, signer,
             configuration_digest, &actual_binary, parameters.deadline_boottime_ns)?);
+        startup.check()?;
+    }
+    if let Some(receiver) = jit_receiver {
+        // Literal original only. Actual key/scope/assignment admission follows
+        // service-token installation, before configuring this broker purpose.
+        inputs.jit_review_assignment = Some(receiver.receive()?);
         startup.check()?;
     }
     startup.check()?;

@@ -531,3 +531,12 @@ modules implement `jit.assertion.issue`, not pending-request creation. Existing
 SERIALIZABLE execution and bounded pending projections can be reused only after
 the new purpose's actual admission and transition contracts are connected.
 This map is source analysis, not an admission, migration or acceptance result.
+
+### Purpose-specific v26 custody successor
+
+The [native JIT custody guide](native-jit-review-custody.md) describes the newer
+explicit v26 startup/assignment, same-broker sealing and actual signing/fresh-quote
+source integration. It advances the cold-admission boundary described above but
+still terminates before the missing atomic pending-request writer. Its separate
+Python proof verifier is not yet invoked by service or planner writes. Earlier
+test and deployment receipts on this page do not cover this successor.

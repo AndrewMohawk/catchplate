@@ -62,6 +62,31 @@ impl CustodySignerTransport {
         }
     }
 
+    pub(super) fn configure_jit_review(&self, config: serverware_decision_gate::native_jit_review_v1::Configuration,
+        assignment: &[u8], broker: &mut serverware_decision_gate::native_secret_broker_v1::Owner,
+        identity: &mut EnclaveRuntimeIdentityV1, binary: &str, deadline: u64)
+        -> Result<serverware_decision_gate::native_jit_review_v1::Owner, String> {
+        let Self::Native(owner) = self else { return Err("JIT configuration refuses imported custody".into()); };
+        self.verify_live()?;
+        let result = owner.runtime.configure_native_jit_review(config, assignment, broker, identity, binary, deadline)
+            .map_err(|error| error.to_string())?;
+        self.verify_live()?; Ok(result)
+    }
+
+    pub(super) fn release_jit_review_evidence(&self, admitted: &mut serverware_decision_gate::native_jit_review_v1::Owner,
+        broker: &mut serverware_decision_gate::native_secret_broker_v1::Owner,
+        identity: &mut EnclaveRuntimeIdentityV1, runtime: &[u8], parent: &[u8], child: &[u8],
+        binary: &str, deadline: u64) -> Result<serverware_decision_gate::native_jit_review_v1::SignedReleasePair, String> {
+        let Self::Native(owner) = self else { return Err("JIT evidence refuses imported custody".into()); };
+        self.verify_live()?;
+        owner.active.fetch_update(Ordering::AcqRel, Ordering::Acquire,
+            |active| (active < CUSTODY_MAX_CONCURRENT_CONNECTIONS).then_some(active + 1)).map_err(|_| "JIT custody concurrency")?;
+        let _permit = NativeOperationPermit(&owner.active);
+        let result = owner.runtime.prepare_native_release_jit_review(admitted, broker, identity,
+            runtime, parent, child, binary, deadline).map_err(|error| error.to_string())?;
+        self.verify_live()?; Ok(result)
+    }
+
     pub(super) fn verify_native_identity(&self, identity: &mut EnclaveRuntimeIdentityV1,
         deadline: u64) -> Result<(), String> {
         match self {

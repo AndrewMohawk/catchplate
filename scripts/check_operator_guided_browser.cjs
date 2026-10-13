@@ -275,7 +275,7 @@ async function main() {
     await page.locator('#connect-restrictions > summary').click(); await page.locator('#connect-rule-name').fill(setup.names.rule);
     await page.locator('#connect-request-body-mode').selectOption('preserve_json_v1'); await page.locator('#connect-response-mode').selectOption('unfiltered_json_or_empty_v2');
     await page.locator('#connect-request-extras > summary').click(); await page.locator('#connect-query-keys').fill('expectedAuthorizationSha256');
-    await page.locator('#connect-allowed-headers').fill('accept\nuser-agent'); await page.locator('#connect-review').click(); await step('review');
+    await page.locator('#connect-allowed-headers').fill('accept\naccept-encoding\nuser-agent'); await page.locator('#connect-review').click(); await step('review');
     need((await page.locator('#connect-review-details').innerText()).includes(setup.upstreamUrl));
     expectedPost = ROUTES[2]; await page.locator('#connect-grant').click(); await step('setup'); await awaitLoaded('#connect-status-refresh'); out.steps.push(stage);
     stage = 'download'; await page.locator('#ca-path').fill(setup.caPath); await page.waitForFunction(() => !document.querySelector('#download-config').disabled);

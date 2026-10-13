@@ -68,7 +68,7 @@ def rule_values(name, application, credential):
         "upstream_url": UPSTREAM, "methods": ["POST"], "request_fields": [], "response_fields": [],
         "request_body_mode": "preserve_json_v1", "response_mode": "unfiltered_json_or_empty_v2",
         "credential_input": "replace_exact", "placeholder": DUMMY,
-        "query_keys": ["expectedAuthorizationSha256"], "allowed_headers": ["accept", "user-agent"]}
+        "query_keys": ["expectedAuthorizationSha256"], "allowed_headers": ["accept", "accept-encoding", "user-agent"]}
 
 
 class Protocol:

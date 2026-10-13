@@ -109,7 +109,23 @@ class GuidedProtocolTests(unittest.TestCase):
             "upstream_url": "https://demo-upstream:8443/echo", "methods": ["POST"], "request_fields": [],
             "response_fields": [], "request_body_mode": "preserve_json_v1", "response_mode": "unfiltered_json_or_empty_v2",
             "credential_input": "replace_exact", "placeholder": "Bearer SERVERWARE_DUMMY",
-            "query_keys": ["expectedAuthorizationSha256"], "allowed_headers": ["accept", "user-agent"]})
+            "query_keys": ["expectedAuthorizationSha256"], "allowed_headers": ["accept", "accept-encoding", "user-agent"]})
+
+    def test_permission_admits_only_the_reviewed_curl_header_roster(self):
+        for headers in (["accept", "accept-encoding", "user-agent"], ["accept", "user-agent"],
+                        ["accept", "accept-encoding", "user-agent", "cookie"]):
+            protocol = self.protocol()
+            protocol.documents, protocol.posts = 1, 2
+            protocol.identifiers.update(credential=IDS["credential"], application=IDS["application"])
+            current = {"revision": 3, "policy": INITIAL["policy"]}
+            value = {**wire.rule_values(protocol.names["rule"], IDS["application"], IDS["credential"]),
+                "allowed_headers": headers, "expected_revision": 3, "expected_policy_hash": DIGESTS[1]}
+            request = frame(1, "POST", wire.PREFIX + "/access-rules", value)
+            if headers == ["accept", "accept-encoding", "user-agent"]:
+                self.assertEqual(wire.document(protocol.admit(request, current)), value)
+            else:
+                with self.assertRaises(CheckFailure):
+                    protocol.admit(request, current)
 
     def test_ready_preflight_uses_actual_catalog_validation_not_retired_status(self):
         catalog = {**deepcopy(INITIAL), "schema": "serverware.operatorCatalog/v1",

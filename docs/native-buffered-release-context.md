@@ -401,3 +401,16 @@ pending-request retention and authenticated review opening remain required.
 The service's private-release refusal remains in place until that complete
 path is implemented and verified. No live deployment is implied by this source
 change.
+
+The committed Python preparation at `e230da0e` passed the full expanded offline
+regression: **63 suites, 587 Python tests and 162 Node groups**, with zero skips
+in 577.488 seconds. Its 16 material and 16 owner groups include parent/domain
+separation, full-original bindings, deadline/replay fences and uncertain-output
+poisoning. Twelve runner controls passed separately. The network-disabled,
+read-only, bounded container exited zero with no OOM or restart and was removed.
+The retained result is
+`compound-review-regression.OqRKii4I/ordinary/result.json`, SHA-256
+`fb9fc893819ae7a75ac8ed33905b61770a3103fc66af4458199a4a4bef553894`;
+`execution.json` records before/after protocol-source pins and cleanup.
+Unrelated example/documentation edits during execution were outside these
+frozen protocol files. This result is not Rust, native-admission or live evidence.

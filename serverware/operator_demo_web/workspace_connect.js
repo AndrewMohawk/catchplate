@@ -397,7 +397,7 @@ function createConnectView(workspace, applications, proxy) {
   function renderReview() {
     if (!review) return;
     const rows = [...operatorRuleCredentialRows(review.rule, credential()), ...operatorRuleRestrictions(review.rule)];
-    if (review.gmailClient === 'sdk') rows.unshift(['Gmail client', 'Official Gmail SDK · Go example'],
+    if (review.gmailClient === 'sdk') rows.unshift(['Gmail client', 'Official Gmail SDK · choose Go, Node.js or Python in client setup'],
       ['Public dummy, not a secret', 'The SDK sends the exact dummy below. The application token authenticates separately to the HTTPS proxy using standard username/password login.']);
     element('connect-review-details').replaceChildren(...rows.flatMap(([name, value]) => [textNode('dt', name), textNode('dd', value)]));
     if (reviewCurrent()) {

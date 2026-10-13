@@ -56,10 +56,12 @@ jobs:
           node_libatomic="$(realpath "$node_libatomic")"
           test -f "$node_libatomic"
           trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
+          # Copied-recipe controls execute inert interpreter stubs in this
+          # temporary filesystem only; source/dependencies remain read-only.
           timeout --kill-after=10s 960s docker run --rm --init --name "$name" --network none \
             --user "$(id -u):$(id -g)" --read-only --cap-drop ALL --security-opt no-new-privileges \
             --memory 2g --memory-swap 2g --cpus 2 --pids-limit 128 \
-            --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777 \
+            --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m,mode=1777 \
             --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/app,readonly" \
             --mount "type=bind,src=$RUNNER_TEMP/ordinary-deps,dst=/deps,readonly" \
             --mount "type=bind,src=$RUNNER_TEMP/ordinary-results,dst=/results" \

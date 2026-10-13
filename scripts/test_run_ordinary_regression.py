@@ -25,6 +25,9 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual({row.category for row in runner.SUITES}, {"backend", "notifications", "ui_contract"})
         self.assertIn("test_operator_notification_google_events.py", paths)
         self.assertIn("test_operator_catalog_github_app.py", paths)
+        gmail = next(row for row in runner.SUITES if row.script == "test_operator_gmail_sdk_languages.cjs")
+        self.assertEqual((gmail.category, gmail.runtime, gmail.arguments, gmail.seconds),
+            ("ui_contract", "node", (), 60))
         x_backend = {"test_operator_x_accounts_api.py", "test_operator_x_transport.py",
             "test_operator_x_refresh.py", "test_operator_x_lease_reconciliation.py",
             "test_operator_x_lease_boundary.py", "test_operator_x_secret_boundary.py",
@@ -162,6 +165,8 @@ class RunnerTests(unittest.TestCase):
             "test_operator_npm_install_ui.cjs": (common, "PASS fixture\n"),
             "test_operator_github_app_ui.mjs": ({"ok": True, "network": False, "browser": False, "provider": False,
                 "scope": "actual UI functions and core mutation; inert DOM and independent in-memory API, not provider acceptance"}, "PASS fixture\n"),
+            "test_operator_gmail_sdk_languages.cjs": ({"ok": True, "browser": False, "sdk": False,
+                "providerRequests": 0, "scope": "pure UI helper and inert local shell stubs"}, ""),
             "test_operator_x_accounts_ui.cjs": ({"ok": True, "browser": False, "network": False,
                 "scope": "actual public UI helpers and controller with inert DOM; no provider or backend acceptance"}, "PASS fixture\n"),
             "test_operator_x_configuration_ui.mjs": ({"ok": True, "browser": False, "network": False,
@@ -235,7 +240,8 @@ class RunnerTests(unittest.TestCase):
         for required in ("pull_request:", "branches: [main]", "contents: read", "--network none",
                 "--read-only", "--cap-drop ALL", "no-new-privileges", "--memory 2g", "--cpus 2",
                 "--require-hashes", "--only-binary=:all:", "test_run_ordinary_regression.py",
-                "dst=/usr/lib/x86_64-linux-gnu/libatomic.so.1,readonly", "/tools/node --version"):
+                "dst=/usr/lib/x86_64-linux-gnu/libatomic.so.1,readonly", "/tools/node --version",
+                "--tmpfs /tmp:rw,exec,nosuid,nodev,size=512m,mode=1777"):
             self.assertIn(required, value)
         for forbidden in ("pull_request_target:", "secrets.", "docker build", "/var/run/docker.sock", "--privileged"):
             self.assertNotIn(forbidden, value)

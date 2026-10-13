@@ -11332,6 +11332,7 @@ verify-operator-aws-browser:
 .PHONY: verify-operator-gmail-sdk-choice
 verify-operator-gmail-sdk-choice:
 	python3 -B -m unittest scripts.test_operator_gmail_sdk_browser
+	node scripts/test_operator_gmail_sdk_languages.cjs
 	node scripts/test_operator_gmail_sdk_browser.cjs
 	node scripts/test_operator_gmail_sdk_choice_browser.cjs
 	node scripts/test_operator_gmail_bundle_browser.cjs

@@ -218,7 +218,7 @@ const tests = [
       assert(!node('client-example-note').textContent.includes('guide only'));
     }
   }],
-  ['validated exact Gmail replacement preserves Go and labels new SDK projects pending', () => {
+  ['validated exact Gmail replacement links the three independently verified SDK projects', () => {
     const value = gmail({credential_input: 'replace_exact', placeholder: 'Bearer serverware-gmail-placeholder-v1'});
     assert.equal(value.applications[0].proxy_authentication, 'basic_and_bearer_v1');
     assert.deepEqual(value.capabilities.application_proxy_authentication, {
@@ -227,8 +227,8 @@ const tests = [
     assert.equal(value.access_rules[0].query_mode, 'orderedFormV1');
     assert.deepEqual(links(value), [
       {label: 'Go + Gmail SDK', kind: 'project', href: BASE + 'tree/' + BRANCH + 'examples/google-gmail-go'},
-      {label: 'Node.js + Gmail SDK (proxy verification pending)', kind: 'project', href: BASE + 'tree/' + BRANCH + 'examples/google-gmail-node'},
-      {label: 'Python + Gmail SDK (proxy verification pending)', kind: 'project', href: BASE + 'tree/' + BRANCH + 'examples/google-gmail-python'},
+      {label: 'Node.js + Gmail SDK', kind: 'project', href: BASE + 'tree/' + BRANCH + 'examples/google-gmail-node'},
+      {label: 'Python + Gmail SDK', kind: 'project', href: BASE + 'tree/' + BRANCH + 'examples/google-gmail-python'},
       {label: 'Google / Gmail guide', kind: 'guide', href: BASE + 'blob/' + BRANCH + 'docs/operator-gmail-job-verification.md'}]);
     render(value);
     assert.equal(node('client-example-links').children.length, 4);

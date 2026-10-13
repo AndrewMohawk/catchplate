@@ -39,8 +39,8 @@ function operatorExampleProjects(rule, catalog) {
     case 'gmail_read_v1': return [
       ...(operatorGmailSdkCompatible(rule, catalog) ?
         [project('Go + Gmail SDK', 'google-gmail-go'),
-          project('Node.js + Gmail SDK (proxy verification pending)', 'google-gmail-node'),
-          project('Python + Gmail SDK (proxy verification pending)', 'google-gmail-python')] : []),
+          project('Node.js + Gmail SDK', 'google-gmail-node'),
+          project('Python + Gmail SDK', 'google-gmail-python')] : []),
       guide('Google / Gmail guide', 'operator-gmail-job-verification.md')];
     default: return [];
   }
@@ -66,12 +66,14 @@ function createProxyView(workspace, applications) {
   content.append(...[...home.children].slice(2)); home.append(content);
   let command = '';
   let gmailContext = '';
+  const gmailLanguages = new Map();
   let githubContext = '';
   let alchemyContext = '';
   function gmailSdkOptions(catalog, application, rule) {
     return {proxyUrl: catalog.proxy_url, applicationId: application.id, accessRuleId: rule.id,
       tokenExpiresAtEpochMs: application.token_expires_at_epoch_ms,
-      caPath: element('ca-path').value, proxyCaPath: element('gmail-proxy-ca-path').value};
+      caPath: element('ca-path').value, proxyCaPath: element('gmail-proxy-ca-path').value,
+      language: element('gmail-sdk-language').value};
   }
   renderOperatorCompatibility('client-compatibility-content');
   function render() {
@@ -118,12 +120,23 @@ function createProxyView(workspace, applications) {
     element('proxy-method').hidden = github || npm || npmPublish || npmInstall || x || xPost || alchemy || gmailSdk; element('proxy-method').disabled = github || npm || npmPublish || npmInstall || x || xPost || alchemy || gmailSdk;
     document.querySelector('label[for="proxy-method"]').hidden = github || npm || npmPublish || npmInstall || x || xPost || alchemy || gmailSdk;
     const context = gmail ? application?.id + ':' + rule.id : '';
-    if (context !== gmailContext) { element('gmail-client-operation').value = 'list'; element('gmail-message-id').value = ''; gmailContext = context; }
+    if (context !== gmailContext) {
+      element('gmail-client-operation').value = 'list'; element('gmail-message-id').value = '';
+      element('gmail-sdk-language').value = gmailLanguages.get(context) || 'go'; gmailContext = context;
+    }
     element('gmail-client-controls').hidden = !gmail || gmailSdk;
     element('gmail-sdk-client-controls').hidden = !gmailSdk;
+    let gmailProfile = null;
+    if (gmailSdk) {
+      try { gmailProfile = gmailSdkLanguage(element('gmail-sdk-language').value); }
+      catch (_) { element('client-command').textContent = 'Choose a supported Gmail SDK language.'; return; }
+      element('gmail-sdk-preparation').textContent = gmailProfile.preparation;
+      element('gmail-proxy-ca-path').placeholder = element('gmail-sdk-language').value === 'python' ?
+        'Empty uses the pinned Python certifi roots' : 'Empty uses ' + gmailProfile.label + ' system/default trust';
+    }
     const messageRead = gmail && !gmailSdk && element('gmail-client-operation').value === 'message';
     element('gmail-message-group').hidden = !messageRead;
-    element('client-template-title').textContent = xPost ? 'X · Text-post SDK setup' : npmInstall ? 'npm · Install/ci client setup (verification pending)' : alchemy ? 'Alchemy · Chain-status read template' : x ? 'X · Username lookup connection template' : npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmailSdk ? 'Gmail · Official Go SDK inbox job' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
+    element('client-template-title').textContent = xPost ? 'X · Text-post SDK setup' : npmInstall ? 'npm · Install/ci client setup (verification pending)' : alchemy ? 'Alchemy · Chain-status read template' : x ? 'X · Username lookup connection template' : npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmailSdk ? 'Gmail · Official ' + gmailProfile.label + ' SDK inbox job' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
     element('client-template-warning').textContent = xPost ?
       'This recipe publishes only when you explicitly run it locally with reviewed text and post-once confirmation. No daily quota is enforced. This page sends no post; never automatically retry an uncertain reply.' : npmInstall ?
       'Review the exact dependency allowlist and local manifests before running the linked npm example. Installation writes only to your deliberately selected new output directory; lifecycle scripts stay disabled and default audit stays enabled. This page does not execute or verify the job.' : alchemy ?
@@ -132,7 +145,7 @@ function createProxyView(workspace, applications) {
       'This public-publishing example can publish a new version when you explicitly run it locally. Review your tarball contents first. This page neither executes publishing nor verifies npm access. Do not automatically retry an uncertain publish.' : npm ?
       'Save the dedicated npmrc settings, then run the separate npm view command in an empty test directory with a clean npm environment and fresh private cache. Only the public dummy token appears here. No package lookup is executed or verified by this page.' : github ?
       'Use the real GitHub URL through the HTTPS proxy. This recipe supplies only a public dummy upstream token and reads the Serverware app token locally. It is not a successful request test; selecting a creation example does not execute it.' : gmailSdk ?
-      'Run the existing official Go example to list at most two pages of five inbox messages and read metadata for their returned IDs. It prints counts only, makes no writes, and has a two-minute overall deadline. This page does not run the job or verify Google access.' : gmail ?
+      'Run the selected official Gmail SDK example to list at most two pages of five inbox messages and read metadata for their returned IDs. It prints counts only, makes no writes, and has a two-minute overall deadline. The three examples passed isolated synthetic-provider proxy checks, not real Google acceptance. This page does not run the job or verify your account.' : gmail ?
       'List messages first, then use an actual returned message ID to read it. Your client handles pagination and each request. These templates are not an automated mail job or proof of a successful Gmail request.' :
       'This template includes no request body or query parameter values. It is not a complete API operation or a successful request test. Supply endpoint-specific data in your existing client, using only what the selected rule permits.';
     chooseOptions('proxy-method', (rule?.methods || []).filter(method => operatorMethods.includes(method)).map(method => ({id: method, name: method})), 'No supported method');
@@ -153,7 +166,7 @@ function createProxyView(workspace, applications) {
       element('gmail-sdk-guidance').hidden = false;
       element('gmail-sdk-app-link').hidden = !needsBasic;
       element('gmail-sdk-guidance').textContent = sdk ?
-        'Copy the Bash recipe for the Go + Gmail SDK project below. Build the reviewed example before supplying your Serverware app token. The recipe runs the bounded job in a clean child environment, with the public dummy and independently verified TLS roots; this page has not run it or tested your account.' : needsBasic ?
+        'Copy the Bash recipe for the selected ' + gmailProfile.label + ' Gmail SDK project below. Prepare its reviewed runtime and pinned dependencies before supplying your Serverware app token. The recipe runs the bounded job in a clean child environment, with the public dummy and independently verified TLS roots; this page has not run it or tested your account.' : needsBasic ?
         'The official Gmail SDK needs standard username/password proxy login. Use Applications to explicitly enable it if advertised, then refresh. This page does not change your app or token. The saved permission must also use ordered Gmail queries and the exact SDK dummy.' :
         'This saved permission does not match the official SDK’s ordered-query and public-dummy contract. Keep using its existing HTTP configuration, or explicitly review a new Read Gmail permission with the Official Gmail SDK choice. No saved rule is upgraded or widened here.';
     }
@@ -228,7 +241,7 @@ function createProxyView(workspace, applications) {
       element('client-guidance').textContent = (ready ?
         'The exact saved policy is loaded and the application token is not expired. ' :
         'Wait for the exact saved policy to load and resolve uncertain changes before copying or running. ') +
-        'From examples/google-gmail-go, run the copied Bash recipe with the already-built ./gmail-example and your application token set privately. No provider credentials are inherited by the job. The SDK reads a bounded inbox sample and prints counts only; no complete-mailbox or age-policy claim. ' +
+        'From ' + gmailProfile.directory + ', run the copied Bash recipe after preparing the selected runtime and pinned dependencies, with your application token set privately. No provider credentials are inherited by the job. The SDK reads a bounded inbox sample and prints counts only; no complete-mailbox or age-policy claim. ' +
         'The optional private JSON download contains the matching application token and explicit SDK environment/entrypoint. It is not an executable; keep it out of source control. No client connection was tested here.';
       return;
     }
@@ -298,6 +311,11 @@ function createProxyView(workspace, applications) {
       (rule.query_keys.length ? ' Query parameter names allowed: ' + rule.query_keys.join(', ') + '; supply their values yourself.' : ' No query parameters are allowed.');
   }
   for (const id of ['proxy-application', 'proxy-rule', 'proxy-method', 'gmail-client-operation', 'github-client-operation', 'npm-client-package', 'alchemy-client-method']) element(id).addEventListener('change', render);
+  element('gmail-sdk-language').addEventListener('change', () => {
+    try { gmailSdkLanguage(element('gmail-sdk-language').value); gmailLanguages.set(gmailContext, element('gmail-sdk-language').value); }
+    catch (_) { gmailLanguages.delete(gmailContext); }
+    render();
+  });
   element('gmail-message-id').addEventListener('input', render);
   element('ca-path').addEventListener('input', render);
   element('gmail-proxy-ca-path').addEventListener('input', render);
@@ -311,7 +329,7 @@ function createProxyView(workspace, applications) {
       element('client-copy-status').textContent = !element('x-post-client-controls').hidden ?
         'Copied the X posting SDK recipe. Supply text and the app token locally; no post was sent. Do not automatically repeat an uncertain result.' : isNpmInstallRule(workspace.state.catalog?.access_rules.find(item => item.id === element('proxy-rule').value)) ?
         'Copied the npm install/ci example setup. Set the reviewed project/output paths and app token privately; no job was executed.' : !element('gmail-sdk-client-controls').hidden ?
-        'Copied the Bash recipe for the existing Go Gmail job. Set the application token privately and use the reviewed built example; no Google token, build or request is included in this copy action.' : !element('alchemy-client-controls').hidden ?
+        'Copied the Bash recipe for the selected Gmail SDK job. Set the application token privately and prepare its reviewed dependencies first; no Google token, build or request is included in this copy action.' : !element('alchemy-client-controls').hidden ?
         'Copied the fixed Alchemy JSON-RPC read template. Set the Serverware app token locally, never the provider key. No request was executed by this page.' : !element('npm-publish-client-controls').hidden ?
         'Copied npmrc settings and the separate publishing command. Review the local package before running it; this page sent no publish request.' : !element('npm-client-controls').hidden ?
         'Copied npmrc settings and the separate metadata command. Set the app token and a fresh private cache locally; no lookup was executed by this page.' : !element('github-client-controls').hidden ?
@@ -365,7 +383,7 @@ function createProxyView(workspace, applications) {
         try { config.client_recipe = gmailSdkClientConfiguration(gmailSdkOptions(catalog, application, rule), token); }
         catch (_) { element('client-copy-status').textContent = 'Private Gmail SDK configuration is unavailable; refresh and confirm this application token and CA paths.'; return; }
         config.proxy_ca_file = element('gmail-proxy-ca-path').value || null;
-        config.note += ' Contains this application token in client_recipe.environment and proxy_password. Run only the existing reviewed Go inbox example with the explicit clean environment/entrypoint; this JSON is not an executable. Bounded sample, no age restriction. Keep out of source control.';
+        config.note += ' Contains this application token in client_recipe.environment and proxy_password. Run only the selected reviewed Gmail inbox example with the explicit clean environment/entrypoint. For v2, resolve each supplied CA path relative to example_directory before launch and use the exact arguments. When resolve_executable_from_path is true, first resolve the installed Node executable to an absolute path before clearing the environment. This JSON is not an executable. Bounded sample, no age restriction. Keep out of source control.';
       } else config.note += ' Your client performs pagination and separate message reads; this is not an automated mail job. No age restriction.';
     }
     if (isGithubRule(rule)) {

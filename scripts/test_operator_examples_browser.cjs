@@ -102,8 +102,8 @@ async function main() {
           'tree/' + branch + 'examples/google-gmail-' + language));
         await checkLinks(page, replace && basic ? 'gmail-project' : replace ? 'gmail-bearer-guide' : 'gmail-guide', paths);
         if (replace && basic) assert.deepEqual(await page.locator('#client-example-links a').allTextContents(), [
-          'Go + Gmail SDK', 'Node.js + Gmail SDK (proxy verification pending)',
-          'Python + Gmail SDK (proxy verification pending)', 'Google / Gmail guide']);
+          'Go + Gmail SDK', 'Node.js + Gmail SDK',
+          'Python + Gmail SDK', 'Google / Gmail guide']);
         assert.equal(observed.posts.length, 0); assert.deepEqual(state.posts, []);
         assert.deepEqual(state.errors, []);
       });

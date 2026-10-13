@@ -16,7 +16,7 @@ attachment, history, profile or Calendar calls.
 1. In the operator workspace, configure Google and connect the intended Google
    account through real consent. This example does not initiate OAuth or discover
    application-default Google credentials.
-2. Select that saved account in **Connect a real service**, choose an application
+2. Select that saved account in **Connect an app**, choose an application
    with **Basic** proxy authentication, and keep its one-time token private.
 3. Choose **Read Gmail** (`gmail_read_v1`) and **Official Gmail SDK**. The permission
    must advertise `orderedFormV1` and replace this exact full header value:
@@ -33,9 +33,14 @@ attachment, history, profile or Calendar calls.
    if the proxy's outer HTTPS certificate uses a private CA.
 
 The permission has no age restriction; this example's inbox/count limits do not
-narrow the saved application's authority. The current workspace's copied Gmail
-recipe targets the Go example. Use this project's commands for Node; do not infer
-Node acceptance from the existing [Go verification record](../../docs/operator-gmail-job-verification.md).
+narrow the saved application's authority. Current-source **Proxy setup** offers
+Go, Node.js and Python under **Gmail SDK language**; choose **Node.js** for this
+project's copied recipe and private configuration. Prepare dependencies first:
+the recipe does not install or build them. See the
+[deployment record](../../docker/serverware-operator-demo/README.md) for the live
+release. All three SDK jobs have isolated synthetic-provider proxy evidence in
+the [verification record](../../docs/operator-gmail-job-verification.md), not
+real Google acceptance.
 
 ## Install and run
 

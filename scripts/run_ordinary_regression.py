@@ -78,6 +78,7 @@ SUITES = (
     Suite("ui_contract", "test_operator_npm_publish_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_npm_install_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_github_app_ui.mjs", "node", seconds=60),
+    Suite("ui_contract", "test_operator_gmail_sdk_languages.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_x_accounts_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_x_configuration_ui.mjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_runtime_browser_assets.cjs", "node", seconds=60),
@@ -185,6 +186,8 @@ def node_completion(script, raw):
         "test_operator_npm_install_ui.cjs": common,
         "test_operator_github_app_ui.mjs": {"ok": True, "network": False, "browser": False, "provider": False,
             "scope": "actual UI functions and core mutation; inert DOM and independent in-memory API, not provider acceptance"},
+        "test_operator_gmail_sdk_languages.cjs": {"ok": True, "browser": False, "sdk": False,
+            "providerRequests": 0, "scope": "pure UI helper and inert local shell stubs"},
         "test_operator_x_accounts_ui.cjs": {"ok": True, "browser": False, "network": False,
             "scope": "actual public UI helpers and controller with inert DOM; no provider or backend acceptance"},
         "test_operator_x_configuration_ui.mjs": {"ok": True, "browser": False, "network": False,
@@ -213,7 +216,7 @@ def node_completion(script, raw):
             count = result["groups"]
         if type(count) is not int or not 0 < count <= 10000:
             return None
-        if script == "test_operator_catalog_browser.cjs":
+        if script in {"test_operator_catalog_browser.cjs", "test_operator_gmail_sdk_languages.cjs"}:
             return count if len(lines) == 1 else None
         return count if len(lines) - 1 == count and all(line.startswith("PASS ") for line in lines[:-1]) else None
     except (ValueError, KeyError, UnicodeError):

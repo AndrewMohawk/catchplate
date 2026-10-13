@@ -24,7 +24,12 @@ In the ordinary Serverware workspace:
    account. The grant must be `gmail_read_v1`, `orderedFormV1`, with exact dummy
    replacement `serverware-gmail-placeholder-v1`, and its policy must be loaded.
    Existing curl/insertion-only permissions are not automatically upgraded.
-4. Copy the application ID, proxy URL and downloaded proxy CA from the workspace.
+4. In current-source **Proxy setup**, choose **Python** under **Gmail SDK language**
+   for this project's Bash recipe and private configuration. Prepare the virtual
+   environment below before supplying the application token; the recipe does not
+   install dependencies. See the [deployment record](../../docker/serverware-operator-demo/README.md)
+   for the live release.
+5. Copy the application ID, proxy URL and downloaded interception CA from the workspace.
    Your client must be able to reach the HTTPS proxy. A public DNS/routing block
    still prevents a real client job; this example does not bypass it.
 

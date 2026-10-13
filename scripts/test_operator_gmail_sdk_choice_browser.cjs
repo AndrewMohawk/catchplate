@@ -162,10 +162,12 @@ const tests = [
       await sdkDraft(page); noWrites(state, observed);
       assert.equal(await page.locator('#connect-gmail-client option:checked').innerText(), 'Official Gmail SDK');
       assert.match(await page.locator('#connect-gmail-sdk-summary').innerText(), /Authorization: Bearer serverware-gmail-placeholder-v1/);
+      assert.match(await page.locator('#connect-gmail-sdk-summary').innerText(), /Go, Node\.js or Python/);
       assert(await page.locator('#connect-review').isEnabled());
       await shot(page, evidence, 'sdk-permission'); await review(page); noWrites(state, observed);
       const details = await page.locator('#connect-review-details').innerText();
       assert.match(details, /Official Gmail SDK/); assert(details.includes(DUMMY));
+      assert.match(details, /choose Go, Node\.js or Python in client setup/);
       await page.setViewportSize({width: 390, height: 844});
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       await shot(page, evidence, 'sdk-review-mobile'); await grant(page);
@@ -329,6 +331,58 @@ const tests = [
 // The added handoff controls use the same intercepted rendered application.
 // A local stub may inspect a copied shell recipe; the real SDK is never run.
 const handoffTests = [
+  ['SDK languages use their actual recipes and versioned private downloads without changing authority', async (browser, evidence) => {
+    const secondRule = '55555555-5555-4555-8555-555555555555';
+    await fixture(browser, sdkOptions({applications: [application({proxy_authentication: BASIC}),
+      application({id: IDS.other, name: 'Second Gmail app', proxy_authentication: BASIC})],
+      rules: [sdkRule(), sdkRule({id: secondRule, route_id: 'operator.' + secondRule, application_id: IDS.other})]}),
+    async (page, state, observed, controls) => {
+      await ready(page); const held = await rotateHeldToken(page, state, controls); await view(page, 'proxy');
+      const before = clone(state.rules);
+      assert.equal(await page.locator('#gmail-sdk-language').inputValue(), 'go');
+      assert.deepEqual(await page.locator('#gmail-sdk-language option').evaluateAll(nodes => nodes.map(node => node.value)), ['go', 'node', 'python']);
+      for (const [language, label, entrypoint, args] of [['go', 'Go', './gmail-example', []],
+        ['node', 'Node.js', 'node', ['client.mjs']], ['python', 'Python', '.venv/bin/python', ['-I', '-B', 'gmail.py']]]) {
+        await page.locator('#gmail-sdk-language').selectOption(language);
+        assert.match(await page.locator('#client-template-title').innerText(), new RegExp('Official ' + label.replace('.', '\\.') + ' SDK'));
+        assert((await page.locator('#gmail-sdk-guidance').innerText()).includes('selected ' + label + ' Gmail SDK'));
+        const command = await copiedCommand(page); await publicSecretsAbsent(page, command, held);
+        assert(command.includes('examples/google-gmail-' + language));
+        assert(command.includes(language === 'go' ? 'exec ./gmail-example' : language === 'node' ? 'exec "$1" client.mjs' : 'exec .venv/bin/python -I -B gmail.py'));
+        const config = await downloadedConfig(page);
+        assert.equal(config.client_recipe.schema, 'serverware.gmailSdkClient/' + (language === 'go' ? 'v1' : 'v2'));
+        assert.equal(config.client_recipe.entrypoint, entrypoint);
+        assert.equal(config.client_recipe.example_directory, 'examples/google-gmail-' + language);
+        assert.equal(config.client_recipe.environment.SERVERWARE_PROXY_TOKEN, held);
+        assert.equal(config.client_recipe.environment.SERVERWARE_APP_ID, IDS.application);
+        assert.equal(config.client_recipe.access_rule_id, IDS.rule);
+        if (language === 'go') assert(!Object.hasOwn(config.client_recipe, 'language'));
+        else {
+          assert.equal(config.client_recipe.language, language); assert.deepEqual(config.client_recipe.arguments, args);
+          assert.equal(config.client_recipe.resolve_ca_paths, true);
+          assert.equal(config.client_recipe.resolve_executable_from_path, language === 'node');
+        }
+        assert.match(await page.locator('#client-template-warning').innerText(), /not real Google acceptance/);
+      }
+      await page.locator('#gmail-sdk-language').selectOption('node');
+      await page.locator('#proxy-application').selectOption(IDS.other);
+      assert.equal(await page.locator('#gmail-sdk-language').inputValue(), 'go', 'new application starts with unchanged default');
+      assert(await page.locator('#download-config').isDisabled(), 'first application token is not reused for another app');
+      await page.locator('#gmail-sdk-language').selectOption('python');
+      const secondCommand = await copiedCommand(page);
+      assert(secondCommand.includes(IDS.other)); assert(!secondCommand.includes(IDS.application));
+      await page.locator('#proxy-application').selectOption(IDS.application);
+      assert.equal(await page.locator('#gmail-sdk-language').inputValue(), 'node');
+      assert(await page.locator('#download-config').isEnabled());
+      await refresh(page, 'proxy-refresh'); assert.equal(await page.locator('#gmail-sdk-language').inputValue(), 'node');
+      await page.setViewportSize({width: 390, height: 844});
+      await page.locator('#gmail-sdk-language').selectOption('python');
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      await shot(page, evidence, 'sdk-language-python-mobile');
+      assert.deepEqual(state.rules, before); assert.equal(state.posts.length, 1, 'only explicit fixture token rotation');
+      assert.equal(observed.posts.length, 0, 'no permission or provider request');
+    });
+  }],
   ['SDK handoff pure helpers keep public and private inputs separate and refuse malformed configuration', async () => {
     const helpers = await sdkHelpers();
     const input = {proxyUrl: 'https://proxy.example.test', applicationId: IDS.application, accessRuleId: IDS.rule,

@@ -3,13 +3,13 @@
 
 Expected canonical documents, framing and pass arithmetic are independent.
 Manifest/handler identifiers are source inputs, not successful verifier results.
-All controls are authored source-only and unrun.
+Public facade controls use the actual legacy/successor registry partition; they
+do not configure a successor owner, admit authority or create durable state.
 """
 from __future__ import annotations
 
 import copy
 import hashlib
-import importlib
 import json
 from pathlib import Path
 import sys
@@ -29,20 +29,6 @@ import test_authority_revocation_query_program as recipe
 
 OPERATION = "webauthn.credential.revoke"
 EXCLUDED = {"authn", "authn_evidence", "webauthn_authorization", "challenge_id"}
-REGISTRY_IMPORT_DIAGNOSTIC = (
-    "authority transition registry is not closed: missing transition kernels=["
-    "webauthn.credential.revoke, webauthn.registration.evidence.admit, "
-    "webauthn.registration.finalize, webauthn.trust.complete, "
-    "webauthn.trust.installation.admit, webauthn.trust.stage]"
-)
-
-
-def assert_registry_import_denial(case):
-    """Real source-era import denial, not a callable planner-facade result."""
-    for name in ("serverware.authority_transition_registry", "serverware.authority_planner"):
-        with case.subTest(module=name), case.assertRaises(RuntimeError) as caught:
-            importlib.import_module(name)
-        case.assertEqual(str(caught.exception), REGISTRY_IMPORT_DIAGNOSTIC)
 
 
 def wire(value):
@@ -159,12 +145,36 @@ class TypedRequestWorkTests(unittest.TestCase):
                 # Actual registered-operation public calls are retained in
                 # TypedRequestPlannerIntegrationTests, behind real startup.
 
-    def test_public_registry_gate_is_not_removed_by_private_candidate_commitment(self):
+    def test_public_legacy_gate_is_not_removed_by_private_successor_commitment(self):
+        from serverware import authority_planner as planner
+        from serverware import authority_transition_registry as registry
+
         request = request_fixture()
+        before = wire(request)
         self.assertEqual(commitment._typed_request_digest(request, work=meter()), expected_digest(request))
-        # The current real registry raises before a public planner can be
-        # imported. This proves that boundary, not callable-facade rejection.
-        assert_registry_import_denial(self)
+        self.assertEqual(registry._CLOSURE_ERRORS, ())
+        self.assertIn(OPERATION, registry.SUCCESSOR_PLANNABLE_OPERATIONS)
+        self.assertNotIn(OPERATION, registry.LEGACY_PLANNABLE_OPERATIONS)
+        self.assertNotIn(OPERATION, registry.KERNELS)
+        # Source registration and a valid commitment cannot select a successor
+        # through the legacy facade. Observe the real worker; do not replace
+        # its result or either registry.
+        with patch.object(planner, "_typed_request_digest",
+                          wraps=planner._typed_request_digest) as actual_worker:
+            with self.assertRaisesRegex(planner.AuthorityPlannerError,
+                                        "^typed planner request is not closed$"):
+                planner.typed_request_digest(request)
+            actual_worker.assert_not_called()
+        self.assertEqual(wire(request), before)
+
+        legacy = request_fixture(operation="webauthn.counter.cas")
+        before = wire(legacy)
+        self.assertIn(legacy["operation"], registry.LEGACY_PLANNABLE_OPERATIONS)
+        with patch.object(planner, "_typed_request_digest",
+                          wraps=planner._typed_request_digest) as actual_worker:
+            self.assertEqual(planner.typed_request_digest(legacy), expected_digest(legacy))
+            actual_worker.assert_called_once_with(legacy, work=None)
+        self.assertEqual(wire(legacy), before)
 
     def test_genuine_one_hash_two_encoders_and_one_parser(self):
         request = request_fixture()

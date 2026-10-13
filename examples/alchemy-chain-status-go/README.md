@@ -1,9 +1,10 @@
 # Go: read Ethereum chain status through Serverware
 
-**Historical isolated SDK-through-proxy/TLS acceptance passed** from source
-`062180fe` with go-ethereum v1.15.11. That result does not establish through-proxy
-acceptance for the upgraded dependency graph below. Deployed support, Actions
-and real-provider/native-pilot acceptance remain unverified.
+**Current isolated SDK-through-proxy/TLS acceptance passed** from source
+`dcf70631` with go-ethereum v1.17.0 and normal Rust SHA-256 prefix `0908732386fa`.
+This used the upgraded dependency graph below, not the historical `062180fe` /
+v1.15.11 binary. Deployed support, Actions and real-provider/native-pilot
+acceptance remain unverified.
 This example uses the ordinary
 [`go-ethereum/rpc` client pinned to v1.17.0](https://github.com/ethereum/go-ethereum/tree/v1.17.0/rpc),
 not an Alchemy-specific SDK or a replacement HTTP implementation. It makes two
@@ -152,12 +153,17 @@ On 2026-10-12, the upgraded graph passed these eight groups plus the selected
 module-graph regression (nine groups total), followed by an ordinary binary
 build, using verified official Go 1.26.9. Tests and build used a network-disabled
 container with read-only source/module cache and `-mod=readonly`. The application
-code and original SDK tests are unchanged. This is offline component evidence;
-fresh SDK-through-proxy acceptance is still required for the upgraded binary.
+code and original SDK tests are unchanged. This is offline component evidence,
+separate from the current SDK-through-proxy acceptance below.
 
-The historical eight main test groups passed with v1.15.11. Separately, that binary passed two
-mainnet reads and wrong-application, wrong-chain and revoked-grant denials through
-the real proxy with a synthetic provider, exact key replacement and separate TLS
-roots. See the [verification record](../../docs/operator-alchemy-verification.md),
-which retains both earlier failures. Nothing here creates a credential, approves
-a destination, deploys a service, or runs a provider-backed GitHub Action.
+The upgraded binary (SHA-256 prefix `859b36340827`, built with Go 1.26.9) now also
+passed two mainnet reads and wrong-application, wrong-chain and revoked-grant
+denials through normal Rust with a synthetic provider. Five current source,
+module and test files matched the retained build source. The joined
+Node/Python/Go run passed all **12 SDK phases**, exact key replacement, separate
+TLS roots, response controls and audit-chain verification. See the
+[current verification record](../../docs/operator-alchemy-verification.md#current-dependency-graph-acceptance)
+and retained receipt `alchemy-current-acceptance.bHL9ONTf/result.json`.
+The historical v1.15.11 component/proxy pass and both earlier fixture failures
+remain recorded separately. Nothing here creates a credential, approves a
+destination, deploys a service, or runs a provider-backed GitHub Action.

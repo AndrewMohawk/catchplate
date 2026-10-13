@@ -103,13 +103,16 @@ upstream HTTP client's default Accept value. Serverware owns the bounded
 ## Verification and CI
 
 Component verification passed: **15 tests** across the two suites below, using
-the installed pinned dependencies. The actual entrypoint also passed isolated
-SDK-through-proxy/TLS acceptance from source `062180fe`: two mainnet reads, plus
-wrong-application, wrong-chain and revoked-grant denials. The fixture used a
-synthetic provider and verified exact key replacement and separate TLS roots.
-See the [verification record](../../docs/operator-alchemy-verification.md),
-including both earlier failed runs. Real Alchemy, Actions, native-pilot and
-deployment acceptance remain unverified.
+the installed pinned dependencies. Separately, the **current dependency graph**,
+including `ws` 8.21.0, passed isolated SDK-through-proxy/TLS acceptance from source
+`dcf70631` with normal Rust SHA-256 prefix `0908732386fa`. This entrypoint completed
+two mainnet reads plus wrong-application, wrong-chain and revoked-grant denials.
+The joined Node/Python/Go run passed all **12 SDK phases**, exact synthetic-key
+replacement, separate TLS roots, response controls and audit-chain verification.
+See the [current verification record](../../docs/operator-alchemy-verification.md#current-dependency-graph-acceptance);
+the earlier `062180fe` pass and both preceding failures remain historical records.
+The retained current receipt is `alchemy-current-acceptance.bHL9ONTf/result.json`.
+Real Alchemy, Actions, native-pilot and deployment acceptance remain unverified.
 
 ```sh
 npm test

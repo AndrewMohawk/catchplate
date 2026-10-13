@@ -1,10 +1,10 @@
 # Alchemy chain status with web3.py
 
-Status: implemented; **10 offline SDK tests passed with web3.py 7.15.0** and its
-installed transitive dependencies on Python 3.12.14. The earlier **isolated actual
-SDK-through-proxy/TLS acceptance** from source `062180fe` used web3.py 7.13.0;
-that acceptance has not been repeated for 7.15.0. No deployment, Actions,
-native-pilot acceptance, real Alchemy request or provider entitlement is claimed. This example uses the
+Status: **current isolated SDK-through-proxy/TLS acceptance passed** with web3.py
+7.15.0 on Python 3.12.14, source `dcf70631` and normal Rust SHA-256 prefix
+`0908732386fa`. The **10 offline SDK tests** are separate component evidence.
+No deployment, Actions, native-pilot acceptance, real Alchemy request or provider
+entitlement is claimed. This example uses the
 ordinary `Web3.eth.chain_id` and `Web3.eth.block_number` properties, not a custom
 JSON-RPC client. It does not request wallets, transactions, balances, NFT APIs,
 WebSockets, batching or `web3_clientVersion`.
@@ -22,8 +22,11 @@ The requirements pin web3.py 7.15.0, Requests 2.34.2, urllib3 2.8.0, certifi
 2026.7.22 and Pydantic 2.13.4. They are direct pins, not a complete transitive
 lock. The executable verifies these installed versions before launching.
 The recorded Python 3.12.14 component run resolved and installed 40 packages from
-wheels and tested the real SDK; a fresh environment must still resolve and
-install the transitive dependencies. This is
+wheels and tested the real SDK. The current proxy acceptance reused that repaired
+cache, checked the installed direct-version metadata, and bound its repair and
+resolver records; it did not rehash the full installed payload or create a
+complete transitive lock. A fresh environment must still resolve and install the
+transitive dependencies. This is
 not a stdlib-only example: web3.py also requires its Ethereum libraries,
 aiohttp and websockets, while Pydantic requires its matching native core.
 Use an interpreter that works without an ambient `LD_LIBRARY_PATH`: the child
@@ -91,14 +94,16 @@ observed read result, not proof of provider ownership or future availability.
 The 10 passing offline tests use the actual pinned web3.py/Requests preparation path and
 synthetic responses at `HTTPAdapter.send`, with sockets forbidden. They inspect
 separate TLS policies but do not perform a TLS handshake, CONNECT, proxy
-credential replacement or provider request. Those acceptance checks remain
-separate: the earlier 7.13.0 entrypoint passed two mainnet reads and
-wrong-application, wrong-chain and revoked-grant denials through the real proxy
-with a synthetic provider. The passing run verified exact key replacement and
-separate TLS roots, with one pooled tunnel for Python's two successful calls.
-The historical [verification record](../../docs/operator-alchemy-verification.md)
-preserves that result and both earlier failed runs. The 7.15.0 update has only
-the offline SDK verification described above, not a new proxy/provider result.
+credential replacement or provider request. The separate **current 7.15.0
+proxy acceptance** completed two mainnet reads and wrong-application, wrong-chain
+and revoked-grant denials through normal Rust with a synthetic provider. The
+joined Node/Python/Go run passed all **12 SDK phases**, exact key replacement,
+separate TLS roots, response controls and audit-chain verification. Python's two
+successful calls shared one pooled tunnel, not an extra retry.
+The [current verification record](../../docs/operator-alchemy-verification.md#current-dependency-graph-acceptance)
+binds receipt `alchemy-current-acceptance.bHL9ONTf/result.json` and preserves the
+earlier `062180fe`/7.13.0 pass and both preceding failures. This remains synthetic
+proxy evidence, not real-provider or deployed-instance acceptance.
 
 ## Primary implementation references
 

@@ -114,15 +114,18 @@ function createGoogleView(workspace, applications, connect) {
     element('google-consent-refresh').disabled = !enabled || checking || workspace.writeInFlight();
     element('google-consent-leave').disabled = workspace.writeInFlight() || checking;
     const intent = current(); const account = checked ? googleConnectedAccount(intent, workspace.state.catalog) : null;
+    const clientAccessAvailable = Boolean(account && operatorCredentialCanSetUpAccess(account, workspace.state.catalog));
     element('google-consent-status').textContent = notice || (checking ? 'Checking saved consent and account state...' : intent ?
       statusLabels[intent.status] + '. ' + (reasons[intent.reason] || '') : currentId ?
       'This return reference was not found in your saved Google connections. No account was selected.' : attempted ?
       'Consent may have started, but no exact receipt was confirmed. Inspect saved connections. No repeat request was sent.' :
       'Read Gmail only. You choose the Google account on Google’s consent page. Saving an account grants no application access.');
     element('google-consent-account').hidden = !account;
-    element('google-consent-account').textContent = account ? account.provider_account + ' · Read Gmail. Account saved; refresh health and a Gmail request have not been checked here.' : '';
+    element('google-consent-account').textContent = account ?
+      account.provider_account + ' · Read Gmail. Account saved; refresh health and a Gmail request have not been checked here.' +
+        (clientAccessAvailable ? '' : ' This credential is saved, but this instance does not offer supported Gmail client access. Saving the credential alone does not grant client access.') : '';
     element('google-consent-use').hidden = !account;
-    element('google-consent-use').disabled = !account || workspace.state.busy || workspace.state.uncertain || checking;
+    element('google-consent-use').disabled = !clientAccessAvailable || workspace.state.busy || workspace.state.uncertain || checking;
     element('google-consent-pending').hidden = !attempted || !workspace.state.consentHold;
     if (intent?.status === 'connected' && checked && !account) element('google-consent-status').textContent =
       'Consent has a saved receipt, but the exact Google account is missing or unavailable. No application can be configured from this receipt.';
@@ -193,6 +196,7 @@ function createGoogleView(workspace, applications, connect) {
   element('google-consent-use').addEventListener('click', () => {
     const account = checked && googleConnectedAccount(current(), workspace.state.catalog);
     if (!account || checking || workspace.state.busy || workspace.state.uncertain) return;
+    if (!operatorCredentialCanSetUpAccess(account, workspace.state.catalog)) { render(); return; }
     if (connect.selectGoogleCredential(account.id)) { opened = false; location.hash = 'connect'; render(); }
   });
   workspace.subscribe(() => {

@@ -837,8 +837,12 @@ function createConnectView(workspace, applications, proxy) {
     resetDraft(); saveOnly = true; message('Choose a provider or manual API key. Saving creates no client or permission.');
     location.hash = 'connect'; goto(0); return true;
   }, startSetup() {
+    // Reopening the selected consent panel is navigation, not a new setup.
+    // Keep its write hold and exact attempt intact until explicit completion
+    // or Leave; otherwise the overview action strands a pending OAuth return.
+    if (connectionMethod === 'google') return true;
     if (saveOnly) {
-      if (!writable() || checkpoint || connectionMethod === 'google') return false;
+      if (!writable() || checkpoint) return false;
       resetDraft(); saveOnly = false; message('Choose a saved credential or add a new one, then select a client and review permissions.'); render();
     }
     return true;
@@ -846,14 +850,19 @@ function createConnectView(workspace, applications, proxy) {
     if (connectionMethod === 'google') return true;
     if (!returning && (!writable() || checkpoint)) return false;
     element('connect-credential-secret').value = ''; element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; element('connect-github-private-key').value = '';
-    if (credentialOnly || returning) { resetDraft(); saveOnly = true; }
-    beforeGoogle = {step, method: connectionMethod};
+    // A real OAuth return has no recoverable page-local draft. Opening consent
+    // from this page is different: preserve its non-secret fields and mode so
+    // Leave can return to the exact setup without recreating any resources.
+    if (returning) { resetDraft(); saveOnly = true; }
+    beforeGoogle = {step, method: connectionMethod, saveOnly, savedCredential};
+    if (credentialOnly) { saveOnly = true; savedCredential = ''; }
     if (connectionMethod === 'saved') savedChoice = element('connect-credential-choice').value;
     connectionMethod = 'google'; goto(0); location.hash = 'connect'; return true;
   }, leaveGoogle() {
     if (connectionMethod !== 'google') return;
     const previous = beforeGoogle; beforeGoogle = null;
     connectionMethod = previous?.method || null; step = previous?.step || 0;
+    saveOnly = previous?.saveOnly ?? saveOnly; savedCredential = previous?.savedCredential || '';
     render();
   }, selectGoogleCredential(id) {
     const item = catalog()?.credentials.find(value => value.id === id && value.status === 'active' && value.auth_type === 'google_oauth');

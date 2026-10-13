@@ -20,6 +20,15 @@ const capability = () => ({schema: 'serverware.operatorGoogleCapability/v1', pro
   permission_preset: 'gmail_readonly', scopes: [...SCOPES], api_origins: ['https://gmail.googleapis.com'],
   authorization_origin: 'https://accounts.google.com', authorization_path: '/o/oauth2/v2/auth', redirect_uri: ORIGIN + '/api/oauth/callback/google',
   start_path: '/api/operator-demo/oauth/google/start', intents_path: '/api/operator-demo/oauth/google/intents'});
+// Independent public contract, matching the existing Gmail bundle fixture
+// oracle, not imported from the product's eligibility helper.
+const gmailDescriptor = () => ({operation_bundle: 'gmail_read_v1', create_path: '/api/operator-demo/access-rules/gmail-read',
+  credential_type: 'google_oauth', permission_preset: 'gmail_readonly', api_origin: 'https://gmail.googleapis.com', methods: ['GET'],
+  paths: ['/gmail/v1/users/me/messages', '/gmail/v1/users/me/messages/{message_id}'], query_mode: 'orderedFormV1',
+  age_policy: {mode: 'unrestricted'}, response_mode: 'gmail_read_json_v1',
+  response_contract: {mode: 'gmailReadJsonV1', body_presence: 'required', content_types: ['application/json'],
+    success_status_codes: [200], error_status_codes: [400, 401, 403, 404, 429, 500, 502, 503, 504],
+    max_body_bytes: 1048576, max_error_body_bytes: 65536, unlisted_header_policy: 'discardUnselectedV1'}});
 const intent = (changes = {}) => ({id: INTENT, name: 'My Gmail account', provider_id: 'google', permission_preset: 'gmail_readonly',
   scopes: [...SCOPES], created_at: new Date(NOW).toISOString(), expires_at_epoch: NOW / 1000 + 600, status: 'awaiting_consent', ...changes});
 const status = intents => ({apiVersion: 'serverware.operatorGoogleConsent/v1', intents, limits: {active: 32, retained: 1024},
@@ -74,6 +83,7 @@ async function fixture(browser, options, exercise) {
   async (page, state, controls) => {
     state.allowedUpstreams = ['https://gmail.googleapis.com']; state.requestBodyModes = ['preserve_json_v1'];
     const observations = {posts: [], gets: 0, navigations: 0, returns: 0, enabled: options.enabled !== false,
+      bundles: Object.hasOwn(options, 'gmailBundles') ? options.gmailBundles : [gmailDescriptor()],
       intents: options.intents || [], catalogFailure: false, statusFailure: false, catalogTransform: null};
     const answer = (route, value, code = 200) => route.fulfill({status: code, contentType: 'application/json', body: JSON.stringify(value)});
     await controls.context.route(ORIGIN + '/api/operator-demo/catalog', async route => {
@@ -85,6 +95,7 @@ async function fixture(browser, options, exercise) {
         let value = publicCatalog(state); value.capabilities.oauth = observations.enabled;
         value.capabilities.google_oauth = observations.enabled ? capability() : null;
         if (observations.enabled) value.capabilities.credential_types.push('google_oauth');
+        if (observations.enabled && observations.bundles !== undefined) value.capabilities.operation_bundles = observations.bundles;
         if (observations.catalogTransform) value = observations.catalogTransform(value);
         await answer(route, value);
       } catch (error) { state.errors.push('Google catalog fixture: ' + error.message); await route.abort(); }
@@ -141,6 +152,7 @@ async function fixture(browser, options, exercise) {
       await page.goto(target, {waitUntil: 'networkidle'});
       assert.equal(new URL(page.url()).search, '', 'return marker removed immediately');
     };
+    await ready(page); await view(page, 'connect');
     await page.locator('#connect-status-refresh').click(); await page.waitForLoadState('networkidle');
     await exercise(page, state, observations, {...controls, returnToWorkspace});
     assert(observations.posts.length <= 1); assert(observations.navigations <= 1);
@@ -149,6 +161,14 @@ async function fixture(browser, options, exercise) {
 async function open(page) {
   await page.locator('#connect-google').click(); await page.locator('#google-consent-panel').waitFor({state: 'visible'});
   await exclusiveGoogle(page);
+  await page.waitForLoadState('networkidle');
+}
+async function managementGoogle(page) {
+  await view(page, 'credentials');
+  const disclosure = page.locator('#credential-google-connect').locator('xpath=ancestor::details[1]');
+  if (!await disclosure.evaluate(node => node.open)) await disclosure.locator(':scope > summary').click();
+  await page.locator('#credential-google-connect').click();
+  await page.locator('#google-consent-panel').waitFor({state: 'visible'}); await exclusiveGoogle(page);
   await page.waitForLoadState('networkidle');
 }
 async function exclusiveGoogle(page, expectedForms = 1) {
@@ -221,12 +241,41 @@ const tests = [
       await controls.returnToWorkspace(); await page.locator('#google-consent-use').waitFor({state: 'visible'});
       await exclusiveGoogle(page, 0);
       assert.match(await page.locator('#google-consent-account').innerText(), /ordinary-fixture@example.test.*Read Gmail.*health.*not been checked/);
+      assert(await page.locator('#google-consent-use').isEnabled(), 'the exact advertised Gmail bundle permits explicit reuse');
       await absent(page); await page.setViewportSize({width: 390, height: 844}); await screenshot(page, 'google-return-mobile');
       await page.locator('#google-consent-use').click(); await page.locator('#connect-application-step').waitFor({state: 'visible'});
       assert(await page.locator('#google-consent-panel').isHidden()); assert(await page.locator('#connect-credential-form').isHidden());
       assert.equal(await page.locator('#connect-credential-choice').inputValue(), IDS.credential);
       assert.equal(state.posts.length, 0); assert.equal(observed.posts.length, 0);
     })],
+  ['missing or withdrawn Gmail access keeps the saved account visible and blocks rendered and dispatched use', async browser => {
+    for (const kind of ['missing', 'withdrawn']) await fixture(browser,
+      {credentials: [google()], gmailBundles: kind === 'missing' ? undefined : [gmailDescriptor()],
+        intents: [intent({status: 'connected', credential_id: IDS.credential})]}, async (page, state, observed, controls) => {
+        const saved = JSON.stringify({credentials: state.credentials, applications: state.applications, rules: state.rules, revision: state.revision});
+        await controls.returnToWorkspace(); await page.locator('#google-consent-use').waitFor({state: 'visible'});
+        if (kind === 'withdrawn') {
+          assert(await page.locator('#google-consent-use').isEnabled());
+          observed.bundles = [];
+          await page.locator('#google-consent-refresh').click(); await page.waitForLoadState('networkidle');
+        }
+        await page.locator('#google-consent-use:disabled').waitFor({state: 'visible'});
+        const account = await page.locator('#google-consent-account').innerText();
+        assert.match(account, /ordinary-fixture@example.test.*This credential is saved, but this instance does not offer supported Gmail client access/);
+        assert.match(account, /Saving the credential alone does not grant client access/);
+        assert(await page.locator('#connect-application-step').isHidden());
+        await page.locator('#google-consent-use').dispatchEvent('click');
+        assert(await page.locator('#google-consent-use').isDisabled());
+        assert(await page.locator('#google-consent-account').isVisible());
+        assert(await page.locator('#google-consent-panel').isVisible());
+        assert(await page.locator('#connect-application-step').isHidden());
+        assert.equal(await page.locator('#client-token').inputValue(), '');
+        assert(await page.locator('#one-time-access').isHidden());
+        assert.equal(state.posts.length, 0); assert.equal(observed.posts.length, 0); assert.equal(observed.navigations, 0);
+        assert.equal(JSON.stringify({credentials: state.credentials, applications: state.applications, rules: state.rules, revision: state.revision}), saved);
+        await absent(page);
+      });
+  }],
   ...['missing', 'quarantined', 'wrong-id'].map(kind => ['connected receipt refuses ' + kind + ' account', browser => fixture(browser,
     {credentials: kind === 'missing' ? [] : [kind === 'quarantined' ? google({status: 'quarantined', quarantined_at: new Date(NOW).toISOString(),
       quarantine_reason: 'operator_google_cleanup_fence', provider_revocation_status: 'not_proven'}) : google({id: OTHER})],
@@ -303,30 +352,59 @@ const tests = [
       await page.locator('#connect-credential-next').click(); await page.locator('#connect-application-step').waitFor({state: 'visible'});
       await page.locator('#connect-application-name').fill('Keep this application draft');
       await page.locator('#connect-token-ttl').selectOption('3600');
-      await view(page, 'credentials'); await page.locator('#credential-google-connect').click();
-      await page.locator('#google-consent-panel').waitFor({state: 'visible'}); await exclusiveGoogle(page);
+      assert.equal(await page.locator('#connect-title').innerText(), 'Set up access');
+      await managementGoogle(page);
+      assert.equal(await page.locator('#connect-title').innerText(), 'Add credential');
       assert(await page.locator('#credential-google-connect').isHidden());
       await page.locator('#google-consent-leave').click(); await page.locator('#connect-application-step').waitFor({state: 'visible'});
+      assert.equal(await page.locator('#connect-title').innerText(), 'Set up access');
       assert.equal(await page.locator('#connect-application-name').inputValue(), 'Keep this application draft');
       assert.equal(await page.locator('#connect-token-ttl').inputValue(), '3600');
       assert.equal(await page.locator('#connect-credential-choice').inputValue(), IDS.credential);
+      assert.equal(await page.locator('#connect-credential-secret').inputValue(), '');
       assert.equal(state.posts.length, 0); assert.equal(observed.posts.length, 0);
     })],
-  ['changing to Google and explicitly leaving preserves the unsaved API-key draft', browser => fixture(browser, {}, async (page, state, observed) => {
+  ['management Google entry and Leave restore the exact save-only receipt without creating access', browser => fixture(browser, {}, async (page, state, observed) => {
+    await view(page, 'credentials'); await page.locator('#credential-add').click();
+    await page.locator('#connect-use-key').click(); await page.locator('#connect-credential-name').fill('Saved before Google');
+    await page.locator('#connect-credential-secret').fill('synthetic-layout-save-only-key');
+    await page.locator('#connect-credential-next').click(); await page.locator('#connect-credential-saved').waitFor({state: 'visible'});
+    await ready(page); assert.equal(await page.locator('#connect-title').innerText(), 'Add credential');
+    const receipt = await page.locator('#connect-credential-saved-summary').innerText();
+    assert.match(receipt, /Saved before Google/);
+    const resources = JSON.stringify({credentials: state.credentials, applications: state.applications, rules: state.rules, revision: state.revision});
+    await managementGoogle(page); assert(await page.locator('#connect-credential-saved').isHidden());
+    assert.equal(await page.locator('#connect-credential-secret').inputValue(), '');
+    await page.locator('#google-consent-leave').click(); await page.locator('#connect-credential-saved').waitFor({state: 'visible'});
+    assert.equal(await page.locator('#connect-title').innerText(), 'Add credential');
+    assert.equal(await page.locator('#connect-credential-saved-summary').innerText(), receipt);
+    assert(await page.locator('#connect-application-step').isHidden());
+    assert.equal(await page.locator('#connect-credential-secret').inputValue(), '');
+    assert.deepEqual(state.posts.map(item => item.name), ['credentials']); assert.equal(observed.posts.length, 0);
+    assert.equal(state.applications.length, 0); assert.equal(state.rules.length, 0);
+    assert.equal(await page.locator('#client-token').inputValue(), '');
+    assert.equal(JSON.stringify({credentials: state.credentials, applications: state.applications, rules: state.rules, revision: state.revision}), resources);
+    await page.locator('#connect-saved-use').click(); await page.locator('#connect-application-step').waitFor({state: 'visible'});
+    assert.equal(await page.locator('#connect-title').innerText(), 'Set up access');
+    assert.equal(await page.locator('#connect-credential-choice').inputValue(), IDS.credential);
+    assert.equal(state.posts.length, 1); assert.equal(observed.posts.length, 0);
+  })],
+  ['changing to Google and leaving preserves the non-secret API-key draft while clearing its secret', browser => fixture(browser, {}, async (page, state, observed) => {
     await page.locator('#connect-use-key').click(); await page.locator('#connect-credential-name').fill('Keep this API-key draft');
     await page.locator('#connect-credential-secret').fill('synthetic-layout-key-draft');
     await page.locator('#connect-method-change').click(); await open(page);
     assert(await page.locator('#connect-credential-secret').isDisabled());
+    assert.equal(await page.locator('#connect-credential-secret').inputValue(), '');
     await page.locator('#google-consent-leave').click(); await page.locator('#connect-use-key').click();
     assert.equal(await page.locator('#connect-credential-name').inputValue(), 'Keep this API-key draft');
-    assert.equal(await page.locator('#connect-credential-secret').inputValue(), 'synthetic-layout-key-draft');
+    assert.equal(await page.locator('#connect-credential-secret').inputValue(), '');
     assert(await page.locator('#google-consent-panel').isHidden()); assert.equal(state.posts.length, 0); assert.equal(observed.posts.length, 0);
   })],
 ];
 async function main() {
   const args = process.argv.slice(2);
-  assert(args.length === 0 || args.length === 2 && args[0] === '--from-group' && /^(?:[1-9]|1[0-9]|2[01])$/.test(args[1]),
-    'Only no arguments or exact --from-group N (1..21) are accepted');
+  assert(args.length === 0 || args.length === 2 && args[0] === '--from-group' && /^(?:[1-9]|1[0-9]|2[0-3])$/.test(args[1]),
+    'Only no arguments or exact --from-group N (1..23) are accepted');
   const firstGroup = args.length ? Number(args[1]) : 1; const selected = tests.slice(firstGroup - 1);
   const runPure = args.length === 0;
   const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));

@@ -28,6 +28,12 @@ class RunnerTests(unittest.TestCase):
         gmail = next(row for row in runner.SUITES if row.script == "test_operator_gmail_sdk_languages.cjs")
         self.assertEqual((gmail.category, gmail.runtime, gmail.arguments, gmail.seconds),
             ("ui_contract", "node", (), 60))
+        for script in ("test_operator_guided_checker.py", "test_operator_guided_fixture.py",
+                "test_operator_guided_browser.cjs"):
+            guided = next(row for row in runner.SUITES if row.script == script)
+            node = script.endswith(".cjs")
+            self.assertEqual((guided.category, guided.runtime, guided.arguments, guided.seconds),
+                ("ui_contract" if node else "backend", "node" if node else "python", (), 60))
         x_backend = {"test_operator_x_accounts_api.py", "test_operator_x_transport.py",
             "test_operator_x_refresh.py", "test_operator_x_lease_reconciliation.py",
             "test_operator_x_lease_boundary.py", "test_operator_x_secret_boundary.py",
@@ -159,6 +165,8 @@ class RunnerTests(unittest.TestCase):
         examples = {
             "test_operator_catalog_browser.cjs": ({"ok": True,
                 "scope": "pure exported client command generator; no browser or requests"}, ""),
+            "test_operator_guided_browser.cjs": ({"ok": True, "browser": False, "network": False,
+                "providerRequests": 0, "scope": "pure guided browser protocol and private download controls"}, "PASS fixture\n"),
             "test_operator_npm_ui.cjs": ({**common,
                 "scope": "public catalog, inert DOM connect handlers, metadata-only recipe text; not browser or provider acceptance"}, "PASS fixture\n"),
             "test_operator_npm_publish_ui.cjs": (common, "PASS fixture\n"),

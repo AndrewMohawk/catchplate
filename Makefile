@@ -11328,6 +11328,13 @@ verify-operator-aws-credentials:
 verify-operator-aws-browser:
 	node scripts/test_operator_aws_browser.cjs
 
+# Pure guided-fixture/protocol controls only; no browser, Docker, proxy or provider execution.
+.PHONY: verify-operator-guided-controls
+verify-operator-guided-controls:
+	python3 -B -m unittest scripts.test_operator_guided_checker
+	python3 -B -m unittest scripts.test_operator_guided_fixture
+	node scripts/test_operator_guided_browser.cjs
+
 # Synthetic rendered UI, public links and a local shell stub only; no OAuth or proxy execution.
 .PHONY: verify-operator-gmail-sdk-choice
 verify-operator-gmail-sdk-choice:

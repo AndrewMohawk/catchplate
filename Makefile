@@ -11335,6 +11335,12 @@ verify-operator-guided-controls:
 	python3 -B -m unittest scripts.test_operator_guided_fixture
 	node scripts/test_operator_guided_browser.cjs
 
+# Pure public-client/controller controls; no live provisioning or proxy requests.
+.PHONY: verify-operator-public-proxy-controls
+verify-operator-public-proxy-controls:
+	python3 -I -B scripts/test_operator_public_proxy.py
+	python3 -I -B scripts/test_operator_public_proxy_control.py
+
 # Synthetic rendered UI, public links and a local shell stub only; no OAuth or proxy execution.
 .PHONY: verify-operator-gmail-sdk-choice
 verify-operator-gmail-sdk-choice:

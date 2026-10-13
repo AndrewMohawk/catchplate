@@ -71,6 +71,8 @@ SUITES = (
     Suite("backend", "test_run_operator_x_post_fixture.py", seconds=60),
     Suite("backend", "test_operator_guided_checker.py", seconds=60),
     Suite("backend", "test_operator_guided_fixture.py", seconds=60),
+    Suite("backend", "test_operator_public_proxy.py", seconds=60),
+    Suite("backend", "test_operator_public_proxy_control.py", seconds=60),
     Suite("notifications", "test_operator_notification_events.py"),
     Suite("notifications", "test_operator_notification_google_events.py"),
     Suite("notifications", "test_operator_notification_google_integration.py"),

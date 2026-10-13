@@ -25,6 +25,10 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual({row.category for row in runner.SUITES}, {"backend", "notifications", "ui_contract"})
         self.assertIn("test_operator_notification_google_events.py", paths)
         self.assertIn("test_operator_catalog_github_app.py", paths)
+        for script in ("test_operator_public_proxy.py", "test_operator_public_proxy_control.py"):
+            public_proxy = next(row for row in runner.SUITES if row.script == script)
+            self.assertEqual((public_proxy.category, public_proxy.runtime, public_proxy.arguments, public_proxy.seconds),
+                ("backend", "python", (), 60))
         gmail = next(row for row in runner.SUITES if row.script == "test_operator_gmail_sdk_languages.cjs")
         self.assertEqual((gmail.category, gmail.runtime, gmail.arguments, gmail.seconds),
             ("ui_contract", "node", (), 60))

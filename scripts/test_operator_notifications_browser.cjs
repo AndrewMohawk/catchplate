@@ -390,7 +390,7 @@ const tests = [
       await target.evaluate(node => node.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})));
       assert.equal(observed.posts.length, 0); assert.equal(await recovery(page), null);
       assert.deepEqual(observed.snapshot.slots, before);
-      for (const checkbox of (await target.locator('[name="event_types"]').all()).slice(0, 3)) await checkbox.uncheck();
+      for (const checkbox of (await target.locator('[name="event_types"]').all()).slice(0, 6)) await checkbox.uncheck();
       assert.match(await target.locator('[data-notification-events-summary]').innerText(), /65\/64 selected/);
       assert(await target.locator('[data-notification-save]').isDisabled());
       for (const button of await target.locator('[data-notification-preset]').all()) assert(await button.isDisabled());
@@ -398,7 +398,7 @@ const tests = [
       await target.locator('[data-notification-preset="proxy_blocks"]').evaluate(node => node.dispatchEvent(new Event('click', {bubbles: true})));
       assert.deepEqual(await target.locator('[name="event_types"]:checked').evaluateAll(nodes => nodes.map(node => node.value)), overLimit);
       assert.equal(observed.posts.length, 0);
-      await target.locator('[name="event_types"]').nth(3).uncheck();
+      await target.locator('[name="event_types"]').nth(6).uncheck();
       assert(await target.locator('[data-notification-save]').isEnabled());
       await submit(page, target); assert.equal(observed.posts.length, 1);
       assert.equal(observed.posts[0].body.event_types.length, 64);
@@ -658,10 +658,11 @@ const tests = [
     })],
 ];
 
-async function runSuite(browser) {
+async function runSuite(browser, {fromGroup = 1} = {}) {
   assert(!suiteRunning, 'notification suite is already running');
   assert(browser && typeof browser.newContext === 'function', 'an existing Playwright browser is required');
   assert(tests.length > 0, 'fixture cases must be finalized before execution');
+  assert(Number.isInteger(fromGroup) && fromGroup >= 1 && fromGroup <= tests.length, 'valid first group required');
   suiteRunning = true;
   const owned = new Set(); const creating = new Set();
   let stopping = false; let created = 0; let closed = 0; let deadline; let cleanupDeadline;
@@ -683,7 +684,7 @@ async function runSuite(browser) {
     console.log(JSON.stringify({artifactDirectory: artifacts, scope: 'synthetic notification fixtures; no actual destinations'}));
     try {
       await Promise.race([(async () => {
-        for (const [name, run] of tests) {
+        for (const [name, run] of tests.slice(fromGroup - 1)) {
           assert(!stopping, 'notification suite has stopped');
           await run(scopedBrowser); console.log('PASS ' + name);
         }
@@ -706,7 +707,8 @@ async function runSuite(browser) {
         assert.deepEqual(after, before, 'source bytes and complete frontend roster stayed frozen throughout fixture run');
       }
     }
-    const summary = {ok: true, groups: tests.length, scope: 'intercepted synthetic Notifications browser fixtures only',
+    const summary = {ok: true, groups: tests.length - fromGroup + 1, totalGroups: tests.length, firstGroup: fromGroup,
+      scope: 'intercepted synthetic Notifications browser fixtures only',
       liveRequests: 0, destinationDeliveries: 0, sourceWorkerExecuted: false, productionAcceptance: false};
     console.log(JSON.stringify(summary));
     return {...summary, artifactDirectory: artifacts, sourcePinsBefore: before, sourcePinsAfter: after,

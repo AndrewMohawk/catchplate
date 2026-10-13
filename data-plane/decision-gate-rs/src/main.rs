@@ -82880,7 +82880,16 @@ mod tests {
             Ok(_) => panic!("trickled request head must hit the absolute deadline"),
             Err(error) => error,
         };
-        assert!(error.contains("absolute request read deadline"));
+        // The HTTP parser deliberately withholds transport diagnostics. Check
+        // its fixed error, then the same original IO owner's spent deadline.
+        assert_eq!(error, "request_head_read_failed");
+        let consumed = reader.inner.input.position();
+        assert!(consumed > 0 && consumed < reader.inner.input.get_ref().len() as u64);
+        let error = reader
+            .read(&mut [0u8; 1])
+            .expect_err("partial request progress must not renew the original deadline");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(reader.inner.input.position(), consumed);
 
         let slow_writer = SlowIo {
             input: Cursor::new(Vec::new()),
@@ -82896,6 +82905,14 @@ mod tests {
             .write_all(b"response")
             .expect_err("trickled response write must hit the absolute deadline");
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        let written = writer.inner.output.len();
+        assert!(written > 0 && written < b"response".len());
+        assert_eq!(writer.inner.output.as_slice(), &b"response"[..written]);
+        let error = writer
+            .write(b"not sent")
+            .expect_err("partial response progress must not renew the original deadline");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(writer.inner.output.len(), written);
     }
 
     #[test]

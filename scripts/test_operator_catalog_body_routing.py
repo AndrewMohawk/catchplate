@@ -302,21 +302,45 @@ class OperatorCatalogBodyRoutingTests(unittest.TestCase):
         from serverware import operator_google_configuration_api as google, operator_x_configuration_api as x
         from serverware import operator_x_accounts_api as x_accounts
         roster, _ = classification()
-        self.assertEqual(len(roster), 40)
+        self.assertEqual(len(roster), 42)
         self.assertIn("/api/operator-demo/credentials/github-app/replace-key", roster)
         self.assertIn("/api/operator-demo/access-rules/x-post", roster)
         self.assertEqual(roster, api.MUTATION_PATHS | PROVIDER_POST_LIMITS.keys() | X_ACCOUNT_POST_LIMITS.keys())
         routes = [route for router in (api.router, notifications.router, google.router, x.router, x_accounts.router) for route in router.routes
             if "POST" in route.methods]
-        self.assertEqual(len(routes), 39)
+        self.assertEqual(len(routes), 41)
         self.assertEqual({route.path for route in routes}, roster - {GOOGLE_START})
+        renewal_routes = {
+            "/api/operator-demo/applications/renewal/enroll": (api.enroll_workload_renewal, True),
+            "/api/operator-demo/applications/renewal/cancel": (api.cancel_workload_renewal, False),
+        }
+        self.assertTrue(renewal_routes.keys() <= roster)
+        self.assertNotIn("/api/operator-demo/workloads/renew", roster)
         for route in routes:
             with self.subTest(path=route.path):
                 params = inspect.signature(route.endpoint).parameters
                 self.assertEqual(set(params), {"request", "identity"})
                 self.assertIs(params["identity"].default.dependency, api._admin_identity)
                 sequence = calls(route.endpoint)
-                if any(name == "_mutate" for _, name in sequence):
+                if route.path in renewal_routes:
+                    endpoint, enroll = renewal_routes[route.path]
+                    self.assertIs(route.endpoint, endpoint)
+                    self.assertEqual([name for _, name in sequence], ["_renewal_admin"])
+                    tree = ast.parse(textwrap.dedent(inspect.getsource(endpoint)))
+                    invocation = tree.body[0].body[0].value.value
+                    self.assertEqual(ast.unparse(invocation),
+                        f"_renewal_admin(request, identity, enroll={enroll})")
+                    sequence = calls(api._renewal_admin)
+                    tree = ast.parse(textwrap.dedent(inspect.getsource(api._renewal_admin)))
+                    reads = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Name) and node.func.id == "_payload"]
+                    self.assertEqual(len(reads), 1)
+                    self.assertEqual(ast.literal_eval(reads[0].args[2]), 4096)
+                    admissions = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Name) and node.func.id == "_admit"]
+                    self.assertEqual([ast.unparse(node) for node in admissions],
+                        ["_admit(request, mutation=True)"])
+                elif any(name == "_mutate" for _, name in sequence):
                     self.assertEqual([name for _, name in sequence], ["_mutate"])
                     sequence = calls(api._mutate)
                 admit = [line for line, name in sequence if name == "_admit"]
@@ -350,7 +374,8 @@ class OperatorCatalogBodyRoutingTests(unittest.TestCase):
         for path in (None, b"/api/operator-demo/credentials", "/api/operator-demo/%63redentials",
                 "/api/operator-demo/oauth/google/configuration/v3", "/api/operator-demo/oauth/x/configuration/v2",
                 "/api/operator-demo/oauth/x/start/v2", "/api/authority/control-plane/custody",
-                "/api/webauthn/register/prepare", "/api/operator-demo/catalog"):
+                "/api/webauthn/register/prepare", "/api/operator-demo/catalog",
+                "/api/operator-demo/workloads/renew"):
             self.assertFalse(owns("POST", path, operator_active=True))
 
     def run_story(self, mode):

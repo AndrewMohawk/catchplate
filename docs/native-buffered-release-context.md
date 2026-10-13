@@ -19,8 +19,12 @@ None of these component results is native workflow acceptance.
 
 The companion Python change at `7013967b` temporarily refuses raw nested JIT
 documents at five new-submission/retention boundaries. Its focused component
-tests passed as recorded below. Neither change is deployed: the live app
-remains `a3899a95` with normal gate `682d66d8…`.
+tests passed as recorded below. Those changes are included in the subsequently
+deployed `6bf463c5` / normal `09087323` pair; see the
+[live deployment checkpoint](../docker/serverware-operator-demo/README.md).
+The earlier `a3899a95` / `682d66d8` runtime is historical. Deployment of these
+guards and retained owners does not enable a native JIT workflow. The newer
+explicit private-release ingress work is separate and is not deployed.
 
 This work follows the separate
 [signed preparation retention repair](release-preparation-retention.md).
@@ -130,7 +134,9 @@ Normal compilation at `cb1466be` passed in 227.639 seconds, producing the
 `0908732386fad8f7c89e761665fbda763d3c522b275d6c34ade5322cbaa54b6b`
 with 518 recorded compiler inputs. At that compile checkpoint the normal
 executable had **not been executed or deployed**. It was subsequently executed
-in the isolated ordinary guided journey below, not deployed. All 44 retry cleanup
+in the isolated ordinary guided journey below and later deployed in the
+`6bf463c5` pair linked above; neither establishes native workflow acceptance.
+All 44 retry cleanup
 receipts passed, with zero owned containers remaining; the original retained
 cache inputs were unchanged.
 
@@ -149,12 +155,53 @@ subsequently passed all 58 suites, 512 Python tests and 145 Node groups, with ze
 skips, failures or reported exceptions in 447.976 seconds. Its retained
 `ci-38404208827.zgrFniED/quick/result.json` SHA-256 is
 `9c47b2f6a9df1c9fceb6b42cf8a9e91a711bc7abcf98a4fda777d0a53ff6e5a6`.
-The separate [guided ordinary journey](operator-guided-verification.md#latest-october-13-checkpoint--ordinary-run-with-the-connection-owner-candidate)
+The separate [guided ordinary journey](operator-guided-verification.md#previous-october-13-checkpoint--ordinary-run-with-the-connection-owner-candidate)
 passed at documentation-only successor `6cd18577` with this actual `09087323`
 normal binary, including UI creation, proxy allow, audit and revocation/denial.
 These results do not admit a native caller, private review or protected approval,
-and did not change the live deployment. The earlier `3752cb7d` CI result below
+and did not change the live deployment at that checkpoint. The earlier `3752cb7d` CI result below
 remains evidence for its preceding checkpoint only.
+
+## Explicit private release ingress — source only, execution unavailable
+
+`serverware/authority_release_private_request.py` defines
+`serverware.policyAuthorityPrivateReleaseWriterInput/v1` and the public projection
+`serverware.releaseReserveCommitments/v1`. Only the installed `release.reserve`
+facade selects this envelope, from an unsigned exact 27-field parent with an exact
+seven-field nested JIT request. The existing private-JIT-v2 producer receives a
+derived 19-field child: parent identity/approver fields cannot be independently
+overridden. The child URL and two review documents travel separately; public
+commitments bind those originals and the whole original parent argument graph.
+Validation reconstructs the originals and checks canonical equality, without
+rewriting signed requests or deriving an authoritative child/opaque lookup ID.
+
+The service extracts this envelope into public and transient private channels.
+It then refuses with `Private JIT release custody and atomic retention are unavailable`
+immediately before public parent-request construction, planner work or SQL.
+This is grammar and binding, not policy/currentness or native-custody admission.
+This path has no connected native producer, atomic pending-child creation, private opening or
+continuation. `release.v1.reserve` does not opt in. Raw and projected nested JIT
+requests still fail the unchanged public retention guards; missing/null JIT,
+historical validators, retained reads and committed replay are unchanged.
+
+The fresh offline retry passed all **72 tests in seven suites**, zero skips,
+in 24.248 seconds with all 28 selected source pins unchanged. This includes
+10 projection groups and 12 actual installed-facade/service controls, including
+the real service method's pre-commitment refusal and unchanged retention guards.
+The measured-process constructor is deliberately bypassed by a synthetic
+operation allowlist; no custody identity or successful writer is manufactured.
+The first run's erroneous positive-policy expectation remains retained: the
+test-only correction preserves mandatory WebAuthn and the 30-second assertion
+age cap. No application security requirement was relaxed.
+
+Durable evidence is `release-private-request-retry.BIt5HsvV/results/result.json`
+under the operator-workspace evidence root, SHA256
+`9a6546b28b4a5691658821d95cfa6089a4e48dc75b580445b428d1763bde3053`.
+The initial failed run remains in `release-private-request.kLNoDJYt`; both
+network-disabled test containers exited and their exact-name namespaces are
+empty. These are focused components, not PostgreSQL, native-custody, complete
+approval-flow, provider or deployment acceptance. The earlier test results
+below cover their original checkpoints only.
 
 ## Python: temporary refusal at five boundaries
 
@@ -167,12 +214,13 @@ an otherwise invalid request.
 
 The fixed error is
 `Private JIT release input requires its explicit private profile`.
-That profile is not implemented by this guard.
+That profile is not implemented by this guard; the separate source-only ingress
+above terminates before retention or execution.
 
 | Boundary | Placement of the refusal |
 | --- | --- |
-| Installed controlled-writer wrapper in `authority_store/authority_dispatch.py` | After the existing argument marshaling, before dispatch. |
-| `authority_service._extract_v9_runtime_input` | After extracting either accepted envelope shape, before returning public typed arguments. |
+| Installed controlled-writer wrapper in `authority_store/authority_dispatch.py` | After argument marshaling, before generic dispatch. Only the exact new `release.reserve` profile takes the separate private-envelope branch described above. |
+| `authority_service._extract_v9_runtime_input` | After extracting either generic envelope shape, before returning public typed arguments; the new private profile has its own extraction and immediate execution refusal. |
 | `authority_planner.PlannerPersistence.persist` | After existing signed-envelope/payload validation, before retention and opening its SQL connection. |
 | `authority_store.executor_v9.complete_authority_planner_transaction` | Checks both the typed request and enclosing measured-plan operation before new plan retention. |
 | `authority_store.executor_v9.reserve_authority_execution_envelope` | Checks the exact request before acquiring the lower writer or retaining the execution envelope. |

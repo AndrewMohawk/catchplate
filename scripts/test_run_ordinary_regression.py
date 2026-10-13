@@ -25,7 +25,8 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual({row.category for row in runner.SUITES}, {"backend", "notifications", "ui_contract"})
         for script in ("test_jit_denial_api.py", "test_authority_jit_denial.py",
                 "test_authority_jit_approval.py", "test_authority_jit_request.py",
-                "test_authority_release_private_input.py", "test_approval_history_metadata.py"):
+                "test_authority_release_private_input.py", "test_authority_release_private_request.py",
+                "test_authority_release_private_ingress.py", "test_approval_history_metadata.py"):
             denial = next(row for row in runner.SUITES if row.script == script)
             self.assertEqual((denial.category, denial.runtime, denial.arguments, denial.seconds),
                 ("backend", "python", (), 60))

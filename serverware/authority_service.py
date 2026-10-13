@@ -2839,6 +2839,20 @@ def _extract_v9_runtime_input(
     The returned private documents are transient inputs, not sealed custody or
     native provenance. They must not enter typed requests or execution plans.
     """
+    if operation == "release.reserve":
+        from serverware import authority_release_private_request
+        from serverware.authority_transition_core import TransitionKernelError
+
+        if runtime_input.get("schema") == authority_release_private_request.INPUT_SCHEMA:
+            if handler_name != authority_release_private_request.HANDLER:
+                raise AuthorityServiceError("typed authority handler binding changed")
+            try:
+                arguments, private_documents = (
+                    authority_release_private_request.validate_runtime_input(runtime_input)
+                )
+            except TransitionKernelError:
+                raise AuthorityServiceError("authority private release input refused") from None
+            return arguments, None, private_documents
     if operation == "jit.request":
         from serverware import authority_jit_private_request
         from serverware.authority_transition_core import TransitionKernelError
@@ -8872,6 +8886,15 @@ class AuthorityProcess:
         arguments, explicit_webauthn, jit_private_documents = _extract_v9_runtime_input(
             operation, handler_name, runtime_input,
         )
+        if operation == "release.reserve" and jit_private_documents is not None:
+            # The explicit compound profile is now a connected, private ingress,
+            # not a legacy release receipt. Do not silently discard its originals
+            # or send commitments to a planner lacking atomic pending-child
+            # semantics. Genuine native custody and the compound writer must own
+            # this branch before any public request, signature or SQL is created.
+            raise AuthorityServiceError(
+                "Private JIT release custody and atomic retention are unavailable"
+            )
         # No native original producer consumes these transient documents yet.
         # Keep them local, never in arguments, typedRequest or planner_request.
         if "businessIntent" in arguments:

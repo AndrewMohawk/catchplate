@@ -4,6 +4,12 @@
 
 ## Implemented checkpoint
 
+The retention change below is included in the current `6bf463c5` / normal
+`09087323` [deployment](../docker/serverware-operator-demo/README.md).
+The build/test results here remain evidence for their original checkpoint, not
+native admission or protected approval acceptance. The newer explicit private
+release ingress is source work only and is not deployed.
+
 Commit `cb669c85` changes retention in
 `data-plane/decision-gate-rs/src/main.rs`, not authorization.
 `ReleasePreparation` now holds a private
@@ -53,7 +59,8 @@ Its compiler-input receipt records 516 inputs and has SHA256
 `c1271ccfa1d2200729715b318df6c46c312613560cd4114a693bd230f4d9e213`.
 This is a normal build, not execution or deployment of that executable.
 All 26 build/test container cleanup receipts passed, with no remaining owned
-containers. The existing cache/vendor and live deployment are unchanged.
+containers. The existing cache/vendor and live deployment were unchanged by
+that build/test run.
 
 Durable receipts and the pinned driver are retained under
 `/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/release-preparation-rust.Nsj7KuOq`.
@@ -70,10 +77,20 @@ pending review within the same authority transaction. Wiring only standalone
 `jit.request` is insufficient: the nested private DB helper does not enter that
 public writer wrapper, and Rust refuses the legacy standalone JIT composition.
 
-The compound path below remains unimplemented. The separate
+The compound execution path below remains unimplemented. The separate
 [buffered-context checkpoint](native-buffered-release-context.md) now carries
 the actual binary-local request/transport originals; it does not independently
 admit them inside the native signing library.
+
+The newer [explicit private-release ingress](native-buffered-release-context.md#explicit-private-release-ingress--source-only-execution-unavailable)
+adds source-only transport grammar: the exact 27-field `release.reserve` parent
+and seven nested fields derive the existing 19-field private-JIT-v2 child, with
+a commitment to the entire original parent. URL/review documents remain outside
+the public channel. The installed facade and service are connected, but the
+service deliberately refuses before public parent construction, planning or SQL.
+No authoritative child ID, native custody or atomic pending record is produced;
+public raw/projected retention guards and legacy no-JIT behavior remain intact.
+Focused tests are pending; this new ingress is not deployed.
 
 1. Independently admit the retained authenticated request/session owner and
    original deadline inside the native library. A principal string, canonical
@@ -81,8 +98,9 @@ admit them inside the native signing library.
    signed `prepare_release_policy` exchange, independently verify its exact
    retained originals before native sealing; complete sealing and reserve under
    the same original bounded operation, with no deadline renewal.
-2. Define a versioned parent/child binding. Public `release.reserve` arguments
-   carry the exact child JIT commitment; literal native pair/proof travels
+2. Complete the versioned native parent/child binding beyond the new ingress
+   commitments. Public `release.reserve` arguments carry the exact child JIT
+   commitment; literal native pair/proof must travel
    separately from public arguments. The native statement binds the parent
    request, child request and sealed pair. Do not put the pair hash into its
    own request commitment or silently reuse standalone JIT identity domains.

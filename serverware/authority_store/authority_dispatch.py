@@ -393,6 +393,25 @@ def _install_authority_controlled_writer_boundaries() -> None:
                 raise _db_value("MetadataStoreError")(
                     "authority writer arguments are not closed"
                 )
+            if (__operation == "release.reserve"
+                    and marshaled_arguments.get("jit_approval_request") is not None):
+                from serverware import authority_release_private_request
+                from serverware.authority_transition_core import TransitionKernelError
+
+                try:
+                    runtime_input = authority_release_private_request.prepare(
+                        marshaled_arguments
+                    )
+                except TransitionKernelError:
+                    # Keep malformed raw submissions behind the existing
+                    # non-reflective refusal. Only the exact new profile is
+                    # transported; it does not authorize retention or release.
+                    raise _db_value("MetadataStoreError")(
+                        authority_release_private_input.ERROR
+                    ) from None
+                return _db_value("dispatch_policy_authority_operation")(
+                    __operation, runtime_input
+                )
             try:
                 authority_release_private_input.require_public_arguments(
                     __operation, marshaled_arguments

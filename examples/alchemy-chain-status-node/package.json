@@ -12,6 +12,7 @@
   "dependencies": { "alchemy-sdk": "3.6.5" },
   "overrides": {
     "@ethersproject/providers": "5.8.0",
-    "@ethersproject/web": "5.8.0"
+    "@ethersproject/web": "5.8.0",
+    "ws@8": "8.21.0"
   }
 }

@@ -27,6 +27,16 @@ investigate existing access rather than creating a new PAT, requesting a
 secret in chat, or expanding CI permissions. Continue with publication only
 after the existing Wiki repository is accessible.
 
+Because this repository is private, also confirm that its owner's GitHub plan
+supports private-repository Wikis. GitHub documents this support for Pro, Team
+and Enterprise plans; Free supports Wikis on public repositories only. See
+[Wiki availability](https://docs.github.com/en/communities/documenting-your-project-with-wikis).
+An enabled Wiki setting and repository administrator access do not by themselves
+establish plan eligibility or initial-page creation. The current owner's plan
+has not been established, so plan eligibility is a check, not a diagnosed cause
+of `Repository not found`. Do not change repository visibility, purchase a plan
+or create a replacement public repository to bypass this check.
+
 ## Prepare an isolated publication checkout
 
 Use a dedicated Bash shell from the application repository after review,

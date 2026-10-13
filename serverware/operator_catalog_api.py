@@ -25,6 +25,7 @@ MUTATION_PATHS = frozenset(PREFIX + path for path in (
     "/credentials/alchemy-key", "/credentials/github-app", "/credentials/github-app/replace-key",
     "/credentials/aws-sigv4", "/credentials/aws-sigv4/replace",
     "/applications/rotate-token", "/applications/proxy-authentication",
+    "/applications/renewal/enroll", "/applications/renewal/cancel",
     "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read", "/access-rules/github", "/access-rules/npm-metadata", "/access-rules/npm-publish", "/access-rules/x-username", "/access-rules/x-post",
     "/access-rules/alchemy-chain-status", "/access-rules/npm-install",
     "/oauth/google/disconnect", "/oauth/google/reauthorize", "/oauth/google/reauthorization-storage",
@@ -294,6 +295,36 @@ async def rotate_application_token(request: Request, identity: auth.AdminIdentit
 @router.post("/applications/proxy-authentication")
 async def set_application_proxy_authentication(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
     return await _mutate(request, identity, "ApplicationProxyAuthenticationInput", "set_application_proxy_authentication", 2048)
+
+
+async def _renewal_admin(request: Request, identity: auth.AdminIdentity, *, enroll: bool) -> JSONResponse:
+    from serverware import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
+    from serverware import operator_catalog_schema as schema
+    from serverware import operator_workload_renewal as wire, operator_workload_renewal_store as store
+
+    _admit(request, mutation=True)
+    payload = await _payload(request, wire.EnrollmentInput if enroll else inputs.TargetInput, 4096)
+    try:
+        result = await _blocking(store.enroll if enroll else store.cancel, payload, identity.user_id)
+        return JSONResponse(result, headers=_HEADERS)
+    except mutations.CatalogNotFound:
+        _reject(404, "operator catalog resource not found")
+    except schema.CatalogConflict:
+        _reject(409, "operator catalog or policy changed; refresh before trying again")
+    except ValueError:
+        _reject(422, "invalid workload renewal enrollment")
+    except Exception:
+        _reject(503, "workload renewal enrollment outcome unavailable; inspect saved status before retrying")
+
+
+@router.post("/applications/renewal/enroll")
+async def enroll_workload_renewal(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _renewal_admin(request, identity, enroll=True)
+
+
+@router.post("/applications/renewal/cancel")
+async def cancel_workload_renewal(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _renewal_admin(request, identity, enroll=False)
 
 
 @router.post("/access-rules")

@@ -23,7 +23,8 @@ const AUDIT_PRESETS = {
   access_changes: ['access_rule.alchemy_chain_status_created', 'access_rule.created', 'access_rule.github_created',
     'access_rule.npm_install_created', 'access_rule.npm_metadata_created', 'access_rule.npm_publish_created',
     'access_rule.revoked', 'access_rule.x_username_created', 'application.created', 'application.proxy_authentication_changed',
-    'application.revoked', 'application.token_rotated', 'credential.alchemy_key_created', 'credential.aws_sigv4_created',
+    'application.renewal_cancelled', 'application.renewal_enrolled', 'application.revoked',
+    'application.token_renewed', 'application.token_rotated', 'credential.alchemy_key_created', 'credential.aws_sigv4_created',
     'credential.aws_sigv4_replaced', 'credential.created', 'credential.github_app_created', 'credential.github_app_key_replaced',
     'credential.github_token_created', 'credential.key_replaced', 'credential.npm_token_created', 'credential.revoked',
     'credential.x_app_bearer_created'].map(type => 'operator_catalog.' + type),
@@ -61,7 +62,7 @@ def event_list(node):
         return values
     raise ValueError("unsupported event enum expression")
 result={"action_required":event_list(assignments["ACTION_EVENT_TYPES"]),"audit_log":event_list(assignments["AUDIT_EVENT_TYPES"])}
-assert all(len(values)<=(68 if channel=="audit_log" else 64) and len(values)==len(set(values)) for channel,values in result.items())
+assert all(len(values)<=(71 if channel=="audit_log" else 64) and len(values)==len(set(values)) for channel,values in result.items())
 print(json.dumps(result))`],
 {cwd: ROOT, timeout: 5000, maxBuffer: 65536, encoding: 'utf8'})); // AST only: no application/config/database import.
 const INPUTS = ['scripts/test_operator_notifications_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
@@ -376,14 +377,14 @@ const tests = [
       assert.equal(observed.posts.length, 0); assert.equal(await recovery(page), null); assert.deepEqual(observed.snapshot.slots, before);
       assert.equal(await form(page, 'action_required.webhook').locator('[data-notification-preset]').count(), 0);
     })],
-  ['68 available audit types preserve saved filters and enforce a 64-selection limit', browser => fixture(browser, {},
+  ['71 available audit types preserve saved filters and enforce a 64-selection limit', browser => fixture(browser, {},
     async (page, observed) => {
       await open(page); const target = form(page); const before = clone(observed.snapshot.slots);
-      assert.equal(await target.locator('[name="event_types"]').count(), 68);
+      assert.equal(await target.locator('[name="event_types"]').count(), 71);
       assert.equal(await target.locator('[name="event_types"]:checked').count(), 1);
       await target.locator('details').locator('summary').click();
       for (const checkbox of await target.locator('[name="event_types"]').all()) await checkbox.check();
-      assert.match(await target.locator('[data-notification-events-summary]').innerText(), /68\/64 selected/);
+      assert.match(await target.locator('[data-notification-events-summary]').innerText(), /71\/64 selected/);
       assert(await target.locator('[data-notification-save]').isDisabled());
       // Bypassing a disabled submit button still hits the same bounded guard.
       await target.evaluate(node => node.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})));
@@ -598,7 +599,7 @@ const tests = [
         assert.equal(await target.locator('[name="url"]').inputValue(), '');
       }
       assert.doesNotMatch(await form(page, SLOTS[1]).locator('[data-notification-delivery]').innerText(), /HTTP status:/);
-      assert.equal(EVENTS.audit_log.length, 68); assert.equal(EVENTS.action_required.length, 5);
+      assert.equal(EVENTS.audit_log.length, 71); assert.equal(EVENTS.action_required.length, 5);
       assert(EVENTS.audit_log.includes('operator_catalog.access_rule.npm_install_created'));
       assert(EVENTS.audit_log.includes('operator_catalog.credential.github_app_created'));
       assert(EVENTS.audit_log.includes('operator_catalog.x_oauth.configuration_saved'));

@@ -86,11 +86,15 @@ pub(super) fn require_scope(snapshot: &Snapshot, admitted_operator: bool) -> Res
 }
 
 pub(super) fn require_runtime(state: &GateState, snapshot: &Snapshot) -> Result<(), &'static str> {
-    require_scope(snapshot, state.policy_shadow.is_operator_demo() && !state.is_production
+    require_scope(snapshot, admitted_runtime(state))
+}
+
+pub(super) fn admitted_runtime(state: &GateState) -> bool {
+    state.policy_shadow.is_operator_demo() && !state.is_production
         && state.native_serving_privileges.is_none() && state.native_secret_broker.is_none()
         && state.native_runtime_lifetime.is_none() && state.measured_canary_delivery.is_none()
         && state.policy_shadow_generation_control.is_none() && !state.atomic_release_authorization_enabled
-        && state.proxy_ingress_attestation.mode == super::operator_demo::INGRESS_MODE)
+        && state.proxy_ingress_attestation.mode == super::operator_demo::INGRESS_MODE
 }
 
 #[cfg(test)]

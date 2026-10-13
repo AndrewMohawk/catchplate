@@ -379,6 +379,8 @@ _OPERATOR_CATALOG_BODY_POST_PATHS = frozenset({
     "/api/operator-demo/applications/revoke",
     "/api/operator-demo/applications/rotate-token",
     "/api/operator-demo/applications/proxy-authentication",
+    "/api/operator-demo/applications/renewal/enroll",
+    "/api/operator-demo/applications/renewal/cancel",
     "/api/operator-demo/access-rules",
     "/api/operator-demo/access-rules/revoke",
     "/api/operator-demo/access-rules/gmail-read",
@@ -579,12 +581,13 @@ async def csrf_middleware(request: Request, call_next):
         )
     response = await call_next(request)
     # Native JIT preparation is read-only; submission owns one exact atomic
-    # transition. Neither path drains unrelated durable audit work, including
-    # after an authenticated or malformed request is refused.
+    # transition. Workload renewal likewise owns its atomic workload audit.
+    # These paths do not drain unrelated durable audit work after a refusal.
     if (request.method not in {"GET", "HEAD", "OPTIONS"}
             and request.scope.get("path") not in {
                 "/api/data-plane/release-authorizations/native-jit-prepare",
-                "/api/data-plane/release-authorizations/native-jit-submit"}):
+                "/api/data-plane/release-authorizations/native-jit-submit",
+                "/api/operator-demo/workloads/renew"}):
         try:
             await _run_bounded_blocking(
                 _METADATA_AUDIT_OUTBOX_DRAIN_SLOTS,
@@ -636,6 +639,11 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
         # parser. The signed outer ASGI wrapper still applies common security
         # response headers. The native-only footer below never selects these
         # exact catalog paths; all other middleware behavior is unchanged.
+        return await call_next(request)
+    if (operator_active and request.method == "POST"
+            and request.scope.get("path") == "/api/operator-demo/workloads/renew"):
+        # The enrolled-key route owns strict 4 KiB / 5 s framing and proof
+        # admission; generic buffering must not read its body first.
         return await call_next(request)
     from serverware import control_plane_oidc_session_activation_routes as activation_routes
     from serverware import control_plane_oidc_session_activation_recovery_routes as recovery_routes
@@ -30212,6 +30220,7 @@ from serverware import control_plane_oidc_session_activation_recovery_routes as 
 from serverware import portal_session_activation_confirmation_routes as _activation_confirmation_routes
 from serverware import control_plane_workload_identity_routes as _workload_identity_routes
 from serverware import operator_catalog_api as _operator_catalog_api
+from serverware import operator_workload_renewal_api as _operator_workload_renewal_api
 from serverware import operator_google_configuration_api as _operator_google_configuration_api
 from serverware import operator_x_configuration_api as _operator_x_configuration_api
 from serverware import operator_x_accounts_api as _operator_x_accounts_api
@@ -30230,6 +30239,7 @@ _fastapi_app.include_router(_activation_recovery_routes.router)
 _fastapi_app.include_router(_activation_confirmation_routes.router)
 _fastapi_app.include_router(_workload_identity_routes.router)
 _fastapi_app.include_router(_operator_catalog_api.router)
+_fastapi_app.include_router(_operator_workload_renewal_api.router)
 _fastapi_app.include_router(_operator_google_configuration_api.router)
 _fastapi_app.include_router(_operator_x_configuration_api.router)
 _fastapi_app.include_router(_operator_x_accounts_api.router)

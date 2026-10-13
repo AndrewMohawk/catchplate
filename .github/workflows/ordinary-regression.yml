@@ -40,9 +40,11 @@ jobs:
             --memory 2g --memory-swap 2g --cpus 2 --pids-limit 128 --read-only \
             --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 \
             --mount "type=bind,src=$GITHUB_WORKSPACE/requirements.lock,dst=/requirements.lock,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/examples/managed-client/requirements.lock,dst=/managed-client-requirements.lock,readonly" \
             --mount "type=bind,src=$RUNNER_TEMP/ordinary-deps,dst=/deps" \
-            --env HOME=/tmp "$TEST_IMAGE" python -m pip install --disable-pip-version-check \
-            --no-cache-dir --require-hashes --only-binary=:all: --target /deps -r /requirements.lock
+            --env HOME=/tmp "$TEST_IMAGE" python -m pip install --isolated --disable-pip-version-check \
+            --no-cache-dir --require-hashes --only-binary=:all: --index-url https://pypi.org/simple --target /deps \
+            -r /requirements.lock -r /managed-client-requirements.lock
       - name: Offline orchestration controls and ordinary components
         shell: bash
         run: |

@@ -338,7 +338,7 @@ CONSOLIDATED_CANDIDATE_INDEX_SHA256 ?=
 CONSOLIDATED_CANDIDATE_FILE_SHA256 ?=
 CONSOLIDATED_CANDIDATE_PAYLOAD_SHA256 ?=
 CONSOLIDATED_ALLOWED_READ_ONLY_MOUNT_ID_ARGS ?=
-TEST_PYTHON_RUN ?= uv run --no-project --isolated --python 3.11 --with-requirements requirements.lock python
+TEST_PYTHON_RUN ?= uv run --no-project --isolated --python 3.11 --with-requirements requirements.lock --with-requirements examples/managed-client/requirements.lock python
 CRYPTO_SCHEMA_PYTHON_RUN ?= uv run --no-project --isolated --python 3.11 --with jsonschema==4.23.0 --with cryptography==50.0.0 python
 CRYPTO_PYTHON_RUN ?= uv run --no-project --isolated --python 3.11 --with cryptography==50.0.0 python
 MITMPROXY_TEST_RUN ?= uv run --no-project --isolated --python 3.11 --with mitmproxy==11.0.2 --with fastapi==0.136.1 --with cbor2==5.9.0 --with jsonschema==4.23.0 --with 'psycopg[binary]==3.2.3' --with python-multipart==0.0.31 --with 'uvicorn[standard]==0.34.0'
@@ -623,6 +623,11 @@ override CODER_TEST_SCRIPTS := \
 	scripts/test_onboarding_evidence.py \
 	scripts/test_oci_contract_source_fixtures.py
 override CODER_ISOLATED_TEST_SCRIPTS := \
+	scripts/test_operator_workload_renewal_contract.py \
+	scripts/test_proxy_managed_renewal.py \
+	scripts/test_operator_workload_renewal_store.py \
+	scripts/test_operator_workload_renewal_api.py \
+	scripts/test_operator_workload_renewal.py \
 	scripts/test_operator_catalog_observation.py \
 	scripts/test_operator_notification_google_events.py \
 	scripts/test_operator_notification_google_integration.py \

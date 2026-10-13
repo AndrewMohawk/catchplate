@@ -29,9 +29,11 @@ const PRE_GMAIL_SCRIPTS = SCRIPTS.filter(name => name !== 'workspace_gmail_sdk.j
 const X_CONFIGURATION_SCRIPTS = [...SCRIPTS.slice(0, -1), 'workspace_x_configuration.js', 'app.js'];
 const X_ACCOUNTS_SCRIPTS = X_CONFIGURATION_SCRIPTS.flatMap(name => name === 'workspace_x.js' ?
   [name, 'workspace_x_accounts.js', 'workspace_x_post.js'] : [name]);
+const WORKLOAD_RENEWAL_SCRIPTS = X_ACCOUNTS_SCRIPTS.flatMap(name => name === 'workspace_applications.js' ?
+  ['workspace_workload_renewal.js', name] : [name]);
 const SCRIPT_ROSTERS = [PRE_GMAIL_SCRIPTS.filter(name => !['workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js'].includes(name)),
   PRE_GMAIL_SCRIPTS.filter(name => !['workspace_alchemy.js', 'workspace_aws.js'].includes(name)),
-  PRE_GMAIL_SCRIPTS.filter(name => name !== 'workspace_aws.js'), PRE_GMAIL_SCRIPTS, SCRIPTS, X_CONFIGURATION_SCRIPTS, X_ACCOUNTS_SCRIPTS];
+  PRE_GMAIL_SCRIPTS.filter(name => name !== 'workspace_aws.js'), PRE_GMAIL_SCRIPTS, SCRIPTS, X_CONFIGURATION_SCRIPTS, X_ACCOUNTS_SCRIPTS, WORKLOAD_RENEWAL_SCRIPTS];
 const sha = value => createHash('sha256').update(value).digest('hex');
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ?
   Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
@@ -170,10 +172,10 @@ function sourceScriptFiles() {
 }
 function disabledXConfigurationForSource() {
   const selected = serial(sourceScriptFiles());
-  return selected === serial(X_CONFIGURATION_SCRIPTS) || selected === serial(X_ACCOUNTS_SCRIPTS);
+  return [X_CONFIGURATION_SCRIPTS, X_ACCOUNTS_SCRIPTS, WORKLOAD_RENEWAL_SCRIPTS].some(roster => selected === serial(roster));
 }
 function selectXConfigurationProfile() {
-  if (managedX) need(serial(sourceScriptFiles()) === serial(X_ACCOUNTS_SCRIPTS), 'managed_x_source_profile_refused');
+  if (managedX) need([X_ACCOUNTS_SCRIPTS, WORKLOAD_RENEWAL_SCRIPTS].some(roster => serial(sourceScriptFiles()) === serial(roster)), 'managed_x_source_profile_refused');
   xConfigurationDisabled = !managedX && disabledXConfigurationForSource();
 }
 function documentBytes() {

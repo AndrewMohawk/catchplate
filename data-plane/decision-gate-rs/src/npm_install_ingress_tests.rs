@@ -128,7 +128,7 @@ fn npm_install_current_connect_identity_and_changed_route_refuse_before_body() {
     let mut current = (*install_snapshot("audit")).clone();
     current.principals[0].proxy_authorization = Some(ProxyAuthorizationPolicy::BearerToken {
         token_sha256:sha256_prefixed(b"synthetic-connect-token"), source_cidrs:vec![],
-        expires_at_ms:Some(2_000), basic_transport:None,
+        expires_at_ms:Some(2_000), basic_transport:None, managed_renewal: None,
     });
     let auth = ConnectAuthentication::capture_at(&current,PRINCIPAL,None,
         &BTreeMap::from([("proxy-authorization".into(),"Bearer synthetic-connect-token".into())]),1_000).unwrap();

@@ -24,7 +24,7 @@ _ERROR = "operator notification source unavailable"
 _HASH = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _STAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|\+00:00)\Z")
 _METHODS = {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
-_ACTORS = {"admin", "system", "proxy", "data-plane", "measured-data-plane"}
+_ACTORS = {"admin", "agent", "system", "proxy", "data-plane", "measured-data-plane"}
 NATIVE_OBSERVATION_TYPE = "native_pilot.phase_observed"
 NATIVE_EVENT_TYPES = ("native_pilot.confirmation_available", "native_pilot.prepare_available",
     "native_pilot.security_key_available")
@@ -71,6 +71,9 @@ _CATALOG = {
     "application.created": "Application identity created",
     "application.revoked": "Application identity revoked",
     "application.token_rotated": "Application token rotated",
+    "application.renewal_enrolled": "Managed client renewal enrolled",
+    "application.renewal_cancelled": "Managed client renewal cancelled",
+    "application.token_renewed": "Managed client token renewed",
     "application.proxy_authentication_changed": "Application proxy login changed",
     "access_rule.created": "Application permission saved",
     "access_rule.github_created": "GitHub application permission saved",
@@ -336,7 +339,7 @@ def _details(row, event):
     if event is None:
         return result
     for key in ("resource_id", "application_id", "credential_id", "credential_ref",
-                "connection_id", "approval_id", "approval_request_id", "route_id", "principal_id", "operation_id"):
+                "connection_id", "approval_id", "approval_request_id", "route_id", "principal_id", "operation_id", "enrollment_id"):
         if _identifier(event.get(key)):
             result[key] = event[key]
     for key in ("policy_hash", "request_digest", "operation_digest", "payload_digest"):

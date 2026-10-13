@@ -36,7 +36,7 @@ fn snapshot(sequence: u64) -> Snapshot {
         token_sha256: sha256_prefixed(TOKEN.as_bytes()),
         source_cidrs: vec![],
         expires_at_ms: Some(10_000),
-        basic_transport: None,
+        basic_transport: None, managed_renewal: None,
     });
     snapshot.routes[0].host = "api.example.com".to_owned();
     snapshot.routes[0].resolved_address_policy = ResolvedAddressPolicy::PublicOnly;
@@ -257,13 +257,13 @@ fn operator_demo_every_principal_requires_hashed_bearer_and_expiry() {
             token_sha256: sha256_prefixed(b"token"),
             source_cidrs: vec![],
             expires_at_ms: None,
-            basic_transport: None,
+            basic_transport: None, managed_renewal: None,
         }),
         Some(ProxyAuthorizationPolicy::BearerToken {
             token_sha256: "sha256:not-a-digest".into(),
             source_cidrs: vec![],
             expires_at_ms: Some(500),
-            basic_transport: None,
+            basic_transport: None, managed_renewal: None,
         }),
     ] {
         let mut candidate = original.clone();

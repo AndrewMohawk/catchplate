@@ -114,7 +114,7 @@ fn fixture(method: &str) -> (Arc<GateState>, Arc<Snapshot>, Value) {
     held.policy_id = "serverware-operator-demo".into();
     held.principals[0].proxy_authorization = Some(ProxyAuthorizationPolicy::BearerToken {
         token_sha256: sha256_prefixed(b"synthetic-app-token"), source_cidrs: vec![],
-        expires_at_ms: Some(now_epoch_ms() + 60_000), basic_transport: None,
+        expires_at_ms: Some(now_epoch_ms() + 60_000), basic_transport: None, managed_renewal: None,
     });
     let route = &mut held.routes[0];
     route.host = HOST.into();

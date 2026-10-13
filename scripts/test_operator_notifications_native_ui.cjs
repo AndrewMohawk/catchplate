@@ -33,7 +33,8 @@ const PRESETS = {
   access_changes: ['access_rule.alchemy_chain_status_created', 'access_rule.created', 'access_rule.github_created',
     'access_rule.npm_install_created', 'access_rule.npm_metadata_created', 'access_rule.npm_publish_created',
     'access_rule.revoked', 'access_rule.x_username_created', 'application.created', 'application.proxy_authentication_changed',
-    'application.revoked', 'application.token_rotated', 'credential.alchemy_key_created', 'credential.aws_sigv4_created',
+    'application.renewal_cancelled', 'application.renewal_enrolled', 'application.revoked',
+    'application.token_renewed', 'application.token_rotated', 'credential.alchemy_key_created', 'credential.aws_sigv4_created',
     'credential.aws_sigv4_replaced', 'credential.created', 'credential.github_app_created', 'credential.github_app_key_replaced',
     'credential.github_token_created', 'credential.key_replaced', 'credential.npm_token_created', 'credential.revoked',
     'credential.x_app_bearer_created'].map(type => 'operator_catalog.' + type),
@@ -157,12 +158,13 @@ const tests = [
     assert(value.slots.every(slot => slot.event_types.length === 0));
     assert.equal(networkCalls, 0);
   }],
-  ['68 advertised audit types never widen the 64-filter destination limit or select anything', () => {
+  ['71 advertised audit types never widen the 64-filter destination limit or select anything', () => {
     const value = status();
     const types = [...Array.from({length: 64}, (_, index) => 'fixture.event_' + String(index).padStart(2, '0')),
       'operator_catalog.access_rule.npm_install_created', 'operator_catalog.credential.github_app_created',
       'operator_catalog.credential.github_app_key_replaced',
-      'operator_catalog.x_oauth.configuration_saved'].sort();
+      'operator_catalog.x_oauth.configuration_saved', 'operator_catalog.application.renewal_cancelled',
+      'operator_catalog.application.renewal_enrolled', 'operator_catalog.application.token_renewed'].sort();
     value.capabilities.audit_log.event_types = types;
     const before = JSON.stringify(value);
     assert.equal(api.project(value), value); assert.equal(JSON.stringify(value), before);

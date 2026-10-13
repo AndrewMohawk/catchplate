@@ -108,6 +108,19 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
         principal['proxyAuthorization']['tokenId'] = application['id']
         if schema.application_proxy_authentication(application) == 'basic_and_bearer_v1':
             principal['proxyAuthorization']['basicTransport'] = {'username': application['id']}
+        if 'client_renewal' in application:
+            from serverware import operator_workload_renewal as renewal_wire
+            renewal = application['client_renewal']
+            marker = {'schema': renewal_wire.POLICY_SCHEMA, 'enrollmentId': renewal['enrollment_id'],
+                'enrollmentExpiresAtEpochMs': renewal['expires_at_epoch_ms'],
+                'rotatedAtEpochMs': (renewal['last_operation']['rotated_at_epoch_ms']
+                    if renewal['last_operation'] is not None else renewal['enrolled_at_epoch_ms'])}
+            if renewal['previous_token'] is not None:
+                previous = renewal['previous_token']
+                marker['previousToken'] = {'tokenSha256': previous['token_sha256'],
+                    'originalExpiresAtEpochMs': previous['original_expires_at_epoch_ms'],
+                    'expiresAtEpochMs': previous['accept_until_epoch_ms']}
+            principal['proxyAuthorization']['managedRenewal'] = marker
         principals[application['id']] = principal
         credential_policy = generated['credentials'][0]
         credential_policy['providerSubject'] = credential['provider_subject']

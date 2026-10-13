@@ -97,7 +97,7 @@ def _policy_observation(state: dict, *, publication_failed: bool = False) -> dic
         if not publication_failed and loaded is not None and loaded == current == state["policy_hash"] else "pending"}
 
 
-def _catalog_observation(state: dict) -> tuple[dict, bool, bool, bool, bool, bool]:
+def _catalog_observation(state: dict) -> tuple[dict, bool, bool, bool, bool, bool, bool]:
     """One bounded gate read for this catalog response, never a shared cache.
 
     Managed mode retains its before/after configuration and binary checks.
@@ -108,6 +108,7 @@ def _catalog_observation(state: dict) -> tuple[dict, bool, bool, bool, bool, boo
     loaded, current = None, None
     x_available, alchemy_available, npm_install_available = False, False, False
     x_post_available, x_post_quota_available = False, False
+    workload_renewal_available = False
     try:
         from serverware import operator_catalog_x, operator_catalog_alchemy, operator_catalog_npm_install
         from serverware import operator_google_managed_config as managed
@@ -122,6 +123,7 @@ def _catalog_observation(state: dict) -> tuple[dict, bool, bool, bool, bool, boo
                 npm_install_available = observed["npm_install_available"]
                 x_post_available = observed["x_post_available"]
                 x_post_quota_available = observed["x_post_quota_available"]
+                workload_renewal_available = observed.get("workload_renewal_available") is True
         else:
             observed = store.loaded_gate_status()
             if type(observed) is dict and observed.get("ok") is True:
@@ -129,6 +131,8 @@ def _catalog_observation(state: dict) -> tuple[dict, bool, bool, bool, bool, boo
                 x_available = operator_catalog_x.gate_descriptor_matches(observed.get("operator_x_app_read"))
                 alchemy_available = operator_catalog_alchemy.gate_descriptor_matches(observed.get("operator_alchemy_rpc_read"))
                 npm_install_available = operator_catalog_npm_install.gate_descriptor_matches(observed.get("operator_npm_install"))
+                from serverware import operator_workload_renewal
+                workload_renewal_available = operator_workload_renewal.gate_descriptor_matches(observed.get("operator_workload_renewal"))
                 from serverware import operator_x_readiness
                 x_observed = operator_x_readiness.observe_health_quota(observed)
                 x_post_available = (x_observed["ready"] is True
@@ -141,11 +145,12 @@ def _catalog_observation(state: dict) -> tuple[dict, bool, bool, bool, bool, boo
         current = None
         x_available, alchemy_available, npm_install_available = False, False, False
         x_post_available, x_post_quota_available = False, False
+        workload_renewal_available = False
     active = loaded is not None and loaded == current == state["policy_hash"]
     return ({"policy_hash": state["policy_hash"], "sequence": state["sequence"],
         "loaded_policy_hash": loaded, "activation": "active" if active else "pending"},
         active and x_available, active and alchemy_available, active and npm_install_available,
-        active and x_post_available, active and x_post_quota_available)
+        active and x_post_available, active and x_post_quota_available, active and workload_renewal_available)
 
 
 def _static_generations(conn, catalog: dict) -> dict[str, int | None]:
@@ -205,6 +210,7 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
                 from copy import deepcopy
                 result["github_app"] = deepcopy(record["github_app"])
     elif collection == "applications":
+        from serverware import operator_workload_renewal_store
         count = len(_active_rules(catalog, "application_id", record["id"]))
         revoked = record["status"] == "revoked"
         expired = now >= record["token_expires_at_epoch_ms"]
@@ -216,6 +222,7 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
             access_status=("revoked" if loaded else "pending") if revoked else
                 "unassigned" if not count else "active" if loaded and not expired else "pending",
             active_rule_count=count)
+        result.update(operator_workload_renewal_store.public_fields(record, now))
         if "token_rotated_at" in record:
             result["token_rotated_at"] = record["token_rotated_at"]
     else:
@@ -281,6 +288,10 @@ def _mutate(payload, actor_id: str, collection: str, event: str, change) -> dict
             if collection == "applications":
                 audit.update(token_generation=changed.resource["token_version"],
                     token_expires_at_epoch_ms=changed.resource["token_expires_at_epoch_ms"])
+                if event == "application.renewal_enrolled":
+                    enrollment = changed.resource["client_renewal"]
+                    audit.update(enrollment_id=enrollment["enrollment_id"],
+                        enrollment_expires_at_epoch_ms=enrollment["expires_at_epoch_ms"])
             if collection == "access_rules":
                 audit.update(application_id=changed.resource["application_id"], credential_id=changed.resource["credential_id"])
             if changed.affected_rule_ids:
@@ -837,6 +848,8 @@ def revoke_credential(payload: TargetInput, actor_id: str) -> dict:
 def revoke_application(payload: TargetInput, actor_id: str) -> dict:
     def change(db, conn, catalog):
         record = _target(catalog, "applications", payload.id)
+        from serverware import operator_workload_renewal_store
+        operator_workload_renewal_store.clear(record, time.time_ns() // 1_000_000)
         rules = _active_rules(catalog, "application_id", payload.id)
         revoked_at = db.iso_now()
         for rule in rules:
@@ -850,6 +863,8 @@ def revoke_application(payload: TargetInput, actor_id: str) -> dict:
 def rotate_application_token(payload: RotateApplicationInput, actor_id: str) -> dict:
     def change(db, conn, catalog):
         record = _target(catalog, "applications", payload.id)
+        from serverware import operator_workload_renewal_store
+        operator_workload_renewal_store.clear(record, time.time_ns() // 1_000_000)
         token, verifier = _new_token(payload.token_lifetime_seconds)
         record.update(verifier)
         record.update(token_version=record["token_version"] + 1, token_rotated_at=db.iso_now())
@@ -899,10 +914,11 @@ def catalog_status() -> dict:
             "active_max": MAX_ACTIVE_RESOURCES, "retained_max": MAX_RETAINED_RESOURCES} for collection in _RESULT_KEYS}
         observed_activity = operator_catalog_activity.project(
             conn, catalog, observed_at_epoch_ms=time.time_ns() // 1_000_000)
-    observation, x_available, alchemy_available, npm_install_available, x_post_available, x_post_quota_available = _catalog_observation(state)
+    observation, x_available, alchemy_available, npm_install_available, x_post_available, x_post_quota_available, workload_renewal_available = _catalog_observation(state)
     now, settings = time.time_ns() // 1_000_000, operator_demo.settings()
     from serverware import operator_catalog_npm_install
     from serverware import operator_catalog_x_oauth, operator_catalog_x_post
+    from serverware import operator_workload_renewal_store
     return {"schema": "serverware.operatorCatalog/v1", "mode": "operator-development",
         "productionReady": False, "hardwareVerified": False, "revision": catalog["revision"],
         "policy": observation, "proxy_url": settings["proxy_url"], "allowed_upstreams": settings["allowed_upstreams"],
@@ -916,6 +932,7 @@ def catalog_status() -> dict:
             "application_proxy_authentication": {"schema": "serverware.operatorProxyAuthentication/v1",
                 "modes": ["bearer", "basic_and_bearer_v1"],
                 "path": "/api/operator-demo/applications/proxy-authentication"},
+            "workload_renewal": operator_workload_renewal_store.capability() if workload_renewal_available else None,
             "static_key_replacement": {"schema": "serverware.operatorStaticKeyReplacement/v1",
                 "path": "/api/operator-demo/credentials/replace-key", "credential_types": ["bearer", "header"]},
             "aws_credentials": operator_catalog_aws.capability(),

@@ -3146,6 +3146,64 @@ def _proxy_authorization_token_digest(
 
 
 @dataclass(frozen=True)
+class PreviousProxyToken:
+    token_sha256: str
+    original_expires_at_epoch_ms: int
+    expires_at_epoch_ms: int
+
+
+@dataclass(frozen=True)
+class ManagedProxyRenewal:
+    enrollment_id: str
+    enrollment_expires_at_epoch_ms: int
+    rotated_at_epoch_ms: int
+    previous_token: PreviousProxyToken | None = None
+
+    @classmethod
+    def from_raw(cls, raw: Any, *, token_id: Any, current_hash: Any,
+                 current_expiry: Any) -> "ManagedProxyRenewal":
+        def refused():
+            return PolicyBundleError("principal managed renewal contract is invalid")
+
+        def timestamp(value):
+            if type(value) is not int or not 1 <= value <= 9_007_199_254_740_991:
+                raise refused()
+            return value
+
+        required = {"schema", "enrollmentId", "enrollmentExpiresAtEpochMs", "rotatedAtEpochMs"}
+        if (not isinstance(raw, dict) or not required.issubset(raw)
+                or set(raw) - required - {"previousToken"}
+                or raw.get("schema") != "serverware.proxyTokenRenewal/v1"
+                or not isinstance(raw.get("enrollmentId"), str)
+                or _PROXY_BASIC_UUID_RE.fullmatch(raw["enrollmentId"]) is None
+                or not isinstance(token_id, str) or _PROXY_BASIC_UUID_RE.fullmatch(token_id) is None):
+            raise refused()
+        enrollment_expiry = timestamp(raw["enrollmentExpiresAtEpochMs"])
+        rotated_at = timestamp(raw["rotatedAtEpochMs"])
+        current_expiry = timestamp(current_expiry)
+        if rotated_at >= enrollment_expiry or current_expiry > enrollment_expiry:
+            raise refused()
+        previous = None
+        if "previousToken" in raw:
+            if current_expiry <= rotated_at:
+                raise refused()
+            value = raw["previousToken"]
+            if (not isinstance(value, dict)
+                    or set(value) != {"tokenSha256", "originalExpiresAtEpochMs", "expiresAtEpochMs"}
+                    or not isinstance(value.get("tokenSha256"), str)
+                    or re.fullmatch(r"sha256:[0-9a-f]{64}", value["tokenSha256"]) is None
+                    or value["tokenSha256"] == current_hash):
+                raise refused()
+            original_expiry = timestamp(value["originalExpiresAtEpochMs"])
+            expiry = timestamp(value["expiresAtEpochMs"])
+            if not (rotated_at < expiry <= original_expiry <= enrollment_expiry
+                    and expiry - rotated_at <= 300_000):
+                raise refused()
+            previous = PreviousProxyToken(value["tokenSha256"], original_expiry, expiry)
+        return cls(raw["enrollmentId"], enrollment_expiry, rotated_at, previous)
+
+
+@dataclass(frozen=True)
 class ProxyAuthorizationPolicy:
     scheme: str = "Bearer"
     token_sha256: str | None = None
@@ -3153,6 +3211,27 @@ class ProxyAuthorizationPolicy:
     expires_at_epoch_ms: int | None = None
     legacy_exact: str | None = None
     basic_username: str | None = None
+    managed_renewal: ManagedProxyRenewal | None = None
+
+    def verifier_digests(self) -> tuple[str, ...]:
+        """Static selector overlap is conservative, independent of wall time."""
+        values = (self.token_sha256,) if self.token_sha256 else ()
+        previous = self.managed_renewal.previous_token if self.managed_renewal else None
+        return values + ((previous.token_sha256,) if previous else ())
+
+    def _matches_verifier_at(self, digest: str, now: int) -> bool:
+        if self.managed_renewal is not None:
+            renewal = self.managed_renewal
+            if now >= renewal.enrollment_expires_at_epoch_ms:
+                return False
+            previous = renewal.previous_token
+            if (previous is not None and now < previous.expires_at_epoch_ms
+                    and now < previous.original_expires_at_epoch_ms
+                    and hmac.compare_digest(digest, previous.token_sha256)):
+                return True
+        return (bool(self.token_sha256)
+            and (self.expires_at_epoch_ms is None or now < self.expires_at_epoch_ms)
+            and hmac.compare_digest(digest, self.token_sha256))
 
     @property
     def networks(self) -> tuple[ipaddress._BaseNetwork, ...]:
@@ -3166,7 +3245,9 @@ class ProxyAuthorizationPolicy:
                 raw_header.encode("utf-8"),
                 self.legacy_exact.encode("utf-8"),
             )
-        if self.expires_at_epoch_ms is not None and int(time.time() * 1000) >= self.expires_at_epoch_ms:
+        now = int(time.time() * 1000)
+        if (self.managed_renewal is None and self.expires_at_epoch_ms is not None
+                and now >= self.expires_at_epoch_ms):
             return False
         if self.source_cidrs:
             if not client_ip:
@@ -3180,7 +3261,7 @@ class ProxyAuthorizationPolicy:
         digest = _proxy_authorization_token_digest(
             raw_header, scheme=self.scheme, basic_username=self.basic_username
         )
-        return digest is not None and bool(self.token_sha256) and hmac.compare_digest(digest, self.token_sha256)
+        return digest is not None and self._matches_verifier_at(digest, now)
 
     @classmethod
     def from_raw(cls, raw: Any) -> "ProxyAuthorizationPolicy | None":
@@ -3197,6 +3278,7 @@ class ProxyAuthorizationPolicy:
             "sourceCidrs",
             "expiresAtEpochMs",
             "basicTransport",
+            "managedRenewal",
         }
         if (
             set(raw) - allowed_fields
@@ -3253,12 +3335,16 @@ class ProxyAuthorizationPolicy:
             raise PolicyBundleError(
                 "principal proxyAuthorization contract is invalid"
             )
+        managed_renewal = (ManagedProxyRenewal.from_raw(raw["managedRenewal"], token_id=token_id,
+            current_hash=token_sha256, current_expiry=expires_at_epoch_ms)
+            if "managedRenewal" in raw else None)
         return cls(
             scheme="Bearer",
             token_sha256=token_sha256,
             source_cidrs=source_cidrs,
             expires_at_epoch_ms=expires_at_epoch_ms,
             basic_username=basic_username,
+            managed_renewal=managed_renewal,
         )
 
 
@@ -3483,9 +3569,8 @@ def _proxy_authorization_accepts_exact(
     digest = _proxy_authorization_token_digest(
         raw_header, scheme=policy.scheme, basic_username=policy.basic_username
     )
-    return digest is not None and bool(policy.token_sha256) and hmac.compare_digest(
-        digest, policy.token_sha256
-    )
+    return digest is not None and any(hmac.compare_digest(digest, verifier)
+        for verifier in policy.verifier_digests())
 
 
 def _proxy_authorization_policies_overlap(
@@ -3496,9 +3581,8 @@ def _proxy_authorization_policies_overlap(
         return _proxy_authorization_accepts_exact(right, left.legacy_exact)
     if right.legacy_exact is not None:
         return _proxy_authorization_accepts_exact(left, right.legacy_exact)
-    return bool(left.token_sha256) and hmac.compare_digest(
-        left.token_sha256, right.token_sha256 or ""
-    )
+    return any(hmac.compare_digest(first, second)
+        for first in left.verifier_digests() for second in right.verifier_digests())
 
 
 def _principal_network_dimensions(
@@ -6831,12 +6915,14 @@ def compile_policy_bundle(
     principals: dict[str, PrincipalPolicy] = {}
     for item in principal_items:
         proxy_raw = item.get("proxyAuthorization")
-        if (isinstance(proxy_raw, dict) and "basicTransport" in proxy_raw
+        if (isinstance(proxy_raw, dict) and ("basicTransport" in proxy_raw or "managedRenewal" in proxy_raw)
                 and (raw.get("apiVersion") != "serverware.policy/v1"
                      or metadata.get("id") != "serverware-operator-demo")):
             # A label is not runtime authority: the Rust transport separately
             # requires an admitted operator profile at startup and reload.
-            raise PolicyBundleError("principal Basic transport requires the operator v1 policy profile")
+            if "basicTransport" in proxy_raw:
+                raise PolicyBundleError("principal Basic transport requires the operator v1 policy profile")
+            raise PolicyBundleError("principal managed renewal requires the operator v1 policy profile")
         principal_id = item["id"]
         if principal_id in principals:
             raise PolicyBundleError(f"duplicate principal: {principal_id}")

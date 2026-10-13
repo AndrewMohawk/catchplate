@@ -119,8 +119,8 @@ fn principal_value(principal: &Principal, work: &mut Work) -> Result<Value, Stri
             json!({"type":"legacyExact", "externallyProvisioned":true,
                 "sourceCidrs":[], "expiresAtEpochMs":null})
         }
-        Some(ProxyAuthorizationPolicy::BearerToken { token_sha256, source_cidrs, expires_at_ms, basic_transport }) => {
-            if basic_transport.is_some() { return Err(invalid()); }
+        Some(ProxyAuthorizationPolicy::BearerToken { token_sha256, source_cidrs, expires_at_ms, basic_transport, managed_renewal }) => {
+            if basic_transport.is_some() || managed_renewal.is_some() { return Err(invalid()); }
             work.text(token_sha256)?;
             work.charge(source_cidrs.len().checked_mul(64).ok_or_else(invalid)?)?;
             json!({"type":"bearerToken", "externallyProvisioned":true,

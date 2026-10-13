@@ -388,6 +388,15 @@ function projectCatalog(value) {
   applications.forEach((application, index) => {
     if (Object.hasOwn(value.applications[index], 'proxy_authentication'))
       application.proxy_authentication = applicationProxyAuthentication(value.applications[index]);
+    if (Object.hasOwn(value.applications[index], 'client_renewal'))
+      application.client_renewal = value.applications[index].client_renewal == null ? null :
+        projectClientRenewal(value.applications[index].client_renewal, value.proxy_url);
+    if (Object.hasOwn(value.applications[index], 'client_renewal_cancelled_at_epoch_ms')) {
+      const cancelled = value.applications[index].client_renewal_cancelled_at_epoch_ms;
+      if (!Number.isSafeInteger(cancelled) || cancelled < 0 || application.client_renewal)
+        throw operatorError('Saved client renewal cancellation metadata is inconsistent. Refresh before making changes.');
+      application.client_renewal_cancelled_at_epoch_ms = cancelled;
+    }
   });
   const accessRules = project(value.access_rules, ['application_id', 'credential_id', 'route_id', 'upstream_url', 'methods',
     'request_fields', 'response_fields', 'query_keys', 'allowed_headers', 'response_mode', 'credential_input', 'enforcement']);
@@ -419,6 +428,8 @@ function projectCatalog(value) {
     'credential_input_modes', 'token_lifetime_seconds', 'oauth']);
   capabilities.static_key_replacement = projectStaticKeyReplacementCapability(value.capabilities?.static_key_replacement);
   capabilities.application_proxy_authentication = projectApplicationProxyAuthenticationCapability(value.capabilities?.application_proxy_authentication);
+  capabilities.workload_renewal = value.capabilities?.workload_renewal == null ? null :
+    projectWorkloadRenewalCapability(value.capabilities.workload_renewal, value.proxy_url);
   capabilities.github = value.capabilities?.github == null ? null : projectGithubCapability(value.capabilities.github);
   capabilities.github_app = value.capabilities?.github_app == null ? null : projectGithubAppCapability(value.capabilities.github_app);
   capabilities.github_app_key_replacement = projectGithubAppKeyReplacementCapability(value.capabilities?.github_app_key_replacement);

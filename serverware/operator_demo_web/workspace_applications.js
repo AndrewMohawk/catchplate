@@ -183,11 +183,11 @@ function createApplicationsView(workspace) {
         rotate.addEventListener('click', async () => {
           const lifetime = Number(select.value); if (!validLifetime(lifetime)) return;
           if (held && held.id !== application.id && !window.confirm('Rotating this application clears the other held one-time token from this page. Have you saved it?')) return;
-          if (!window.confirm(`Replace the client token for "${application.name}" (${application.id}) with a token valid for ${select.selectedOptions[0].textContent}? The previous token stops working after the proxy loads the new policy. Save the replacement immediately. This does not refresh a provider OAuth credential.`)) return;
+          if (!window.confirm(`Replace the client token for "${application.name}" (${application.id}) with a token valid for ${select.selectedOptions[0].textContent}? This cancels any workload renewal enrollment and previous-token overlap. The previous token stops working after the proxy loads the new policy. Save the replacement immediately. This does not refresh a provider OAuth credential.`)) return;
           invalidate(application.id); await workspace.mutate('applications/rotate-token', {id: application.id, token_lifetime_seconds: lifetime}, 'application-action-status', hold);
         });
         revoke.addEventListener('click', async () => {
-          if (!window.confirm(`Revoke application "${application.name}" (${application.id}) and its ${application.active_rule_count} active access rules? Shared provider credentials and other applications remain. Enforcement begins after the proxy loads the new policy; already-dispatched requests cannot be recalled.`)) return;
+          if (!window.confirm(`Revoke application "${application.name}" (${application.id}) and its ${application.active_rule_count} active access rules? This also cancels workload renewal and previous-token overlap. Shared provider credentials and other applications remain. Enforcement begins after the proxy loads the new policy; already-dispatched requests cannot be recalled.`)) return;
           invalidate(application.id); await workspace.mutate('applications/revoke', {id: application.id}, 'application-action-status');
         });
         card.append(textNode('p', 'Replacement token lifetime', 'small'), select); const actions = textNode('div', undefined, 'actions'); actions.append(rotate, revoke);
@@ -199,6 +199,16 @@ function createApplicationsView(workspace) {
           change.addEventListener('click', () => changeProxyAuthentication(application.id, target)); actions.append(change);
         }
         card.append(actions);
+        const enrollment = application.client_renewal;
+        card.append(textNode('p', !enrollment ? Number.isSafeInteger(application.client_renewal_cancelled_at_epoch_ms) ?
+          'Workload renewal: cancelled · ' + new Date(application.client_renewal_cancelled_at_epoch_ms).toLocaleString() : 'Tokens: manual rotation' :
+          'Workload renewal: ' + (enrollment.status === 'expired' || Date.now() >= enrollment.expires_at_epoch_ms ? 'expired' : 'enrolled') +
+          ' · authority ends ' + new Date(enrollment.expires_at_epoch_ms).toLocaleString(), 'small muted'));
+        if (projectWorkloadRenewalCapability(catalog.capabilities.workload_renewal, catalog.proxy_url)) {
+          const manage = textNode('button', 'Manage workload renewal', 'secondary'); manage.dataset.action = 'manage-workload-renewal';
+          manage.disabled = workspace.state.busy || workspace.state.uncertain;
+          manage.addEventListener('click', () => renewalView.select(application.id)); card.append(manage);
+        }
       }
       return card;
     }), 'No clients. Create a client identity and save its one-time token, then add an access rule.');
@@ -212,5 +222,6 @@ function createApplicationsView(workspace) {
     else tokenHome.after(element('one-time-access'), element('token-expiry-status'));
     for (const link of element('one-time-access').querySelectorAll('a')) link.hidden = Boolean(container);
   }
+  const renewalView = createWorkloadRenewalView(workspace, invalidate);
   workspace.subscribe(render); return {tokenFor, clear, render, create, mount, hasHeldToken() { reconcile(); return Boolean(held); }};
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Stdlib orchestration controls; tiny local children, no product tests/network."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import sys
@@ -42,6 +43,10 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual((denial.category, denial.runtime, denial.arguments, denial.seconds),
                 ("backend", "python", (), 60))
         self.assertIn("test_operator_notification_google_events.py", paths)
+        for script in ("test_operator_workload_renewal_contract.py", "test_proxy_managed_renewal.py",
+                "test_operator_workload_renewal_store.py", "test_operator_workload_renewal_api.py",
+                "test_operator_workload_renewal.py", "test_managed_client.py"):
+            self.assertIn(script, paths)
         self.assertIn("test_operator_catalog_github_app.py", paths)
         bytecode = next(row for row in runner.SUITES if row.script == "test_prepare_operator_python_bytecode.py")
         self.assertEqual((bytecode.category, bytecode.runtime, bytecode.arguments, bytecode.seconds),
@@ -223,6 +228,8 @@ class RunnerTests(unittest.TestCase):
                 "scope": "shared X posting-attempt quota UI contracts; no backend or enforcement acceptance"}, "PASS fixture\n"),
             "test_approval_decision_ui.cjs": ({"ok": True, "browser": False, "network": False,
                 "scope": "actual approval UI functions with inert DOM and synthetic API/WebAuthn; not browser or protected authority acceptance"}, "PASS fixture\n"),
+            "test_operator_workload_renewal_ui.cjs": ({"ok": True, "browser": False, "network": False,
+                "source": "closed renewal DTO and inert DOM only"}, "PASS fixture\n"),
         }
         self.assertEqual({row.script for row in runner.SUITES if row.runtime == "node"},
             set(examples) | {"test_operator_runtime_browser_assets.cjs"})
@@ -295,6 +302,8 @@ class RunnerTests(unittest.TestCase):
             self.assertFalse(result["success"])
             self.assertFalse(result["productionAcceptance"])
             self.assertIn("stock_sdk", result["notExecuted"])
+            self.assertEqual(result["managedClientRequirementsSha256"], hashlib.sha256(
+                (runner.ROOT / "examples/managed-client/requirements.lock").read_bytes()).hexdigest())
             with patch.object(runner, "require_offline_network"), self.assertRaises(runner.Refused):
                 runner.run(args)
 
@@ -333,12 +342,19 @@ class RunnerTests(unittest.TestCase):
         for required in ("pull_request:", "branches: [main]", "contents: read", "--network none",
                 "--read-only", "--cap-drop ALL", "no-new-privileges", "--memory 2g", "--cpus 2",
                 "--require-hashes", "--only-binary=:all:", "test_run_ordinary_regression.py",
+                "--isolated", "--index-url https://pypi.org/simple",
+                "src=$GITHUB_WORKSPACE/examples/managed-client/requirements.lock,dst=/managed-client-requirements.lock,readonly",
+                "-r /requirements.lock -r /managed-client-requirements.lock",
                 "dst=/usr/lib/x86_64-linux-gnu/libatomic.so.1,readonly", "/tools/node --version",
                 "--tmpfs /tmp:rw,exec,nosuid,nodev,size=512m,mode=1777"):
             self.assertIn(required, value)
         for forbidden in ("pull_request_target:", "secrets.", "docker build", "/var/run/docker.sock", "--privileged"):
             self.assertNotIn(forbidden, value)
         self.assertLess(value.index("test_run_ordinary_regression.py"), value.index("run_ordinary_regression.py --node"))
+        makefile = (runner.ROOT / "Makefile").read_text()
+        isolated = makefile.split("override CODER_ISOLATED_TEST_SCRIPTS :=", 1)[1].split("\n\n", 1)[0]
+        self.assertNotIn("scripts/test_managed_client.py", isolated)
+        self.assertIn("--with-requirements examples/managed-client/requirements.lock", makefile)
 
 
 if __name__ == "__main__":

@@ -67,7 +67,7 @@ fn fixture(routes: Vec<Route>, operator: bool) -> (GateState, Arc<Snapshot>) {
     snapshot.policy_id = "serverware-operator-demo".into();
     snapshot.principals[0].proxy_authorization = Some(ProxyAuthorizationPolicy::BearerToken {
         token_sha256: sha256_prefixed(TOKEN.as_bytes()), source_cidrs: vec![],
-        expires_at_ms: Some(now_epoch_ms() + 60_000), basic_transport: None,
+        expires_at_ms: Some(now_epoch_ms() + 60_000), basic_transport: None, managed_renewal: None,
     });
     snapshot.routes = routes;
     snapshot.credentials.insert(CREDENTIAL.into(), Credential {

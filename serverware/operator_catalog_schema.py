@@ -439,6 +439,8 @@ def validate_bindings(conn, catalog: dict | None = None, *, metadata_profile=Non
                 or not isinstance(row.get('token_sha256'), str) or not _SHA.fullmatch(row['token_sha256'])
                 or type(row.get('token_expires_at_epoch_ms')) is not int or row['token_expires_at_epoch_ms'] <= 0):
             raise CatalogIntegrityError('catalog application verifier refused')
+        from serverware import operator_workload_renewal_store
+        operator_workload_renewal_store.validate(row)
     for row in catalog['access_rules']:
         rule_content_modes(row)
         app, credential = applications.get(row['application_id']), credentials.get(row['credential_id'])

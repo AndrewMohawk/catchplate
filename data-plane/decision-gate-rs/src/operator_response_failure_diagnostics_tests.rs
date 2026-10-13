@@ -42,7 +42,7 @@ fn fixture() -> (GateState, Arc<Snapshot>) {
     held.policy_id = "serverware-operator-demo".into();
     held.principals[0].proxy_authorization = Some(ProxyAuthorizationPolicy::BearerToken {
         token_sha256: sha256_prefixed(b"synthetic-response-observation-client"),
-        source_cidrs: vec![], expires_at_ms: Some(now_epoch_ms() + 60_000), basic_transport: None,
+        source_cidrs: vec![], expires_at_ms: Some(now_epoch_ms() + 60_000), basic_transport: None, managed_renewal: None,
     });
     held.routes[0].host = "registry.npmjs.org".into();
     held.routes[0].resolved_address_policy = ResolvedAddressPolicy::PublicOnly;

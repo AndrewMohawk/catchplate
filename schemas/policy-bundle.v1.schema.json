@@ -14,7 +14,9 @@
             "type": "object",
             "required": ["proxyAuthorization"],
             "properties": {
-              "proxyAuthorization": {"type": "object", "required": ["basicTransport"]}
+              "proxyAuthorization": {"type": "object", "anyOf": [
+                {"required": ["basicTransport"]}, {"required": ["managedRenewal"]}
+              ]}
             }
           }
         }
@@ -28,6 +30,26 @@
     }
   }],
   "$defs": {
+    "managedProxyRenewal": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "enrollmentId", "enrollmentExpiresAtEpochMs", "rotatedAtEpochMs"],
+      "properties": {
+        "schema": {"const": "serverware.proxyTokenRenewal/v1"},
+        "enrollmentId": {"type": "string", "minLength": 36, "maxLength": 36, "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+        "enrollmentExpiresAtEpochMs": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "rotatedAtEpochMs": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "previousToken": {
+          "type": "object", "additionalProperties": false,
+          "required": ["tokenSha256", "originalExpiresAtEpochMs", "expiresAtEpochMs"],
+          "properties": {
+            "tokenSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "originalExpiresAtEpochMs": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+            "expiresAtEpochMs": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}
+          }
+        }
+      },
+      "$comment": "Semantic admission also requires finite ordered deadlines, a distinct predecessor verifier, expiry bounded by original expiry and rotation plus 300 seconds, current/previous expiry bounded by the enrollment, canonical matching client identity, and explicit ordinary operator runtime admission. This is not native workload authority."
+    },
     "xPostAccountQuota": {
       "type": "object", "additionalProperties": false,
       "required": ["id", "type", "max", "calendarWindow", "windowSemantics", "store", "key"],
@@ -1190,7 +1212,7 @@
                 "required": ["scheme", "tokenSha256"],
                 "additionalProperties": false,
                 "allOf": [{
-                  "if": {"required": ["basicTransport"]},
+                  "if": {"anyOf": [{"required": ["basicTransport"]}, {"required": ["managedRenewal"]}]},
                   "then": {
                     "required": ["tokenId", "expiresAtEpochMs"],
                     "properties": {
@@ -1211,6 +1233,7 @@
                     "items": {"$ref": "#/$defs/canonicalCidr"}
                   },
                   "expiresAtEpochMs": {"type": "integer", "minimum": 1},
+                  "managedRenewal": {"$ref": "#/$defs/managedProxyRenewal"},
                   "basicTransport": {
                     "type": "object",
                     "required": ["username"],

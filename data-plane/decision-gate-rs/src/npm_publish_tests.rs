@@ -341,7 +341,7 @@ fn npm_publish_dispatch_barrier_cannot_rearm_expired_window_or_contact_target() 
     held.policy_id="serverware-operator-demo".into();
     held.principals[0].proxy_authorization=Some(ProxyAuthorizationPolicy::BearerToken {
         token_sha256:sha256_prefixed(b"synthetic-publish-deadline-client"),source_cidrs:vec![],
-        expires_at_ms:Some(now_epoch_ms()+60_000),basic_transport:None });
+        expires_at_ms:Some(now_epoch_ms()+60_000),basic_transport:None, managed_renewal: None });
     held.routes[0].resolved_address_policy=ResolvedAddressPolicy::PublicOnly;
     let profile=operator_demo::test_publish_dispatch_profile(&held);
     let snapshot=Arc::new(held); let mut state=test_gate_state(Arc::clone(&snapshot));

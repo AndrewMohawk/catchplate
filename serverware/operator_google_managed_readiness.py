@@ -71,7 +71,7 @@ def _snapshot():
 
 
 def _observe(*, require_x: bool = False, require_alchemy: bool = False,
-        require_npm_install: bool = False, catalog: bool = False) -> dict:
+        require_npm_install: bool = False, require_workload_renewal: bool = False, catalog: bool = False) -> dict:
     """Fixed public outcome; unavailable observation never implies rollback.
 
     Must be called outside ALL caller-owned publication/SQLite transactions.
@@ -81,7 +81,7 @@ def _observe(*, require_x: bool = False, require_alchemy: bool = False,
     result = {"ready": False, "policy_hash": None, "loaded_policy_hash": None, "managed_google": None}
     if catalog:
         result.update(x_available=False, alchemy_available=False, npm_install_available=False,
-            x_post_available=False, x_post_quota_available=False)
+            x_post_available=False, x_post_quota_available=False, workload_renewal_available=False)
     try:
         from serverware import operator_google_managed_config as managed
         from serverware import operator_publication as publication
@@ -105,6 +105,9 @@ def _observe(*, require_x: bool = False, require_alchemy: bool = False,
         if require_npm_install:
             from serverware.operator_catalog_npm_install import gate_descriptor_matches
             _require(gate_descriptor_matches(observed.get("operator_npm_install")))
+        if require_workload_renewal:
+            from serverware.operator_workload_renewal import gate_descriptor_matches
+            _require(gate_descriptor_matches(observed.get("operator_workload_renewal")))
         result["loaded_policy_hash"] = observed["policy_hash"]
         shadow = observed.get("policy_shadow")
         _require(type(shadow) is dict)
@@ -123,6 +126,8 @@ def _observe(*, require_x: bool = False, require_alchemy: bool = False,
             result["alchemy_available"] = operator_catalog_alchemy.gate_descriptor_matches(observed.get("operator_alchemy_rpc_read"))
             from serverware import operator_catalog_npm_install
             result["npm_install_available"] = operator_catalog_npm_install.gate_descriptor_matches(observed.get("operator_npm_install"))
+            from serverware import operator_workload_renewal
+            result["workload_renewal_available"] = operator_workload_renewal.gate_descriptor_matches(observed.get("operator_workload_renewal"))
             from serverware import operator_x_readiness
             x_observed = operator_x_readiness.observe_health_quota(observed)
             result["x_post_available"] = (x_observed["ready"] is True
@@ -135,7 +140,7 @@ def _observe(*, require_x: bool = False, require_alchemy: bool = False,
         result["ready"] = False
         if catalog:
             result.update(x_available=False, alchemy_available=False, npm_install_available=False,
-                x_post_available=False, x_post_quota_available=False)
+                x_post_available=False, x_post_quota_available=False, workload_renewal_available=False)
     return result
 
 
@@ -167,6 +172,11 @@ def observe_catalog() -> dict:
 def observe_npm_install() -> dict:
     """Join install compatibility to the same fresh managed gate observation."""
     return _observe(require_npm_install=True)
+
+
+def observe_workload_renewal() -> dict:
+    """Join renewal compatibility to the same source-pinned managed pair."""
+    return _observe(require_workload_renewal=True)
 
 
 def _start_observation(value):

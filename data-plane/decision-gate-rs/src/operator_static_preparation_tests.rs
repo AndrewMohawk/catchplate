@@ -78,7 +78,7 @@ fn fixture() -> (GateState, Arc<Snapshot>, CredentialLeaseScope, SigningKey) {
         token_sha256: sha256_prefixed(TOKEN.as_bytes()),
         source_cidrs: vec![],
         expires_at_ms: Some(now_epoch_ms() + 60_000),
-        basic_transport: None,
+        basic_transport: None, managed_renewal: None,
     });
     snapshot.credentials.insert(
         "static-account".to_owned(),

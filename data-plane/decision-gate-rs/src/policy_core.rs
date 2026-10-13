@@ -12763,7 +12763,7 @@ mod principal_explicit_time_tests {
             token_sha256: sha256_prefixed(TOKEN.as_bytes()),
             source_cidrs: vec!["127.0.0.1/32".parse().unwrap()],
             expires_at_ms: Some(u128::from(EXPIRES_AT)),
-            basic_transport: None,
+            basic_transport: None, managed_renewal: None,
         });
         Arc::new(snapshot)
     }
@@ -12878,5 +12878,24 @@ mod principal_explicit_time_tests {
                 assert_principal_denied(&evaluation);
             }
         }
+    }
+
+    #[test]
+    fn managed_previous_verifier_uses_explicit_time_in_all_four_policy_lanes() {
+        let mut held = (*snapshot()).clone();
+        held.policy_id = "serverware-operator-demo".into();
+        let current = "synthetic-replacement-token";
+        let config = json!({"scheme":"Bearer", "tokenId":"12345678-1234-4234-9234-123456789abc",
+            "tokenSha256":sha256_prefixed(current.as_bytes()), "sourceCidrs":["127.0.0.1/32"],
+            "expiresAtEpochMs":4000, "managedRenewal":{"schema":"serverware.proxyTokenRenewal/v1",
+                "enrollmentId":"22345678-1234-4234-9234-123456789abc", "enrollmentExpiresAtEpochMs":5000,
+                "rotatedAtEpochMs":1000, "previousToken":{"tokenSha256":sha256_prefixed(TOKEN.as_bytes()),
+                    "originalExpiresAtEpochMs":3000, "expiresAtEpochMs":2000}}});
+        held.principals[0].proxy_authorization = super::super::parse_proxy_authorization(Some(&config), "agent:test").unwrap();
+        let held = Arc::new(held);
+        for evaluation in evaluate_all(&held, &request(TOKEN, "127.0.0.1"), 1999) { assert_permitted(&evaluation); }
+        for evaluation in evaluate_all(&held, &request(TOKEN, "127.0.0.1"), 2000) { assert_principal_denied(&evaluation); }
+        for evaluation in evaluate_all(&held, &request(current, "127.0.0.1"), 2000) { assert_permitted(&evaluation); }
+        for evaluation in evaluate_all(&held, &request(current, "127.0.0.1"), 4000) { assert_principal_denied(&evaluation); }
     }
 }

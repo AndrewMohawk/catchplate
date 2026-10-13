@@ -2,7 +2,8 @@
 """Bounded ordinary-app component checks in an already isolated Linux container.
 
 No dependency installation, image pull/build, browser, SDK, deployment or live
-checker is performed here. Provision the existing requirements.lock separately.
+checker is performed here. Provision requirements.lock and the standalone
+examples/managed-client/requirements.lock separately; neither is installed here.
 Execution requires a network namespace containing only loopback; local HTTP
 fixtures still work. Mount source and dependencies read-only, drop capabilities,
 and supply a fresh writable result parent (see ordinary-regression.yml).
@@ -49,6 +50,12 @@ class Suite:
 SUITES = (
     Suite("backend", "test_operator_demo_runtime.py"),
     Suite("backend", "test_operator_workspace_api.py"),
+    Suite("backend", "test_operator_workload_renewal_contract.py", seconds=60),
+    Suite("backend", "test_proxy_managed_renewal.py", seconds=60),
+    Suite("backend", "test_operator_workload_renewal_store.py"),
+    Suite("backend", "test_operator_workload_renewal_api.py", seconds=60),
+    Suite("backend", "test_operator_workload_renewal.py"),
+    Suite("backend", "test_managed_client.py", seconds=60),
     Suite("backend", "test_operator_catalog_body_routing.py"),
     Suite("backend", "test_operator_catalog_header_replacement.py"),
     Suite("backend", "test_jit_denial_api.py", seconds=60),
@@ -126,6 +133,7 @@ SUITES = (
     Suite("ui_contract", "test_operator_x_quota_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_runtime_browser_assets.cjs", "node", seconds=60),
     Suite("ui_contract", "test_approval_decision_ui.cjs", "node", seconds=60),
+    Suite("ui_contract", "test_operator_workload_renewal_ui.cjs", "node", seconds=60),
 )
 
 
@@ -242,6 +250,8 @@ def node_completion(script, raw):
             "scope": "shared X posting-attempt quota UI contracts; no backend or enforcement acceptance"},
         "test_approval_decision_ui.cjs": {"ok": True, "browser": False, "network": False,
             "scope": "actual approval UI functions with inert DOM and synthetic API/WebAuthn; not browser or protected authority acceptance"},
+        "test_operator_workload_renewal_ui.cjs": {"ok": True, "browser": False, "network": False,
+            "source": "closed renewal DTO and inert DOM only"},
     }
     def unique(pairs):
         value = {}
@@ -372,6 +382,7 @@ def run(args):
     result = {"schema": SCHEMA, "success": all(row["status"] == "passed" for row in rows),
         "scope": "ordinary-app offline component regressions", "network": "loopback-only",
         "sourceRoot": str(ROOT), "requirementsSha256": hashlib.sha256((ROOT / "requirements.lock").read_bytes()).hexdigest(),
+        "managedClientRequirementsSha256": hashlib.sha256((ROOT / "examples" / "managed-client" / "requirements.lock").read_bytes()).hexdigest(),
         "elapsedSeconds": round(time.monotonic() - began, 3), "maximumSeconds": MAX_SECONDS,
         "maximumOutputBytesPerSuite": MAX_OUTPUT_BYTES, "suites": rows,
         "notExecuted": list(EXCLUDED), "productionAcceptance": False}

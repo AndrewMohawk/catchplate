@@ -660,8 +660,21 @@ checker.main()
     def test_disconnect_exact_revision_and_affected_inventory_are_checked(self):
         # HTTP doubles supply already-observed public DTOs, never fake custody.
         before = catalog(); before["credentials"][0].update(version=2, credential_generation=2)
+        before["applications"][0].update(name="assigned", status="active", version=1,
+            created_at="2033-05-18T03:33:20+00:00", proxy_authentication="basic_and_bearer_v1",
+            token_expires_at_epoch_ms=ANCHOR + 300000, token_generation=1, token_status="valid",
+            active_rule_count=1, access_status="active")
+        # Unknown future public fields must be retained too, not dropped by a
+        # handpicked identity-only comparison.
+        before["applications"][0]["future_public_field"] = {"retained": True}
+        created_app = {**before["applications"][0], "active_rule_count": 0, "access_status": "unassigned"}
+        other_id = "66666666-6666-4666-8666-666666666666"
+        before["applications"].append({**before["applications"][0], "id": other_id,
+            "principal_id": "operator." + other_id, "name": "unassigned",
+            "active_rule_count": 0, "access_status": "unassigned"})
         current = deepcopy(before); current["revision"] += 2
         current["credentials"][0]["status"] = current["access_rules"][0]["status"] = "revoked"
+        current["applications"][0].update(active_rule_count=0, access_status="unassigned")
         current["policy"] = {"policy_hash": "sha256:" + "f" * 64, "sequence": 3}
         review = {"schema": "serverware.operatorXDisconnectReview/v1", "credential_id": CREDENTIAL,
             "expected_credential_generation": 2, "expected_revision": before["revision"],
@@ -670,20 +683,48 @@ checker.main()
         result = {"schema": "serverware.operatorXAccountOperation/v1", "operation_id": DISCONNECT,
             "kind": "disconnect", "status": "disconnected", "credential_id": CREDENTIAL, "reason": None,
             "created_at": "synthetic", "expires_at_epoch_ms": ANCHOR + 300000}
-        for alteration in (None, "revision", "inventory"):
+        changes = {"revision": lambda v: v.update(revision=v["revision"] + 1),
+            "credential_inventory": lambda v: v["credentials"].append({"id": APP, "status": "revoked"}),
+            "credential_status": lambda v: v["credentials"][0].update(status="active"),
+            "rule_inventory": lambda v: v["access_rules"].append({"id": APP, "status": "revoked"}),
+            "rule_status": lambda v: v["access_rules"][0].update(status="active"),
+            "policy_hash": lambda v: v["policy"].update(policy_hash=SCOPE[2]),
+            "policy_sequence": lambda v: v["policy"].update(sequence=4),
+            "app_extra": lambda v: v["applications"].append(deepcopy(v["applications"][0])),
+            "app_missing": lambda v: v["applications"].pop(),
+            "other_app": lambda v: v["applications"][1].update(name="changed"),
+            "boolean_count": lambda v: v["applications"][0].update(active_rule_count=False),
+            "boolean_generation": lambda v: v["applications"][0].update(token_generation=True),
+            "future_field": lambda v: v["applications"][0].pop("future_public_field")}
+        for field, value in {"active_rule_count": 1, "access_status": "active", "status": "revoked",
+                "version": 2, "token_generation": 2, "token_expires_at_epoch_ms": ANCHOR + 600000,
+                "token_status": "expired", "proxy_authentication": "bearer", "principal_id": "other",
+                "id": other_id, "name": "changed", "created_at": "changed"}.items():
+            changes["app_" + field] = lambda v, k=field, item=value: v["applications"][0].__setitem__(k, item)
+        for alteration in (None, *changes):
             observed = deepcopy(current)
-            if alteration == "revision": observed["revision"] += 1
-            if alteration == "inventory": observed["credentials"].append({"id": APP, "status": "revoked"})
+            if alteration is not None: changes[alteration](observed)
             instance = object.__new__(check.XPostCheck); instance.credential_id = CREDENTIAL
             instance.lifecycle_expected = {}; instance.lifecycle_json = Mock(side_effect=[review, result, result])
             instance.catalog = Mock(side_effect=[before, observed]); instance.wait_catalog_loaded = Mock()
             instance.observe = Mock(return_value=provider())
-            with patch.object(check.uuid, "uuid4", return_value=DISCONNECT):
+            with self.subTest(alteration=alteration), patch.object(check.uuid, "uuid4", return_value=DISCONNECT):
                 if alteration is None:
-                    self.assertEqual(instance.disconnect(before, before["applications"][0], before["access_rules"][0]), provider())
+                    self.assertEqual(instance.disconnect(before, created_app, before["access_rules"][0]), provider())
                 else:
                     with self.assertRaises(check.CheckFailure):
-                        instance.disconnect(before, before["applications"][0], before["access_rules"][0])
+                        instance.disconnect(before, created_app, before["access_rules"][0])
+        for alteration in ("missing", "duplicate", "count", "boolean_count", "status"):
+            selected = deepcopy(before)
+            if alteration == "missing": selected["applications"].pop(0)
+            elif alteration == "duplicate": selected["applications"].append(deepcopy(selected["applications"][0]))
+            elif alteration == "count": selected["applications"][0]["active_rule_count"] = 0
+            elif alteration == "boolean_count": selected["applications"][0]["active_rule_count"] = True
+            else: selected["applications"][0]["access_status"] = "pending"
+            instance = object.__new__(check.XPostCheck); instance.lifecycle_json = Mock()
+            with self.subTest(original=alteration), self.assertRaises(check.CheckFailure):
+                instance.disconnect(selected, created_app, before["access_rules"][0])
+            instance.lifecycle_json.assert_not_called()
 
     def test_main_failure_receipt_is_bounded_redacted_and_arms_original_alarm(self):
         values = {"control-base": check.CONTROL, "operator-origin": check.CONTROL,

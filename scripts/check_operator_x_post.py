@@ -721,6 +721,14 @@ class XPostCheck(OperatorCatalogCheck):
             "auditIds": [row["id"] for row in observed], "kind": expected})
 
     def disconnect(self, pinned, app, rule):
+        assigned = [item for item in pinned["applications"] if item["id"] == app["id"]]
+        require(len(assigned) == 1 and type(assigned[0].get("active_rule_count")) is int
+            and assigned[0]["active_rule_count"] == 1 and assigned[0].get("access_status") == "active",
+            "X original assigned application projection differs")
+        # The application/token is retained. Only its derived active-rule view
+        # changes when this exact account's sole permission is fenced.
+        expected_applications = [{**item, "active_rule_count": 0, "access_status": "unassigned"}
+            if item["id"] == app["id"] else item for item in pinned["applications"]]
         review = self.lifecycle_json(PREFIX + "/accounts/" + self.credential_id + "/disconnect-review")
         require(review.get("schema") == "serverware.operatorXDisconnectReview/v1"
             and review.get("affected_credential_ids") == [self.credential_id]
@@ -744,7 +752,7 @@ class XPostCheck(OperatorCatalogCheck):
             and [item["id"] for item in current["access_rules"]] == [rule["id"]]
             and self.resource(current, "credentials", self.credential_id)["status"] == "revoked"
             and self.resource(current, "access_rules", rule["id"])["status"] == "revoked"
-            and current["applications"] == pinned["applications"]
+            and encoded(current["applications"]) == encoded(expected_applications)
             and current["policy"]["policy_hash"] != pinned["policy"]["policy_hash"]
             and current["policy"]["sequence"] == pinned["policy"]["sequence"] + 1,
             "X disconnect did not fence exact credential and signed permission")

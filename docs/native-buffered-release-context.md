@@ -484,3 +484,20 @@ or advisory locks: existing `db.connect()` still calls `ensure_data_dirs()`.
 It is not native admission, hardware, real-provider, reservation or deployment
 acceptance. Rust compilation and the new component controls are tracked
 separately; the synthetic fixture alone is not evidence that they executed.
+
+The subsequent immutable `4547153a` Rust run compiled the actual test targets
+and passed 24 selected library tests, 159 selected binary tests across 34
+disjoint filters, and eight external compile-time API controls. The eight new
+compound-preparation groups cover verified Python output, substitutions,
+deadlines and terminal refusal, without fabricated native owners.
+The new public validator compiled with
+its exact `Result<(), String>` signature; owner-return and private-pair probes
+produced only the expected `E0308` and `E0603` failures. The result SHA-256 is
+`029b11726c0a0567d5d4d80b26810a79d2a9d63ccfe9264da81712a7b6fbae15`,
+bound to source pins
+`a9a1d096afe6820599cf4f44afe2944f87122f107931e69c00ebb2feae85d04d`.
+No normal binary was built or deployed. The unconditional refusal remains.
+The durable `native-jit-preparation-rust.JBZM7oyC` record retains that result and
+11 byte-verified receipts. All 49 owned containers have terminal cleanup
+receipts and are absent; both warm build caches and the previous normal binary
+were preserved.

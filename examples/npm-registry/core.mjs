@@ -231,9 +231,14 @@ export function metadataSummary(config, value) {
     tarballFetched: false };
 }
 
-export function publishSummary(config, value, bytes) {
+export function publishSummary(config, result, bytes) {
   reviewedTarball(config, bytes);
-  requireValue(value && value.name === config.packageName && value.version === config.version
+  // Pinned npm 11.20 reports one package-keyed receipt, including without workspaces.
+  requireValue(result && typeof result === 'object' && !Array.isArray(result)
+    && Object.keys(result).length === 1 && Object.hasOwn(result, config.packageName));
+  const value = result[config.packageName];
+  requireValue(value && typeof value === 'object' && !Array.isArray(value)
+    && value.name === config.packageName && value.version === config.version
     && value.id === config.packageName + '@' + config.version && value.size === bytes.length
     && value.integrity === 'sha512-' + createHash('sha512').update(bytes).digest('base64')
     && value.shasum === createHash('sha1').update(bytes).digest('hex'));

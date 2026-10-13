@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { configuration, npmConfiguration, childEnvironment, pacoteOptions, npmArguments,
-  reviewedTarball, reviewedManifest, failure, PUBLIC_NPM_DUMMY, VERSIONS } from './core.mjs';
+  reviewedTarball, reviewedManifest, publishSummary, failure, PUBLIC_NPM_DUMMY, VERSIONS } from './core.mjs';
 import { verifyVersions, trustedPem, invokeWorker } from './client.mjs';
 import { perform } from './worker.mjs';
 
@@ -131,14 +131,38 @@ test('publish reviews local file before one stock command and validates the retu
     pacote: { async manifest(path, options) {
       order.push('review'); assert.equal(path, paths.tarball);
       assert.deepEqual(options, { cache: paths.cache, tufCache: paths.cache + '/tuf', offline: true, ignoreScripts: true }); return metadata;
-    } }, spawn() { order.push('publish'); return { status: 0, signal: null, stderr: '', stdout: JSON.stringify(receipt) }; } };
+    } }, spawn() { order.push('publish'); return { status: 0, signal: null, stderr: '',
+      stdout: JSON.stringify({ [config.packageName]: receipt }) }; } };
   const result = await perform(config, paths, dependencies);
   assert.deepEqual(order, ['review', 'publish']);
   assert.equal(result.npmReportedSuccess, true);
   await assert.rejects(perform(config, paths, { ...dependencies,
     pacote: { async manifest() { return { ...metadata, publishConfig: { registry: 'https://evil.invalid' } }; } }, spawn: noCall }));
   await assert.rejects(perform(config, paths, { ...dependencies,
-    spawn() { return { status: 0, signal: null, stderr: '', stdout: JSON.stringify({ ...receipt, integrity: 'wrong' }) }; } }));
+    spawn() { return { status: 0, signal: null, stderr: '',
+      stdout: JSON.stringify({ [config.packageName]: { ...receipt, integrity: 'wrong' } }) }; } }));
+});
+
+test('npm 11.20 publish requires one exact package key and preserves all archive identity checks', async () => {
+  for (const packageName of ['metadata', '@example/metadata']) {
+    const config = configuration({ ...env, SERVERWARE_NPM_PACKAGE: packageName }, 'publish');
+    const inner = { ...receipt, name: packageName, id: packageName + '@' + config.version };
+    const keyed = { [packageName]: inner };
+    assert.equal(publishSummary(config, keyed, bytes).npmReportedSuccess, true);
+    assert.throws(() => publishSummary(config, keyed, Buffer.from('different reviewed bytes')));
+    const malformed = [null, [], {}, inner, { other: inner }, { ...keyed, other: inner },
+      { [packageName]: null }, { [packageName]: [] },
+      ...[{ name: 'other' }, { version: '2.0.0' }, { id: 'other@1.2.3' },
+        { size: bytes.length + 1 }, { integrity: 'wrong' }, { shasum: 'wrong' }]
+        .map(change => ({ [packageName]: { ...inner, ...change } }))];
+    for (const value of malformed) {
+      let calls = 0;
+      await assert.rejects(perform(config, paths, { node: '/node', env: {}, readFile: () => bytes,
+        pacote: { async manifest() { return { name: packageName, version: config.version }; } },
+        spawn() { calls++; return { status: 0, signal: null, stderr: '', stdout: JSON.stringify(value) }; } }));
+      assert.equal(calls, 1, 'an uncertain publication must not be retried');
+    }
+  }
 });
 
 test('errors are neither printed nor retried, and an uncertain write has a fixed warning', async () => {

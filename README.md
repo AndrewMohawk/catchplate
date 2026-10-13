@@ -27,9 +27,11 @@ The guides prepared for the [GitHub Wiki](https://github.com/AndrewMohawk/server
 first-time setup, provider credentials, client/SDK examples, permissions, proxy
 configuration, notifications and maintenance. Its [versioned source pages](docs/wiki/Home.md)
 are kept with the application so the guide can be reviewed alongside changes.
-Wiki publication is pending its initial Home page; the
-[publishing guide](docs/wiki-publishing.md) describes the one-time setup and
-subsequent reviewed updates to the separate Wiki repository.
+Wiki publication is pending: its Git repository currently returns
+`Repository not found`. A signed-in maintainer must check whether the first
+Home page needs creating or Wiki access needs resolving. The
+[publishing guide](docs/wiki-publishing.md) covers that check and subsequent
+reviewed updates to the separate Wiki repository.
 
 The canonical entrypoint serves this persistent instance directly. The old
 demo hostname is authenticated navigation compatibility, not another app.

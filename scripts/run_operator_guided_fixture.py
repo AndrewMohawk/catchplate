@@ -33,6 +33,12 @@ CHROME_CANONICAL = Path("/srv/catchplate-fast/home-offload/operator/.cache/ms-pl
     "chromium_headless_shell-1208/chrome-headless-shell-linux64/chrome-headless-shell")
 
 
+def admitted_image_entrypoint(image, entrypoint):
+    if image == recipe.basic.CLIENT_IMAGE:
+        return entrypoint == ["/entrypoint.sh"]
+    return entrypoint in (None, [])
+
+
 class GuidedRun(XPostRun):
     """Reuse exact-ID discovery, finite command groups and strict runtime checks."""
 
@@ -177,7 +183,7 @@ class GuidedRun(XPostRun):
                 require(re.fullmatch(r"(?:python@)?sha256:[0-9a-f]{64}", image))
                 value = json.loads(self.command("image-" + str(index), ["docker", "image", "inspect", "--format",
                     '{"id":{{json .Id}},"environment":{{json .Config.Env}},"entrypoint":{{json (index .Config "Entrypoint")}}}', image], 10))
-                require(set(value) == {"id", "environment", "entrypoint"} and value["entrypoint"] in (None, [])
+                require(set(value) == {"id", "environment", "entrypoint"} and admitted_image_entrypoint(image, value["entrypoint"])
                     and re.fullmatch(r"sha256:[0-9a-f]{64}", value["id"])
                     and (not image.startswith("sha256:") or value["id"] == image))
                 from scripts.run_operator_npm_example_fixture import environment

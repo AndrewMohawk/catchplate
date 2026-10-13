@@ -144,6 +144,22 @@ class RunnerTests(unittest.TestCase):
         value.save = Mock()
         return value
 
+    def test_only_pinned_client_image_admits_its_exact_overridden_image_entrypoint(self):
+        client = "sha256:b2ce90db12b1df24e9d405fcd1e48d50ebad0039e523d30fde8fb1fb64fafafa"
+        self.assertEqual(recipe.basic.CLIENT_IMAGE, client)
+        self.assertTrue(runner.admitted_image_entrypoint(client, ["/entrypoint.sh"]))
+        for invalid in (None, [], "/entrypoint.sh", ["/entrypoint.sh", "extra"], ["/bin/sh"], ["/usr/bin/python3.10", "-B"]):
+            with self.subTest(entrypoint=invalid):
+                self.assertFalse(runner.admitted_image_entrypoint(client, invalid))
+        config = recipe.build(*ARGS, expected_binary_sha256=PIN)
+        for image in {service["image"] for service in config["services"].values()} - {client}:
+            self.assertTrue(runner.admitted_image_entrypoint(image, None))
+            self.assertTrue(runner.admitted_image_entrypoint(image, []))
+            for invalid in (["/entrypoint.sh"], ["/bin/sh"], "", False):
+                with self.subTest(image=image, entrypoint=invalid):
+                    self.assertFalse(runner.admitted_image_entrypoint(image, invalid))
+        self.assertEqual(config["services"]["check"]["entrypoint"], ["/usr/bin/python3.10", "-B"])
+
     def test_dispatch_rechecks_original_edge_and_bounds_browser_by_original_keeper_and_work(self):
         value = self.instance()
         value.edge_started_at = (NOW - datetime.timedelta(seconds=10)).isoformat()

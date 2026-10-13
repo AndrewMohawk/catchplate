@@ -19,10 +19,17 @@ admission.
 - Supply `OPERATOR_MANAGED_X_CUSTODY_DIR` as an explicit absolute, canonical,
   existing host directory owned by app UID/GID `10001:10001`, mode `0700`. It must
   have no symlink components and be disjoint and nonnested with app data, gate
-  data, Google custody, notification custody and every other service's mounted
-  roots. Check resolved paths **and bind aliases/inode identity**: no other service
-  may mount this directory or an ancestor exposing it. The app alone mounts it
+  data, Google custody, notification custody and other application data roots.
+  Check resolved paths **and bind aliases/inode identity**: the gate, edge and
+  other application services must not mount this directory or an ancestor
+  exposing it. The Serverware app alone receives the application custody mount
   read-write at `/x-custody`; `create_host_path: false` prevents silent creation.
+  This is application separation within the existing trusted-host/local-key
+  mode, not protection from host root, Docker administrators or trusted host
+  observers. Inventory those exposures separately: the current host has cAdvisor,
+  node-exporter and storage-alert filesystem mounts. Read-only host mounts are
+  not a confidentiality boundary. Do not silently classify another application
+  as a trusted observer or change monitoring permissions to pass this check.
 - For a genuinely first, unconfigured enablement, independently confirm no
   retained X configuration/lifecycle state and use an empty custody directory.
   On subsequent starts retain the original directory and key; never empty it,

@@ -335,7 +335,7 @@ const tests = [
         await page.locator('#load-error').waitFor({state: 'visible'});
         for (const id of ['credential-fields', 'aws-credential-fields'])
           assert(await page.locator('#' + id).evaluate(node => node.disabled));
-        for (const id of ['credential-name', 'credential-save', 'aws-credential-name', 'aws-credential-save'])
+        for (const id of ['credential-add', 'aws-credential-name', 'aws-credential-save'])
           assert(await page.locator('#' + id).isDisabled());
         assert.equal(observed.posts.length, 0);
       });

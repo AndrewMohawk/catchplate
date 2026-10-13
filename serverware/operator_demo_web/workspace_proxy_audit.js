@@ -167,18 +167,18 @@ function createProxyView(workspace, applications) {
       element('gmail-sdk-app-link').hidden = !needsBasic;
       element('gmail-sdk-guidance').textContent = sdk ?
         'Copy the Bash recipe for the selected ' + gmailProfile.label + ' Gmail SDK project below. Prepare its reviewed runtime and pinned dependencies before supplying your Serverware app token. The recipe runs the bounded job in a clean child environment, with the public dummy and independently verified TLS roots; this page has not run it or tested your account.' : needsBasic ?
-        'The official Gmail SDK needs standard username/password proxy login. Use Applications to explicitly enable it if advertised, then refresh. This page does not change your app or token. The saved permission must also use ordered Gmail queries and the exact SDK dummy.' :
+        'The official Gmail SDK needs standard username/password proxy login. Use Clients to explicitly enable it if advertised, then refresh. This page does not change your app or token. The saved permission must also use ordered Gmail queries and the exact SDK dummy.' :
         'This saved permission does not match the official SDK’s ordered-query and public-dummy contract. Keep using its existing HTTP configuration, or explicitly review a new Read Gmail permission with the Official Gmail SDK choice. No saved rule is upgraded or widened here.';
     }
     if (!valid || !supported || credential?.status !== 'active') {
       element('client-command').textContent = !valid ? 'The application token is expired, revoked or cannot be verified.' : 'The saved rule or credential is unavailable or unsupported.';
-      element('client-guidance').textContent = !valid ? 'Use Applications to explicitly rotate its token. No token has been renewed automatically.' : 'Review the saved access rule before use.'; return;
+      element('client-guidance').textContent = !valid ? 'Use Clients to explicitly rotate its token. No token has been renewed automatically.' : 'Review the saved access rule before use.'; return;
     }
     let dummyHeader; let proxy;
     const proxyAuthentication = applicationProxyAuthentication(application);
     if ((npm || npmPublish || npmInstall || xPost) && proxyAuthentication !== 'basic_and_bearer_v1') {
       element('client-command').textContent = xPost ? 'The X SDK example needs standard username/password proxy login.' : 'The stock npm client needs standard username/password proxy login.';
-      element('client-guidance').textContent = 'Use Applications to explicitly enable standard proxy login if advertised, then refresh. The app ID is the username and its existing Serverware token is the password. No login mode or token is changed automatically.';
+      element('client-guidance').textContent = 'Use Clients to explicitly enable standard proxy login if advertised, then refresh. The app ID is the username and its existing Serverware token is the password. No login mode or token is changed automatically.';
       return;
     }
     const messageId = element('gmail-message-id').value;

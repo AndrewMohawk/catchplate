@@ -165,7 +165,7 @@ function createApplicationsView(workspace) {
       const login = applicationProxyAuthentication(application);
       const card = resourceCard(application, badge, [['Token expires', new Date(application.token_expires_at_epoch_ms).toLocaleString()],
         ['Proxy login', login === 'basic_and_bearer_v1' ? 'Standard username/password and Bearer' : login === 'bearer' ? 'Bearer only' : 'Unsupported'],
-        ['Token generation', String(application.token_generation)], ['Active rules', String(application.active_rule_count)], ['Application ID', application.id]]);
+        ['Token generation', String(application.token_generation)], ['Active rules', String(application.active_rule_count)], ['Client ID', application.id]]);
       const loginStatus = textNode('p', revoked ? 'Proxy login unavailable: application revoked.' :
         !applicationProxyAuthenticationSupported(catalog, application) ? 'Saved proxy login is unsupported by this workspace. Refresh before use.' :
         !application.active_rule_count ? 'Login choice saved; no access rules are assigned.' :
@@ -201,7 +201,7 @@ function createApplicationsView(workspace) {
         card.append(actions);
       }
       return card;
-    }), 'No applications. Create a client identity and save its one-time token, then add an access rule.');
+    }), 'No clients. Create a client identity and save its one-time token, then add an access rule.');
   }
   window.addEventListener('pagehide', () => { clear(); channel?.close(); channel = null; });
   window.addEventListener('pageshow', event => { if (event.persisted) { connectChannel(); workspace.refresh(); } });

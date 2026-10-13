@@ -167,7 +167,7 @@ async function uncertain(page, freshRequired = false) {
   else await page.waitForFunction(() => !document.querySelector('#mutation-review-confirm').disabled);
   assert(!await panel(page).isVisible()); assert.equal(await secret(page).inputValue(), '');
   assert.match(await page.locator('#mutation-review-text').innerText(), /no automatic retry/i);
-  assert(await replaceAction(page).isDisabled()); assert(await page.locator('#credential-save').isDisabled());
+  assert(await replaceAction(page).isDisabled()); assert(await page.locator('#credential-add').isDisabled());
   assert(await page.locator('#application-create').isDisabled()); assert(await page.locator('#rule-save').isDisabled()); await noSecret(page);
 }
 
@@ -296,7 +296,7 @@ const tests = [
         await screenshot(page, 'replace-key-review-mobile');
       }
       await submit(page); await controls.arrival; assert(!await panel(page).isVisible()); await noSecret(page);
-      assert(await page.locator('#credential-save').isDisabled()); controls.release();
+      assert(await page.locator('#credential-add').isDisabled()); controls.release();
       await page.waitForFunction(() => document.querySelector('#credential-action-status').textContent.startsWith('Replacement saved in Serverware.'));
       assert.deepEqual(state.replacements, [{id: IDS.credential, expected_revision: 1, expected_policy_hash: digest(1), expected_credential_generation: 7, secretMatched: true}]);
       assert.deepEqual(state.applications, before.applications); assert.deepEqual(state.rules, before.rules); assert.deepEqual(catalog(state).policy, before.policy);
@@ -370,7 +370,7 @@ const tests = [
       assert.equal(result.status(), catalogStatus); await result.finished(); await page.locator('#load-error').waitFor({state: 'visible'});
       assert.equal(await page.locator('#load-error-text').innerText(), 'Your session or request origin could not be verified. Reload and sign in again.');
       assert(!await panel(page).isVisible()); assert.equal(await secret(page).inputValue(), '');
-      for (const id of ['credential-save', 'application-create', 'rule-save', 'mutation-review-confirm']) assert(await page.locator('#' + id).isDisabled());
+      for (const id of ['credential-add', 'application-create', 'rule-save', 'mutation-review-confirm']) assert(await page.locator('#' + id).isDisabled());
       assert(await replaceAction(page).isDisabled()); await noSecret(page);
       await page.clock.runFor(6000); assert.equal(state.replacements.length, 0); assert.equal(state.replacementRequests.length, 0);
       assert.equal(state.posts.length, 0); assert.equal(state.credentials[0].credential_generation, 7);
@@ -382,7 +382,7 @@ const tests = [
       {...CAPABILITY, credential_types: ['bearer', 'header', 'google_oauth']}, {...CAPABILITY, extra: true}]) {
       state.replacementCapability = capability; await refreshCatalog(page); assert(!await panel(page).isVisible());
       assert.equal(await replaceAction(page).count(), 0); assert(!await page.locator('#load-error').isVisible());
-      assert(!await page.locator('#credential-save').isDisabled()); await noSecret(page);
+      assert(!await page.locator('#credential-add').isDisabled()); await noSecret(page);
     }
     state.replacementCapability = clone(CAPABILITY); await refreshCatalog(page); await open(page);
     await page.locator('#credential-replace-cancel').click(); assert.equal(state.replacements.length, 0);
@@ -401,7 +401,7 @@ const tests = [
       {credential_generation: Number.MAX_SAFE_INTEGER}, {key_replaced_at: 'not-a-time'}, {key_replaced_at: '2026-02-30T12:00:00Z'}]) {
       state.credentials[0] = {...baseline, ...changes}; await refreshCatalog(page);
       assert.equal(await replaceAction(page).count(), 0); assert(!await page.locator('#load-error').isVisible());
-      assert(!await page.locator('#credential-save').isDisabled());
+      assert(!await page.locator('#credential-add').isDisabled());
     }
     state.credentials[0] = baseline; await refreshCatalog(page); await open(page); await page.locator('#credential-replace-cancel').click();
     assert.equal(state.replacements.length, 0);

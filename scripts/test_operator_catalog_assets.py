@@ -19,17 +19,25 @@ class Elements(HTMLParser):
         super().__init__()
         self.items = []
         self.form = None
+        self.in_navigation = False
+        self.navigation = []
         self.feed(document)
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
         if tag == 'form':
             self.form = attrs.get('id')
+        if tag == 'nav':
+            self.in_navigation = True
+        if self.in_navigation and tag == 'a':
+            self.navigation.append(attrs)
         self.items.append((tag, attrs, self.form))
 
     def handle_endtag(self, tag):
         if tag == 'form':
             self.form = None
+        if tag == 'nav':
+            self.in_navigation = False
 
 
 class OperatorCatalogAssets(unittest.TestCase):
@@ -86,6 +94,17 @@ class OperatorCatalogAssets(unittest.TestCase):
             self.assertEqual(index[name][0], 'section')
             self.assertTrue(any(tag == 'a' and attrs.get('href') == '#' + name for tag, attrs, _ in items))
 
+    def test_navigation_separates_credentials_clients_and_permissions_from_setup_action(self):
+        document = operator_demo_portal.render()
+        parsed = Elements(document)
+        self.assertEqual([item['href'] for item in parsed.navigation], [
+            '#overview', '#credentials', '#applications', '#access-rules',
+            '#proxy', '#audit', '#notifications'])
+        self.assertRegex(document, r'href="#credentials">Credentials</a>')
+        self.assertRegex(document, r'href="#applications">Clients</a>')
+        self.assertRegex(document, r'id="overview-connect-service"[^>]*>Set up access</a>')
+        self.assertNotIn('Accounts &amp; keys', document)
+
     def test_one_instance_presentation_keeps_security_status_and_optional_diagnostics(self):
         document = operator_demo_portal.render()
         index = {attrs['id']: (tag, attrs) for tag, attrs, _ in self.elements() if 'id' in attrs}
@@ -102,18 +121,26 @@ class OperatorCatalogAssets(unittest.TestCase):
         self.assertEqual(index['overview-try-demo'][1]['aria-expanded'], 'false')
         self.assertIn('hidden', index['overview-demo-panel'][1])
         self.assertEqual(index['overview-connect-service'][1]['href'], '#connect')
-        for name in ('credential-name', 'connect-credential-name'):
+        for name in ('connect-credential-name',):
             self.assertEqual(index[name][1]['placeholder'], 'My API key')
             self.assertNotIn('value', index[name][1])
 
-    def test_credential_form_has_no_endpoint_application_or_response_requirements(self):
-        fields = {attrs['id']: (tag, attrs) for tag, attrs, form in self.elements()
-            if form == 'credential-form' and tag in {'input', 'select', 'textarea'} and 'id' in attrs}
-        self.assertEqual(set(fields), {'credential-name', 'credential-auth-type', 'credential-header-name', 'credential-secret'})
-        self.assertIn('required', fields['credential-name'][1])
-        self.assertIn('required', fields['credential-secret'][1])
-        self.assertEqual(fields['credential-secret'][1]['type'], 'password')
-        self.assertNotIn('value', fields['credential-secret'][1])
+    def test_credentials_open_one_shared_editor_without_a_duplicate_secret_form(self):
+        index = {attrs['id']: (tag, attrs, form) for tag, attrs, form in self.elements() if 'id' in attrs}
+        self.assertEqual(index['credential-add'][0], 'button')
+        self.assertEqual(index['credential-add'][1]['type'], 'button')
+        self.assertIsNone(index['credential-add'][2])
+        for removed in ('credential-name', 'credential-auth-type', 'credential-header-name', 'credential-secret', 'credential-save'):
+            self.assertNotIn(removed, index)
+        self.assertEqual(index['connect-credential-secret'][2], 'connect-credential-form')
+        self.assertEqual(index['connect-credential-secret'][1]['type'], 'password')
+        self.assertIn('required', index['connect-credential-secret'][1])
+        self.assertNotIn('value', index['connect-credential-secret'][1])
+        self.assertIn('hidden', index['connect-credential-saved'][1])
+        for name in ('connect-saved-use', 'connect-saved-done'):
+            self.assertEqual(index[name][0], 'button')
+            self.assertEqual(index[name][1]['type'], 'button')
+            self.assertIsNone(index[name][2])
 
     def test_connection_method_choice_precedes_separate_hidden_forms(self):
         index = {attrs['id']: (tag, attrs, form) for tag, attrs, form in self.elements() if 'id' in attrs}

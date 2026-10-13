@@ -166,7 +166,7 @@ function createGoogleReauthorizationView(workspace, applications) {
       const names = items => operatorConnectResourceChoices(items).map(item => item.name).join(', ') || 'None';
       const rows = [['Google account', display.provider_account], ['Permission', 'Read Gmail'],
         [coherent() ? 'Current reviewed credential version' : 'Originally reviewed credential version', String(display.expected_credential_generation)],
-        ['Assigned apps (' + display.application_ids.length + ')', names(apps)],
+        ['Assigned clients (' + display.application_ids.length + ')', names(apps)],
         ['Existing access rules (' + display.affected_rule_ids.length + ')', names(rules)],
         ['Changes', 'Same credential and permissions. No application token is created, rotated or renewed.']];
       for (const [name, value] of rows) list.append(textNode('dt', name), textNode('dd', value));

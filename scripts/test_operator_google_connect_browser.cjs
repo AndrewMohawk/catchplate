@@ -242,7 +242,7 @@ const tests = [
     })],
   ...['awaiting_consent', 'exchanging'].map(statusValue => ['selected ' + statusValue + ' holds writes but explicit exit preserves server intent', browser => fixture(browser,
     {intents: [intent({status: statusValue, expires_at_epoch: statusValue === 'exchanging' ? NOW / 1000 - 10 : NOW / 1000 + 600})]}, async (page, state, observed, controls) => {
-      await controls.returnToWorkspace(); assert(await page.locator('#application-create').isDisabled()); assert(await page.locator('#credential-save').isDisabled());
+      await controls.returnToWorkspace(); assert(await page.locator('#application-create').isDisabled()); assert(await page.locator('#credential-add').isDisabled());
       await exclusiveGoogle(page, 0); await view(page, 'overview'); assert(await page.locator('#google-consent-panel').isHidden());
       await view(page, 'connect'); await exclusiveGoogle(page, 0);
       await page.locator('#google-consent-leave').click(); await ready(page); assert.equal(observed.intents[0].status, statusValue);

@@ -146,7 +146,7 @@ function quarantineState(state) {
 }
 async function unavailable(page, state) {
   await page.locator('#load-error').waitFor({state: 'visible'});
-  assert(await page.locator('#credential-save').isDisabled()); assert(await page.locator('#application-create').isDisabled());
+  assert(await page.locator('#credential-add').isDisabled()); assert(await page.locator('#application-create').isDisabled());
   assert(await page.locator('#rule-save').isDisabled()); assert(await page.locator('#connect-credential-next').isDisabled());
   await view(page, 'proxy'); assert(await page.locator('#copy-command').isDisabled()); assert(await page.locator('#download-config').isDisabled());
   assert.equal(state.posts.length, 0); await privateAbsent(page);
@@ -185,7 +185,7 @@ function generatorChecks() {
   assert.equal(new Set(resolved.map(item => item.name)).size, mimics.length, 'literal names cannot imitate generated short or full-ID labels');
   assert.deepEqual(resolved.map(item => item.id), mimics.map(item => item.id));
   assert.deepEqual(labels([...mimics].reverse()), [...resolved].reverse());
-  for (const name of ['Choose a saved connection', 'Create a new application', 'Grant a new permission']) {
+  for (const name of ['Choose a saved credential', 'Create a new client', 'Grant a new permission']) {
     const result = labels([application({name})], ['  ' + name.replaceAll(' ', '  ') + '  ']);
     assert.equal(result[0].id, IDS.application); assert.notEqual(result[0].name, name, 'saved resources cannot impersonate an action choice');
   }
@@ -290,7 +290,7 @@ const tests = [
       await ready(page); await view(page, 'credentials'); const card = accountCard(page); await card.waitFor({state: 'visible'});
       const details = card.locator('[data-google-identity]'); assert.equal(await card.locator('details').count(), 1);
       assert.equal(await details.locator('summary').innerText(), 'Details'); assert(!await details.evaluate(item => item.open));
-      const text = await card.innerText(); for (const value of [ACCOUNT, 'Read Gmail', 'Assigned apps', 'Reporting application']) assert(text.includes(value));
+      const text = await card.innerText(); for (const value of [ACCOUNT, 'Read Gmail', 'Assigned clients', 'Reporting application']) assert(text.includes(value));
       for (const value of ['gmail_readonly', ...SCOPES, SUBJECT, CLIENT, IDS.credential, IDS.application, IDS.other, 'Former worker'])
         assert(!text.includes(value), 'technical or former-assignment detail must not appear on the compact card');
       assert.equal(await card.locator('[data-google-account-notice]').innerText(), 'Historical observations do not confirm current account health or proxy activation.');
@@ -328,7 +328,7 @@ const tests = [
     const details = card.locator('[data-google-identity]');
     assert.equal(await summary.locator('details').count(), 1); assert(!await details.evaluate(item => item.open));
     const compact = await summary.innerText();
-    for (const value of [ACCOUNT, 'Read Gmail', 'Assigned apps', 'Reporting application']) assert(compact.includes(value));
+    for (const value of [ACCOUNT, 'Read Gmail', 'Assigned clients', 'Reporting application']) assert(compact.includes(value));
     for (const value of ['gmail_readonly', ...SCOPES, SUBJECT, CLIENT, IDS.credential, IDS.application]) assert(!compact.includes(value));
     assert(compact.includes('Historical observations do not confirm current account health or proxy activation.'));
     await details.locator('summary').click();
@@ -358,7 +358,7 @@ const tests = [
       provider_account: SECOND_ACCOUNT, provider_subject: 'other-subject'}),
       credential({id: STATIC_ID, name: 'Shared key'}), credential({id: SECOND_STATIC_ID, name: 'Shared key'})],
     applications: [application({name: 'Inbox worker'}), application({id: SECOND_APPLICATION_ID, name: 'Inbox worker'}),
-      application({id: IDS.other, name: 'Create a new application'}),
+      application({id: IDS.other, name: 'Create a new client'}),
       application({id: MIMIC_APPLICATION_ID, name: 'Inbox worker · 22222222-2'})],
     rules: [googleRule('insert', {application_id: SECOND_APPLICATION_ID, credential_id: SECOND_GOOGLE_ID}),
       googleRule('replace_exact', {id: SECOND_RULE_ID, route_id: 'operator.' + SECOND_RULE_ID,
@@ -531,7 +531,7 @@ async function activityCard(page, status, id = IDS.credential) {
   const summary = card.locator('p[data-account-activity]');
   assert.equal(await summary.getAttribute('data-activity-status'), status);
   assert(!await page.locator('#load-error').isVisible());
-  assert(!await page.locator('#credential-save').isDisabled()); assert(!await page.locator('#application-create').isDisabled());
+  assert(!await page.locator('#credential-add').isDisabled()); assert(!await page.locator('#application-create').isDisabled());
   return {card, summary, details: card.locator('details')};
 }
 async function activityDetails(details) {

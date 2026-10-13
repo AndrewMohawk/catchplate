@@ -102,7 +102,7 @@ function createXConfigurationView(workspace) {
     element('x-configuration-check').disabled = busy || storageBlocked || !operationId || workspace.writeInFlight();
     element('x-configuration-consent').textContent = saved ?
       (workspace.state.catalog?.capabilities?.x_oauth ?
-        'Application settings are saved. Connect an X account in Accounts & keys, then grant a separate posting permission. No post or provider-access test was run here.' :
+        'Application settings are saved. Connect an X account in Credentials, then grant a separate posting permission. No post or provider-access test was run here.' :
         'Application settings are saved. Account consent is unavailable until the current paired gate is ready. Saving settings does not connect an account or grant posting.') :
       'Save application settings first. Account consent and posting permissions are separate steps.';
     element('x-configuration-account-link').hidden = !saved || !workspace.state.catalog?.capabilities?.x_oauth;

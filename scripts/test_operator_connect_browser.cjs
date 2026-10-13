@@ -44,7 +44,7 @@ async function start(page) {
   if (!await page.locator('#connect').isVisible()) await view(page, 'connect');
   await page.locator('#connect').waitFor({state: 'visible'});
   assert.equal(await page.locator('.page:visible').count(), 1);
-  assert.equal(await page.locator('nav a[href="#connect"]').getAttribute('aria-current'), 'page');
+  assert.equal(await page.locator('nav a[href="#connect"]').count(), 0, 'setup is a guided action, not a resource workspace');
   await step(page, 'credential');
   assert(await page.locator('#connect-method-choice').isVisible());
   assert(await page.locator('#connect-credential-form').isHidden()); assert(await page.locator('#google-consent-panel').isHidden());
@@ -140,7 +140,8 @@ const tests = [
       await ready(page); await page.locator('#overview').waitFor({state: 'visible'});
       assert.equal(await page.locator('.page:visible').count(), 1);
       assert.equal(await page.locator('nav a[href="#overview"]').getAttribute('aria-current'), 'page');
-      assert.equal(await page.locator('nav a[href="#credentials"]').innerText(), 'Accounts & keys');
+      assert.equal(await page.locator('nav a[href="#credentials"]').innerText(), 'Credentials');
+      assert.equal(await page.locator('nav a[href="#applications"]').innerText(), 'Clients');
       assert.equal(await page.locator('nav a[href="#access-rules"]').innerText(), 'Permissions');
       assert.match(await page.locator('#overview-policy').innerText(), /proxy.*loaded.*saved policy/i);
       assert.match(await page.locator('#overview').innerText(), /not proof.*upstream.*succeeded/i);
@@ -149,12 +150,12 @@ const tests = [
       assert.match(await page.locator('#instance-security-status').innerText(), /Local encrypted keys.*not hardware-verified or production-ready/);
       assert.doesNotMatch(await page.locator('#overview').innerText(), /Explore synthetic demo|Connect a real service|local demo API/);
       assert.doesNotMatch(await page.locator('footer').innerText(), /Separate operator-development/);
-      assert.equal(await page.locator('#overview-connect-service').innerText(), 'Connect an app');
+      assert.equal(await page.locator('#overview-connect-service').innerText(), 'Set up access');
       assert.equal(await page.locator('#overview-diagnostics > summary').innerText(), 'Diagnostics (optional)');
       assert.equal(await page.locator('#overview-diagnostics').evaluate(node => node.open), false);
       assert(await page.locator('#overview-try-demo').isHidden());
       assert(await page.locator('#overview-demo-panel').isHidden());
-      for (const id of ['credential-name', 'connect-credential-name']) {
+      for (const id of ['connect-credential-name']) {
         assert.equal(await page.locator('#' + id).getAttribute('placeholder'), 'My API key');
         assert.equal(await page.locator('#' + id).inputValue(), '');
       }
@@ -166,7 +167,7 @@ const tests = [
       await screenshot(page, 'serverware-instance-overview-mobile');
       await page.setViewportSize({width: 1280, height: 960});
       await page.locator('#overview-connect-service').click(); await step(page, 'credential');
-      assert.match(await page.locator('#connect-progress').innerText(), /account or api key/i);
+      assert.match(await page.locator('#connect-progress').innerText(), /credential/i);
       assert(await page.locator('#connect-google').isDisabled());
       assert(await page.locator('#connect-use-github').isDisabled());
       assert.equal(state.posts.length, 0);
@@ -180,7 +181,7 @@ const tests = [
       assert.equal(await page.locator('#credentials-list > [data-resource-id]').count(), 2);
       const card = page.locator('#credentials-list > [data-resource-id="' + IDS.credential + '"]');
       assert.equal(await card.locator('.badge').innerText(), 'Saved');
-      assert.match(await card.innerText(), /Assigned apps/);
+      assert.match(await card.innerText(), /Assigned clients/);
       assert.match(await card.innerText(), /Reporting application/);
       assert.match(await card.innerText(), /Saved permissions/);
       for (const text of ['Read saved customer status', 'GET', UPSTREAM + '/v1/status']) assert((await card.innerText()).includes(text));
@@ -202,6 +203,51 @@ const tests = [
       assert.equal(await page.locator('#credentials-list > [data-resource-id]').count(), 2);
       assert.equal(JSON.stringify([state.credentials, state.applications, state.rules]), retained);
       assert.equal(state.posts.length, 0);
+    })],
+  ['Credentials uses one save-only provider editor and explicit client setup from its saved receipt', browser => fixture(browser,
+    capabilities, async (page, state) => {
+      await ready(page); await view(page, 'credentials'); await page.locator('#credential-add').click();
+      assert.equal(await page.locator('#connect-title').innerText(), 'Add credential');
+      assert.equal(await page.locator('#credential-secret').count(), 0);
+      assert.equal(await page.locator('#connect-credential-secret').count(), 1);
+      assert(await page.locator('#connect-use-saved').isHidden());
+      await fillCredential(page, 'Reusable release credential'); await page.locator('#connect-credential-next').click();
+      await page.locator('#connect-credential-saved').waitFor({state: 'visible'}); await idle(page);
+      assert.match(await page.locator('#connect-credential-saved').innerText(), /No client, proxy token or permission was created/);
+      for (const name of ['application', 'access', 'review', 'setup']) assert(await page.locator('#connect-' + name + '-step').isHidden());
+      assert.deepEqual(state.posts.map(item => item.name), ['credentials']);
+      assert.equal(state.applications.length, 0); assert.equal(state.rules.length, 0); await noToken(page);
+      assert.equal(await page.locator('#connect-credential-secret').inputValue(), '');
+      await page.locator('#connect-saved-use').click(); await step(page, 'application');
+      assert.equal(await page.locator('#connect-title').innerText(), 'Set up access');
+      assert.equal(await page.locator('#connect-credential-choice').inputValue(), IDS.credential);
+      assert.equal(state.posts.length, 1); await noToken(page);
+    })],
+  ['saved credential card selects its exact identity without recreating any resource', browser => fixture(browser,
+    supplied({credentials: [credential({name: 'Same display name'}), credential({id: OTHER_CREDENTIAL, name: 'Same display name'})],
+      rules: [savedRule({credential_id: OTHER_CREDENTIAL})]}), async (page, state) => {
+      await ready(page); await view(page, 'credentials');
+      const selected = page.locator('#credentials-list > [data-resource-id="' + OTHER_CREDENTIAL + '"]');
+      await selected.locator('[data-action="use-credential"]').click(); await step(page, 'application');
+      assert.equal(await page.locator('#connect-credential-choice').inputValue(), OTHER_CREDENTIAL);
+      await useApplication(page); await chooseSavedRule(page); await setup(page);
+      assert.equal(state.posts.length, 0); assert.equal(state.credentials.length, 2); await noToken(page);
+    })],
+  ['saving a credential preserves an already held one-time client token', browser => fixture(browser,
+    capabilities, async (page, state) => {
+      await ready(page); await view(page, 'applications'); await page.locator('#application-name').fill('Existing release client');
+      await page.locator('#application-token-ttl').selectOption('3600'); await page.locator('#application-create').click();
+      await page.locator('#one-time-access').waitFor({state: 'visible'}); await ready(page);
+      const before = JSON.stringify(state.applications);
+      assert.equal(await page.locator('#client-token').inputValue(), token(IDS.application));
+      await view(page, 'credentials'); await page.locator('#credential-add').click();
+      await fillCredential(page, 'Independent provider credential'); await page.locator('#connect-credential-next').click();
+      await page.locator('#connect-credential-saved').waitFor({state: 'visible'}); await idle(page);
+      assert.equal(await page.locator('#client-token').inputValue(), token(IDS.application));
+      assert.equal(JSON.stringify(state.applications), before); assert.equal(state.rules.length, 0);
+      assert.deepEqual(state.posts.map(item => item.name), ['applications', 'credentials']);
+      await page.locator('#connect-saved-done').click(); await page.locator('#credentials').waitFor({state: 'visible'});
+      assert.equal(await page.locator('#client-token').inputValue(), token(IDS.application));
     })],
   ['optional diagnostics do not mistake friendly names for a saved synthetic permission', browser => fixture(browser,
     supplied({allowedUpstreams: [UPSTREAM, SYNTHETIC_ORIGIN], credentials: [credential({name: 'Demo starter key'})],
@@ -576,7 +622,10 @@ async function main() {
     })(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('connect fixture absolute deadline')), 150000); })]);
   } finally {
     clearTimeout(deadline);
-    try { await browser.close(); }
+    try {
+      await browser.close(); assert.equal(browser.isConnected(), false, 'owned fixture browser is closed');
+      console.log(JSON.stringify({phase: 'browser-cleanup', browserClosed: true}));
+    }
     finally { const after = await hashes(); console.log(JSON.stringify({phase: 'source-after', hashes: after})); assert.deepEqual(after, before, 'sources remained frozen'); }
   }
 }

@@ -288,7 +288,7 @@ async function reloadUnresolved(page) {
   await page.waitForFunction(() => !document.querySelector('#google-configuration-check').disabled &&
     document.querySelector('#credential-fields').disabled && document.querySelector('#load-error').hidden);
   assert.equal((await page.locator('#proxy-url').innerText()).trim(), 'https://proxy.example.test');
-  assert(await page.locator('#credential-save').isDisabled(), 'the held fieldset disables its actual Save control');
+  assert(await page.locator('#credential-add').isDisabled(), 'the held fieldset disables its actual Save control');
   await noMaterial(page);
 }
 async function inspect(page) {
@@ -325,7 +325,7 @@ const tests = [
       assert.match(await node(page, 'status').innerText(), /not supported|unavailable|deployment/i);
       assert.equal(observed.prepares.length + observed.cancels.length, 0);
       activeStep = 'compatibility-static-controls';
-      await view(page, 'credentials'); assert(!await page.locator('#credential-save').isDisabled());
+      await view(page, 'credentials'); assert(!await page.locator('#credential-add').isDisabled());
     });
   }],
   ['review presents exact callback and Gmail addition; Prepare is write-only and never hot applies', (browser, directory) => fixture(browser, {}, async (page, state, observed) => {
@@ -518,7 +518,7 @@ const tests = [
       // controller may emit again, but no request or mutation is authorized.
       await page.locator('#mutation-review-confirm').click();
       assert(await page.locator('#credential-fields').evaluate(fieldset => fieldset.disabled === true));
-      assert(await page.locator('#credential-save').isDisabled());
+      assert(await page.locator('#credential-add').isDisabled());
       assert(await page.locator('#mutation-review').isVisible());
       assert.equal(observed.requests.length, beforeReload);
       await screenshot(page, directory, 'google-recovery-' + status + '-overview-desktop');
@@ -547,7 +547,7 @@ const tests = [
       assert(await node(page, 'recovery-hint').isHidden(), 'only the resolved Google hint retires');
       assert(await page.locator('#mutation-review').isVisible(), 'terminal receipt does not acknowledge the shared review');
       assert(await page.locator('#credential-fields').evaluate(fieldset => fieldset.disabled === true));
-      assert(await page.locator('#credential-save').isDisabled());
+      assert(await page.locator('#credential-add').isDisabled());
       assert(!await page.locator('#mutation-review-confirm').isDisabled());
       assert.deepEqual(await noMaterial(page), reference);
       const afterCheck = observed.requests.length;
@@ -555,7 +555,7 @@ const tests = [
       await page.locator('#mutation-review-confirm').click(); await ready(page);
       assert(await page.locator('#mutation-review').isHidden());
       assert(await node(page, 'recovery-hint').isHidden());
-      await view(page, 'credentials'); assert(!await page.locator('#credential-save').isDisabled(),
+      await view(page, 'credentials'); assert(!await page.locator('#credential-add').isDisabled(),
         'successful explicit confirmation proves the Google hold was released');
       assert.equal(observed.requests.length, afterCheck, 'confirmation is local, not a replay or second recovery request');
       assert.equal(observed.prepares.length, 1); assert.equal(observed.cancels.length, 0);
@@ -567,7 +567,7 @@ const tests = [
       assert(await page.locator('#mutation-review').isHidden());
       assert.equal(await node(page, 'recovery-hint').count(), 0, 'completed recovery must not become a fresh hold');
       assert(await page.locator('#credential-fields').evaluate(fieldset => fieldset.disabled === false));
-      assert(!await page.locator('#credential-save').isDisabled());
+      assert(!await page.locator('#credential-add').isDisabled());
       assert.equal(await noMaterial(page), null); assert.equal(observed.requests.length, afterCheck);
       assert.equal(observed.prepares.length, 1); assert.equal(observed.cancels.length, 0);
       await screenshot(page, directory, 'completed-google-' + status + '-overview-mobile');

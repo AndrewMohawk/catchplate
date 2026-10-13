@@ -56,15 +56,16 @@ function buildCurlCommand({proxyUrl, upstreamUrl, method, caPath, allowedHeaders
 if (typeof module !== 'undefined' && module.exports) module.exports = {buildCurlCommand, clientCredentialInput, credentialHeaderTarget};
 else {
   const workspace = createOperatorWorkspace();
-  let reauthorization; let xAccounts;
-  createCredentialsView(workspace, {reauthorize: id => reauthorization.open(id), disconnectX: id => xAccounts.disconnect(id)}); createAccessRulesView(workspace);
+  let reauthorization; let xAccounts; let connect;
+  createCredentialsView(workspace, {reauthorize: id => reauthorization.open(id), disconnectX: id => xAccounts.disconnect(id),
+    add: () => connect.addCredential(), use: id => connect.selectCredential(id)}); createAccessRulesView(workspace);
   const applications = createApplicationsView(workspace);
   reauthorization = createGoogleReauthorizationView(workspace, applications);
   const proxy = createProxyView(workspace, applications); const audit = createAuditView(workspace);
   const upstreams = createUpstreamsView(workspace);
   const googleConfiguration = createGoogleConfigurationView(workspace);
   const xConfiguration = createXConfigurationView(workspace);
-  const connect = createConnectView(workspace, applications, proxy);
+  connect = createConnectView(workspace, applications, proxy);
   const notifications = createNotificationsView(workspace);
   xAccounts = createXAccountsView(workspace, applications, connect);
   createGoogleView(workspace, applications, connect);
@@ -75,7 +76,7 @@ else {
     for (const name of Object.keys(operatorViews)) {
       element(name).hidden = name !== view;
       const link = document.querySelector('nav a[href="#' + name + '"]');
-      if (name === view) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
+      if (link) { if (name === view) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current'); }
     }
     element('page-label').textContent = operatorViews[view]; document.title = operatorViews[view] + ' - Serverware operator workspace';
     connect.show(view === 'connect');
@@ -85,6 +86,13 @@ else {
     xConfiguration.show(view === 'proxy');
     if (view === 'audit') audit.open();
   }
+  // The retained #connect route is an action, not a second resource inventory.
+  // Explicit links open access setup; the credential editor selects save-only
+  // mode through its own controller entrypoint without changing API identities.
+  document.addEventListener('click', event => {
+    const link = event.target.closest('a[href="#connect"]');
+    if (link && !connect.startSetup()) event.preventDefault();
+  });
   element('overview-try-demo').addEventListener('click', () => {
     const panel = element('overview-demo-panel'); panel.hidden = !panel.hidden;
     element('overview-try-demo').setAttribute('aria-expanded', String(!panel.hidden));
@@ -108,12 +116,12 @@ else {
       const configurable = approved && rule.status === 'active' && tokenValid && operatorRuleSupported(rule, catalog);
       const state = rule.status !== 'active' ? 'Revoked permission' : !tokenValid ? 'Application access unavailable' :
         !configurable ? 'Setup unavailable' : workspace.loaded() && rule.enforcement === 'active' ? 'Policy loaded · request untested' : 'Activation pending';
-      const card = resourceCard(rule, state, [['Application', app?.name || 'Unavailable application'],
+      const card = resourceCard(rule, state, [['Application', app?.name || 'Unavailable client'],
         ['Account or key', credential?.name || 'Unavailable account or key'], ['Allowed request', rule.methods.join(', ') + ' ' + rule.upstream_url]]);
       card.dataset.demoRuleId = rule.id;
       const details = textNode('details'); details.append(textNode('summary', 'Details'));
       const metadata = textNode('dl', undefined, 'metadata');
-      for (const [label, value] of [['Permission ID', rule.id], ['Application ID', rule.application_id], ['Credential ID', rule.credential_id]])
+      for (const [label, value] of [['Permission ID', rule.id], ['Client ID', rule.application_id], ['Credential ID', rule.credential_id]])
         metadata.append(textNode('dt', label), textNode('dd', value));
       details.append(metadata); card.append(details);
       const button = textNode('button', 'Open client setup', 'secondary'); button.dataset.demoOpen = '';
@@ -148,10 +156,10 @@ else {
       element('overview-' + name + '-count').textContent = catalog ? String(catalog[collection].filter(item => item.status === 'active').length) : 'Unavailable';
     if (catalog) {
       const validApps = catalog.applications.filter(item => item.status === 'active' && item.token_status === 'valid' && item.token_expires_at_epoch_ms > Date.now());
-      const step = !catalog.credentials.some(item => item.status === 'active') ? ['Connect your first app', '#connect'] :
-        !validApps.length ? catalog.applications.length ? ['Review expired application access', '#applications'] : ['Connect an app with a saved account or key', '#connect'] :
-        !catalog.access_rules.some(item => item.status === 'active' && validApps.some(app => app.id === item.application_id)) ? ['Choose permitted access for your app', '#connect'] :
-        !workspace.loaded() ? ['Check pending proxy activation', '#proxy'] : ['Configure your app and send a scoped test request', '#proxy'];
+      const step = !catalog.credentials.some(item => item.status === 'active') ? ['Add your first credential', '#credentials'] :
+        !validApps.length ? catalog.applications.length ? ['Review expired client access', '#applications'] : ['Set up access with a saved credential', '#connect'] :
+        !catalog.access_rules.some(item => item.status === 'active' && validApps.some(app => app.id === item.application_id)) ? ['Choose permissions for your client', '#connect'] :
+        !workspace.loaded() ? ['Check pending proxy activation', '#proxy'] : ['Configure your client and send a scoped test request', '#proxy'];
       element('overview-next-action').textContent = step[0]; element('overview-next-action').href = step[1];
     }
     if (location.hash === '#audit') audit.open();

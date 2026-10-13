@@ -19,8 +19,8 @@ long-lived credential.
 Open the running [Serverware instance](https://serverware.example.com/)
 with the homelab login. This is the product instance to use and demonstrate,
 not a separate disposable demo. Opening it does not start a native pilot,
-compile the proxy or require a verification ceremony. Start with **Connect an
-app** for your account or key, then choose the application's permission.
+compile the proxy or require a verification ceremony. Use the **Set up access**
+action to choose a credential, select a client and review its permission.
 Opening client setup does not execute a request or renew a token.
 
 The canonical entrypoint serves this persistent instance directly. The old
@@ -32,25 +32,32 @@ saved resources, policy, CA and custody; see the [deployment record](docs/operat
 
 There are three separate things to configure:
 
-- **Account or API key:** the provider secret belongs to the operator and stays
-  in Serverware. Saving it alone does not grant access or prove it works.
-- **Application:** the worker gets its own Serverware app access token, not the
-  provider secret. Save that token when it is shown once.
-- **Permission:** choose what that app may do with that account or key. For
+- **Credentials:** provider accounts and keys, including GitHub App installations.
+  Their secrets stay in Serverware. Saving one alone grants no client access.
+- **Clients:** your scripts, agents and CI jobs. Each gets its own expiring
+  Serverware proxy token, not the provider secret. Save it when shown once.
+- **Permissions:** choose what a client may do with a credential. For
   example, “Issue triage may read issues and comments in this GitHub repository.”
 
-**Connect an app** guides you through those choices. **Proxy setup** provides
+**Set up access** is an action, not another navigation section. **Credentials →
+Add credential** uses the same provider editor in save-only mode: it creates no
+client, proxy token or permission. On a saved credential, **Use with a client**
+continues setup with that exact credential selected, without asking for its
+secret again. A GitHub App is a provider credential, not a Serverware client.
+These consolidated UI labels are source-verified and await live deployment;
+see the [walkthrough checkpoint](docs/operator-demo.md#navigation-update--source-verified-not-yet-deployed).
+**Proxy setup** provides
 the proxy address, public CA download and client instructions; **Audit log**
 shows recorded changes and request outcomes. New supported JSON permissions need
 no request/response field lists unless you want optional content restrictions.
 Existing restricted permissions retain their restrictions. An optional dummy
 header is a public replacement marker, not either of the two secrets above.
 
-Follow the [instance walkthrough](docs/operator-demo.md). Its latest
-retained deployment verification covers the synthetic upstream and a GitHub
-public read through the LAN proxy, not authenticated provider-account access or
-an Internet-reachable proxy. Public proxy DNS still needs its separately reviewed
-repair; starting a native pilot cannot repair it. The console and forward
+Follow the [instance walkthrough](docs/operator-demo.md). The October 13
+[public proxy verification](docs/operator-public-proxy-verification.md) records
+the completed DNS repair and authenticated synthetic-route allow/revoke check
+from outside the homelab. This does not establish real provider-account access.
+The console and forward
 proxy are different endpoints; listener settings and approved destinations are
 deployment-managed. The new [destination review workflow](docs/operator-proxy-destinations.md)
 prepares retained configuration for a controlled restart; it does not apply live

@@ -169,7 +169,7 @@ function createXAccountsView(workspace, applications, connect) {
       const confirmed = validateTerminal();
       say('X operation: ' + operation.status.replaceAll('_', ' ') + (operation.reason ? ' (' + operation.reason.replaceAll('_', ' ') + ')' : '') +
         (confirmed ? '. Review the saved account and acknowledge this result. No posting permission was granted.' : '. Use Check result again; no request is replayed.'));
-      if (confirmed && !workspace.state.uncertain) workspace.requireReview('The X account operation has a final result. Acknowledge it in Accounts & keys, then review saved resources.');
+      if (confirmed && !workspace.state.uncertain) workspace.requireReview('The X account operation has a final result. Acknowledge it in Credentials, then review saved resources.');
     } catch (_) { warn('The X account result is unavailable or unverified. Keep its reference and use Check result. Absence is not permission to repeat.'); }
     finally { busy = false; render(); workspace.emit(); }
   }
@@ -228,7 +228,7 @@ function createXAccountsView(workspace, applications, connect) {
         ['Account', selected.provider_account], ['Connections to disconnect', describe(disconnectReview.affected_credential_ids, catalog().credentials)],
         ['Permissions to revoke', describe(disconnectReview.affected_rule_ids, catalog().access_rules)]
       ].flatMap(([label, value]) => [textNode('dt', label), textNode('dd', value)]));
-      say('Review every affected connection and permission. Applications and their proxy tokens are not deleted.');
+      say('Review every affected connection and permission. Clients and their proxy tokens are not deleted.');
     } catch (_) { disconnectReview = null; say('The disconnect scope could not be reviewed. No disconnect was sent.'); }
     finally { busy = false; render(); panel.scrollIntoView({block: 'nearest'}); }
   }
@@ -250,8 +250,8 @@ function createXAccountsView(workspace, applications, connect) {
     finally { busy = false; workspace.state.busy = false; render(); workspace.emit(); }
   });
   if (operationId || storageBlocked) warn(storageBlocked ?
-    'The X account recovery reference could not be read safely. Open Accounts & keys to inspect recovery; do not repeat an uncertain request.' :
-    'An X account operation needs review. Open Accounts & keys and use Check result.');
+    'The X account recovery reference could not be read safely. Open Credentials to inspect recovery; do not repeat an uncertain request.' :
+    'An X account operation needs review. Open Credentials and use Check result.');
   workspace.subscribe(render); render();
   return {disconnect, check};
 }

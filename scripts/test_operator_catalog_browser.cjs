@@ -243,6 +243,14 @@ async function fixture(browser, options, exercise) {
 }
 async function ready(page) { await page.waitForFunction(() => !document.querySelector('#credential-fields').disabled); }
 async function view(page, name) {
+  if (name === 'connect') {
+    await page.locator('nav a[href="#overview"]').click();
+    await page.locator('#overview-connect-service').click();
+    await page.locator('#connect').waitFor({state: 'visible'});
+    assert.equal(await page.locator('.page:visible').count(), 1);
+    assert.equal(await page.locator('nav a[href="#connect"]').count(), 0, 'setup is an action, not a duplicate resource workspace');
+    return;
+  }
   await page.locator(`nav a[href="#${name}"]`).click(); await page.locator('#' + name).waitFor({state: 'visible'});
   assert.equal(await page.locator('.page:visible').count(), 1); assert.equal(await page.locator(`nav a[href="#${name}"]`).getAttribute('aria-current'), 'page');
 }
@@ -255,9 +263,11 @@ async function noToken(page) {
   for (const id of ['copy-token', 'reveal-token', 'dismiss-token', 'download-config']) assert(await page.locator('#' + id).isDisabled(), id);
 }
 async function addCredential(page, custom = false) {
-  await ready(page); await view(page, 'credentials'); await page.locator('#credential-name').fill('Shared provider key');
-  if (custom) { await page.locator('#credential-auth-type').selectOption('header'); await page.locator('#credential-header-name').fill('X-API-Key'); }
-  await page.locator('#credential-secret').fill(SECRET); await page.locator('#credential-save').click();
+  await ready(page); await view(page, 'credentials'); await page.locator('#credential-add').click();
+  await page.locator('#connect-use-key').click(); await page.locator('#connect-credential-name').fill('Shared provider key');
+  if (custom) { await page.locator('#connect-credential-auth-type').selectOption('header'); await page.locator('#connect-credential-header-name').fill('X-API-Key'); }
+  await page.locator('#connect-credential-secret').fill(SECRET); await page.locator('#connect-credential-next').click();
+  await view(page, 'credentials');
 }
 async function addApplication(page, lifetime = '3600') {
   await ready(page); await view(page, 'applications'); await page.locator('#application-name').fill('Reporting application');
@@ -277,17 +287,17 @@ async function saveRule(page, name = 'Read status') {
 const tests = [
   ['overview guided-entry labels track credential, application and access progress before client setup', browser => fixture(browser, {}, async (page, state) => {
     await ready(page); await view(page, 'overview');
-    assert.equal(await page.locator('#overview-next-action').getAttribute('href'), '#connect');
-    assert.equal(await page.locator('#overview-next-action').innerText(), 'Connect your first app');
+    assert.equal(await page.locator('#overview-next-action').getAttribute('href'), '#credentials');
+    assert.equal(await page.locator('#overview-next-action').innerText(), 'Add your first credential');
     await addCredential(page); await ready(page); await view(page, 'overview');
     assert.equal(await page.locator('#overview-next-action').getAttribute('href'), '#connect');
-    assert.equal(await page.locator('#overview-next-action').innerText(), 'Connect an app with a saved account or key');
+    assert.equal(await page.locator('#overview-next-action').innerText(), 'Set up access with a saved credential');
     await addApplication(page); await heldToken(page); await settled(page); await view(page, 'overview');
     assert.equal(await page.locator('#overview-next-action').getAttribute('href'), '#connect');
-    assert.equal(await page.locator('#overview-next-action').innerText(), 'Choose permitted access for your app');
+    assert.equal(await page.locator('#overview-next-action').innerText(), 'Choose permissions for your client');
     await saveRule(page); await view(page, 'overview');
     assert.equal(await page.locator('#overview-next-action').getAttribute('href'), '#proxy');
-    assert.equal(await page.locator('#overview-next-action').innerText(), 'Configure your app and send a scoped test request');
+    assert.equal(await page.locator('#overview-next-action').innerText(), 'Configure your client and send a scoped test request');
     await view(page, 'proxy'); assert(!(await page.locator('#copy-command').isDisabled()));
     assert(!(await page.locator('#download-config').isDisabled()));
     await view(page, 'applications'); await heldToken(page);
@@ -297,8 +307,8 @@ const tests = [
     await addCredential(page); await ready(page);
     assert.deepEqual(state.posts, [{name: 'credentials', body: {name: 'Shared provider key', auth_type: 'bearer', header_name: 'Authorization', secret: SECRET,
       expected_revision: 1, expected_policy_hash: digest(1)}}]);
-    assert.equal(await page.locator('#credential-secret').inputValue(), ''); assert(!await page.locator('#credential-form input[type="url"]').count());
-    assert.equal(await page.locator('#credential-form textarea').count(), 0); assert.equal(state.applications.length, 0); assert.equal(state.rules.length, 0);
+    assert.equal(await page.locator('#connect-credential-secret').inputValue(), ''); assert(!await page.locator('#credential-form input[type="url"]').count());
+    assert.equal(await page.locator('#credential-form input, #credential-form textarea').count(), 0); assert.equal(state.applications.length, 0); assert.equal(state.rules.length, 0);
     assert.equal(state.active, digest(1)); assert(!(await page.locator('body').innerText()).includes(SECRET));
     assert(await page.locator('#credential-google-connect').isDisabled()); await noToken(page);
   })],
@@ -376,7 +386,7 @@ const tests = [
   ...['409', '422', '503', 'lost-after-commit'].map(fault => ['uncertain ' + fault + ' mutation blocks all writes until explicit state review', browser => fixture(browser, {fault}, async (page, state) => {
     await addCredential(page); await page.locator('#mutation-review').waitFor({state: 'visible'});
     await page.waitForFunction(() => !document.querySelector('#mutation-review-confirm').disabled);
-    assert.equal(state.posts.length, 1); assert.equal(await page.locator('#credential-secret').inputValue(), '');
+    assert.equal(state.posts.length, 1); assert.equal(await page.locator('#connect-credential-secret').inputValue(), '');
     for (const id of ['credential-fields', 'application-fields', 'access-rule-fields']) assert(await page.locator('#' + id).evaluate(node => node.disabled), id + ' remains disabled');
     assert(!(await page.locator('body').innerText()).includes(SECRET));
     await page.clock.runFor(10000); assert.equal(state.posts.length, 1, 'no automatic mutation replay');

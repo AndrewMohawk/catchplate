@@ -46,10 +46,19 @@ guided UI is an incremental implementation, not the final provider-preset UI.
 
 ### Interface contract
 
-Lead with **Connect an app**, then present one sentence: "Inbox worker may read
-mail using Andrew's Google account" or "Billing worker may use Billing key at
-this API; replace this exact dummy header." Saving an account/key remains an
-independent action and grants no application access by itself. Separate resource
+Use **Credentials**, **Clients**, and **Permissions** as the resource navigation.
+Credentials are provider accounts and keys (including GitHub App installations);
+clients are the scripts, agents and CI jobs using Serverware. The underlying
+application IDs and security ownership do not change with the UI labels.
+
+Lead with the **Set up access** action, not a duplicate navigation section, then
+present one sentence: "Inbox worker may read mail using Andrew's Google account"
+or "Billing worker may use Billing key at
+this API; replace this exact dummy header." **Credentials → Add credential**
+uses the same provider editor in save-only mode and stops without creating a
+client, proxy token or permission. **Use with a client** on a saved credential
+starts setup with that exact credential, without requesting its secret again.
+Saving an account/key remains an independent action. Separate resource
 ownership in the backend must not become separate mandatory setup exercises.
 
 Account cards should lead with the account name, meaningful permission names,
@@ -68,8 +77,8 @@ additions. An exact endpoint editor is an advanced option, not the normal way to
 describe a service. The existing example files are demonstrations, not safe
 defaults to copy wholesale.
 
-Keep **Proxy setup** and its CA download first-class, alongside **Accounts and
-keys**, **Applications and access**, and **Audit log**. Provider application
+Keep **Proxy setup** and its CA download first-class, alongside **Credentials**,
+**Clients**, **Permissions**, and **Audit log**. Provider application
 configuration belongs in administrator settings. Approvals need their own
 pending-action workflow when implemented; do not offer an inert approval option.
 
@@ -272,11 +281,11 @@ is established by this document or by source tests.
 
 ## Resource model
 
-- **Credentials and accounts:** a named encrypted credential or verified OAuth
+- **Credentials:** a named encrypted credential or verified OAuth
   account. Saving a static credential requires its name, authentication type,
   value, and applicable header name, not an endpoint or response schema. The
   existing encrypted credential database remains the only secret store.
-- **Applications:** the identity used by one client or job to authenticate to
+- **Clients (application identities):** the identity used by one client or job to authenticate to
   Serverware. Creation and rotation return a client token once; only its verifier
   is persisted. Lifetime is explicit and finite. Provider-token refresh and
   client-token rotation are independent operations.
@@ -296,26 +305,28 @@ is not provider-side revocation or forensic erasure of historical database pages
 
 ## User journeys and acceptance
 
-The default journey is **connect an account, choose an application, allow its
-use, copy the client setup**. Separate resources must not become disconnected
-administrative chores. The overview should show the next unfinished step and
+The default journey is **Set up access: choose a credential, choose a client,
+review permissions, copy the client setup**. Separate resources must not become
+disconnected administrative chores. The overview should show the next unfinished step and
 each resource should link to its assignments. Advanced controls belong behind
 an explicit restriction choice, with a plain-language summary of what will be
 allowed before publication.
 
-The primary action should be **Connect an app**, with inline choices to reuse or
-create its account/credential and application identity. The separate resource
-pages are management views, not three mandatory stops in onboarding. Present
-provider operations in the operator's language; do not expose a policy compiler
+The primary action is **Set up access**, with inline choices to reuse or
+create a credential and client identity. **Add credential** is a save-only entry
+to the same editor, not a competing setup form or an implicit grant. The separate
+resource pages are management views, not three mandatory stops in onboarding.
+Present provider operations in the operator's language; do not expose a policy compiler
 form as the default journey.
 
 Choose the connection method first: **Connect Google**, **Use an API key**, or
 **Use a saved connection**. Show only the relevant form. Opening Google setup
 must not leave a second API-key form and another Connect Google button competing
-on the same screen. After consent, continue with the verified account selected.
-Explain account permissions once; keep exceptional recovery controls contextual.
-The current additive Google consent panel is an integration step, not acceptance
-of this exclusive, single-journey layout.
+on the same screen. Credential-only consent must stop at the saved account;
+only an explicit use action continues into client access with that exact account
+selected. Explain account permissions once; keep exceptional recovery controls
+contextual. This layout does not establish provider consent, refresh health or
+deployed acceptance by itself.
 
 A new basic authentication-replacement journey must require **zero response
 configuration interactions**. Select the advertised supported no-filter contract

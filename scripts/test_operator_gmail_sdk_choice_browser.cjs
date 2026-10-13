@@ -221,7 +221,7 @@ const tests = [
     ];
     for (const variant of variants) await fixture(browser, sdkOptions(variant), async (page, state, observed) => {
       await sdkDraft(page); assert(await page.locator('#connect-review').isDisabled());
-      assert.match(await page.locator('#connect-gmail-sdk-status').innerText(), /advertised|Applications/);
+      assert.match(await page.locator('#connect-gmail-sdk-status').innerText(), /advertised|Clients/);
       if (variant.applications) {
         assert.equal(await page.locator('#connect-gmail-sdk-app-link').getAttribute('href'), '#applications');
         assert(await page.locator('#connect-gmail-sdk-app-link').isVisible());

@@ -178,7 +178,7 @@ function chooseModeOptions(id, items, placeholder) {
     missing.value = previous; missing.disabled = true; select.append(missing); select.value = previous;
   }
 }
-const operatorViews = {connect: 'Connect an app', overview: 'Overview', credentials: 'Accounts & keys', applications: 'Applications',
+const operatorViews = {connect: 'Set up access', overview: 'Overview', credentials: 'Credentials', applications: 'Clients',
   'access-rules': 'Permissions', proxy: 'Proxy setup', audit: 'Audit log', notifications: 'Notifications'};
 function operatorSyntheticPermissions(catalog) {
   // Destination matching is not provenance: preserve names/records and require

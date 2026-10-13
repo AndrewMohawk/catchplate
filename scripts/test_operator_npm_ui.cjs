@@ -56,6 +56,16 @@ class Node {
   removeAttribute(name) { delete this.attrs[name]; }
   addEventListener(name, callback) { this.events[name] = callback; }
   reportValidity() { return true; } // Field validation is NOT browser acceptance.
+  reset() {
+    assert.equal(this.tag, 'form', 'only an inert form can reset its input defaults');
+    for (const node of this.descendants()) {
+      if (['input', 'textarea'].includes(node.tag)) {
+        node.value = node.attrs.value || ''; node.checked = Object.hasOwn(node.attrs, 'checked');
+      } else if (node.tag === 'select') {
+        node.value = (node.options.find(option => Object.hasOwn(option.attrs, 'selected')) || node.options[0])?.value || '';
+      }
+    }
+  }
   setCustomValidity(message) { this.invalid = message; }
   scrollIntoView() {}
   descendants() { return this.children.flatMap(node => [node, ...node.descendants()]); }
@@ -95,7 +105,7 @@ function context(dom = inertDom()) {
 const pure = context();
 const project = input => clone(pure.run('projectCatalog(input)', input));
 const fixture = (changes = {}) => {
-  const current = context(); const raw = rawCatalog(changes); const posts = [];
+  const current = context(); const raw = rawCatalog(changes); const posts = []; const clientCreations = [];
   const workspace = {state: {catalog: project(raw), busy: false, uncertain: false}, ready: () => true, loaded: () => true,
     subscribe(callback) { this.render = callback; callback(); }, refresh() { this.render(); },
     async mutate(path, body, status, receipt) {
@@ -108,25 +118,97 @@ const fixture = (changes = {}) => {
         assert.equal(path, 'access-rules/npm-metadata');
         assert.deepEqual(Object.keys(body).sort(), ['application_id', 'credential_id', 'name', 'operation_bundle', 'packages']);
         assert.deepEqual(clone(body.packages), PACKAGES);
-        raw.access_rules = [npmRule({name: body.name})];
+        raw.access_rules = [npmRule({name: body.name, credential_id: body.credential_id, application_id: body.application_id})];
       }
-      raw.revision++; this.state.catalog = project(raw);
+      raw.revision++; const refreshed = project(raw);
       const key = path.startsWith('credentials') ? 'credential' : 'access_rule';
-      receipt({revision: raw.revision, [key]: this.state.catalog[key === 'credential' ? 'credentials' : 'access_rules'][0]});
+      receipt({revision: raw.revision, policy: clone(raw.policy), [key]: refreshed[key === 'credential' ? 'credentials' : 'access_rules'][0]});
+      this.state.catalog = refreshed;
       this.render(); return true;
     }};
   current.value.workspaceFixture = workspace;
-  const view = current.run('createConnectView(workspaceFixture, {mount(){},tokenFor(){return null;}}, {mount(){},select(){}})');
+  current.value.applicationsFixture = {mount(){}, tokenFor(){return null;}, create(...args) {
+    clientCreations.push(args); throw new Error('Unexpected client creation in credential-only fixture');
+  }};
+  const view = current.run('createConnectView(workspaceFixture, applicationsFixture, {mount(){},select(){}})');
   const node = id => current.dom.getElementById(id);
   const event = async (id, type = 'click') => { const target = node(id); assert.equal(typeof target.events[type], 'function');
     await target.events[type]({preventDefault() {}, currentTarget: target}); };
-  return {...current, raw, workspace, posts, view, node, event};
+  return {...current, raw, workspace, posts, clientCreations, view, node, event};
 };
 async function existingPair(f) {
   await f.event('connect-use-saved'); f.node('connect-credential-choice').value = IDS.credential;
   await f.event('connect-credential-form', 'submit'); f.node('connect-application-choice').value = IDS.application;
   await f.event('connect-application-form', 'submit');
 }
+
+// Creation-receipt tests use the actual core transport/uncertainty controller,
+// not the smaller provider-form stub above. Only this in-memory fetch exists.
+async function credentialSaveFixture(method, options = {}) {
+  const current = context(); const requests = [], bodies = [], forbidden = [];
+  const priorId = '77777777-7777-4777-8777-777777777777';
+  const raw = rawCatalog({credentials: [credential({id: priorId, name: 'Previously saved credential'})], rules: []});
+  const originalApplications = clone(raw.applications);
+  raw.capabilities.github = {schema: 'serverware.operatorGithub/v1', connection_type: 'github_token_v1',
+    create_credential_path: '/api/operator-demo/credentials/github-token', create_rule_path: '/api/operator-demo/access-rules/github',
+    api_origin: 'https://api.github.com', destination_allowed: true,
+    operation_bundles: ['github_issues_read_v1', 'github_issues_write_v1'], sdk_auth_token: 'serverware-github-placeholder-v1',
+    placeholder: 'token serverware-github-placeholder-v1', query_mode: 'githubRestV1',
+    response_mode: 'unfiltered_json_or_empty_v2', source_pair_required: true};
+  raw.allowed_upstreams.push('https://api.github.com');
+  const name = 'Reviewed ' + method + ' credential';
+  const selected = credential({name, ...(method === 'key' ? {auth_type: 'header', header_name: 'X-Reviewed-Key'} :
+    {connection_type: method === 'npm' ? 'npm_token_v1' : 'github_token_v1', provider_id: method === 'npm' ? 'npm' : 'github'})});
+  const response = body => ({ok: true, status: 200, headers: {get: () => 'application/json'}, json: async () => clone(body)});
+  Object.assign(current.value, {TextEncoder, clearTimeout() {}, AbortSignal: {timeout: () => undefined}});
+  for (const key of ['sessionStorage', 'localStorage']) Object.defineProperty(current.value, key,
+    {get() { forbidden.push(key); throw new Error('Storage is forbidden'); }});
+  current.value.fetch = async (path, init) => {
+    assert.equal(init.credentials, 'same-origin'); assert.equal(init.cache, 'no-store'); assert.equal(init.redirect, 'error');
+    if (!init.method) {
+      assert.equal(path, '/api/operator-demo/catalog'); requests.push({method: 'GET', path}); return response(raw);
+    }
+    assert.equal(init.method, 'POST'); assert.equal(path, '/api/operator-demo/credentials' +
+      (method === 'key' ? '' : method === 'npm' ? '/npm-token' : '/github-token'));
+    const payload = JSON.parse(init.body);
+    assert.equal(payload.secret, PRIVATE); assert.equal(payload.name, name);
+    assert.equal(payload.expected_revision, 1); assert.equal(payload.expected_policy_hash, digest(1));
+    const fields = ['expected_policy_hash', 'expected_revision', 'name', 'secret'];
+    if (method === 'key') {
+      fields.push('auth_type', 'header_name'); assert.equal(payload.auth_type, 'header'); assert.equal(payload.header_name, 'X-Reviewed-Key');
+    }
+    assert.deepEqual(Object.keys(payload).sort(), fields.sort()); delete payload.secret;
+    requests.push({method: 'POST', path, payload}); raw.revision = 2; raw.credentials.push(clone(selected));
+    const result = {revision: 2, policy: clone(raw.policy), credential: clone(selected)};
+    options.receipt?.(result, priorId); options.refreshed?.(raw, priorId);
+    return response(result);
+  };
+  const workspace = current.run('createOperatorWorkspace()'); const mutate = workspace.mutate;
+  workspace.mutate = (...args) => { bodies.push(args[1]); return mutate(...args); };
+  assert.equal(await workspace.refresh(), true); current.value.workspaceFixture = workspace;
+  current.value.clientFixture = {mount(){}, tokenFor(){return null;}, create() { forbidden.push('client'); throw new Error('Client creation is forbidden'); }};
+  const view = current.run('createConnectView(workspaceFixture, clientFixture, {mount(){},select(){}})'); view.show(true);
+  const node = id => current.dom.getElementById(id);
+  const event = async (id, kind = 'click') => {
+    const target = node(id); assert.equal(typeof target.events[kind], 'function');
+    await target.events[kind]({preventDefault(){}, currentTarget: target});
+  };
+  const save = async () => {
+    assert.equal(view.addCredential(), true); await event('connect-use-' + method);
+    node('connect-credential-name').value = name; node('connect-credential-secret').value = PRIVATE;
+    if (method === 'key') { node('connect-credential-auth-type').value = 'header'; node('connect-credential-header-name').value = 'X-Reviewed-Key'; }
+    await event('connect-credential-form', 'submit');
+  };
+  const clean = () => {
+    assert.deepEqual(forbidden, []); assert.equal(node('connect-credential-secret').value, '');
+    assert(!JSON.stringify([workspace.state, requests, bodies,
+      [...current.dom.nodes.values()].map(value => [value.value, value.textContent])]).includes(PRIVATE));
+    assert.equal(requests.filter(value => value.method === 'POST').length, 1); assert.deepEqual(raw.access_rules, []);
+    assert.deepEqual(raw.applications, originalApplications);
+  };
+  return {...current, raw, workspace, view, node, event, save, clean, requests};
+}
+
 const tests = [
   ['inert select options reflect parsed and replaced option descendants only', () => {
     const dom = inertDom(); const select = dom.getElementById('connect-github-type');
@@ -138,6 +220,13 @@ const tests = [
     select.replaceChildren(new Node('option', {value: 'fixture-replacement'}));
     assert.deepEqual(select.options.map(option => option.value), ['fixture-replacement']);
     assert.equal(new Node('div').options, undefined);
+  }],
+  ['inert form reset restores declared defaults without executing any browser effects', () => {
+    const form = new Node('form'); const input = new Node('input', {value: 'default'});
+    const choice = new Node('select'); choice.append(new Node('option', {value: 'first'}), new Node('option', {value: 'second', selected: ''}));
+    const checked = new Node('input', {checked: ''}); const unchecked = new Node('input');
+    form.append(input, choice, checked, unchecked); input.value = 'changed'; choice.value = 'first'; checked.checked = false; unchecked.checked = true;
+    form.reset(); assert.equal(input.value, 'default'); assert.equal(choice.value, 'second'); assert(checked.checked); assert(!unchecked.checked);
   }],
   ['exact capability and public catalog projection never retain secret fields', () => {
     const raw = rawCatalog({credentials: [npmCredential({secret: PRIVATE, token: PRIVATE})]});
@@ -211,6 +300,124 @@ const tests = [
     assert.equal(f.node('connect-credential-secret').value, ''); assert.equal(f.raw.access_rules.length, 0);
     assert(!f.node('connect-application-step').hidden);
   }],
+  ['Add credential saves once and cannot create a client or permission without a separate action', async () => {
+    const f = fixture({credentials: [], rules: []}); const clientsBefore = clone(f.raw.applications);
+    assert.equal(f.view.addCredential(), true); assert.equal(f.node('connect-title').textContent, 'Add credential');
+    await f.event('connect-use-npm'); f.node('connect-credential-name').value = 'Saved npm credential';
+    f.node('connect-credential-secret').value = PRIVATE; await f.event('connect-credential-form', 'submit');
+    assert.equal(f.posts.length, 1); assert.equal(f.posts[0].path, 'credentials/npm-token');
+    assert.equal(f.node('connect-credential-secret').value, ''); assert(!f.node('connect-credential-saved').hidden);
+    for (const step of ['application', 'access', 'review', 'setup']) assert(f.node('connect-' + step + '-step').hidden);
+    f.node('connect-application-choice').value = 'new'; f.node('connect-application-name').value = 'Must not be created';
+    f.node('connect-token-ttl').value = '3600';
+    await f.event('connect-application-form', 'submit'); await f.event('connect-access-form', 'submit'); await f.event('connect-grant');
+    f.workspace.refresh(); assert.equal(f.posts.length, 1); assert.equal(f.clientCreations.length, 0);
+    assert.deepEqual(f.raw.applications, clientsBefore); assert.deepEqual(f.raw.access_rules, []);
+    await f.event('connect-saved-done'); assert.equal(f.value.location.hash, 'credentials');
+    assert.equal(f.posts.length, 1); assert.equal(f.clientCreations.length, 0);
+  }],
+  ['the saved credential receipt enters client setup only after explicit Set up access', async () => {
+    const f = fixture({credentials: [], rules: []}); assert.equal(f.view.addCredential(), true);
+    await f.event('connect-use-npm'); f.node('connect-credential-name').value = 'Saved npm credential';
+    f.node('connect-credential-secret').value = PRIVATE; await f.event('connect-credential-form', 'submit');
+    await f.event('connect-saved-use'); assert(f.node('connect-credential-saved').hidden);
+    assert(!f.node('connect-application-step').hidden); assert.equal(f.node('connect-credential-choice').value, IDS.credential);
+    assert.equal(f.posts.length, 1); assert.equal(f.clientCreations.length, 0); assert.deepEqual(f.raw.access_rules, []);
+  }],
+  ['saved credential action binds the exact selected ID even when names are identical', async () => {
+    const other = '66666666-6666-4666-8666-666666666666';
+    const f = fixture({credentials: [npmCredential({name: 'Same label'}), npmCredential({id: other, name: 'Same label'})], rules: []});
+    assert.equal(f.view.selectCredential(other), true); assert.equal(f.node('connect-credential-choice').value, other);
+    assert(!f.node('connect-application-step').hidden); assert.equal(f.posts.length, 0);
+    f.node('connect-application-choice').value = IDS.application; await f.event('connect-application-form', 'submit');
+    f.node('connect-npm-packages').value = PACKAGES.join('\n'); await f.event('connect-access-form', 'submit');
+    await f.event('connect-grant'); assert.equal(f.posts.length, 1); assert.equal(f.posts[0].path, 'access-rules/npm-metadata');
+    assert.equal(f.posts[0].body.credential_id, other); assert.equal(f.posts[0].body.application_id, IDS.application);
+    assert.equal(f.raw.credentials.length, 2); assert.equal(f.clientCreations.length, 0);
+  }],
+  ['unavailable selected credential never falls back to another saved credential', async () => {
+    const other = '66666666-6666-4666-8666-666666666666';
+    const f = fixture({credentials: [npmCredential(), npmCredential({id: other})], rules: []});
+    assert.equal(f.view.selectCredential(other), true);
+    f.raw.credentials = [npmCredential()]; f.raw.revision++; f.workspace.state.catalog = project(f.raw); f.workspace.render();
+    f.node('connect-application-choice').value = IDS.application; await f.event('connect-application-form', 'submit');
+    assert(f.node('connect-access-step').hidden); assert.equal(f.posts.length, 0); assert.equal(f.clientCreations.length, 0);
+    assert.equal(f.view.selectCredential(other), false); assert.equal(f.posts.length, 0);
+  }],
+  ['new setup entrypoints preserve unresolved mutation and busy-state write holds', () => {
+    for (const held of ['busy', 'uncertain']) {
+      const f = fixture({rules: []}); assert.equal(f.view.addCredential(), true);
+      f.workspace.state[held] = true; f.workspace.render();
+      assert.equal(f.view.addCredential(), false); assert.equal(f.view.selectCredential(IDS.credential), false);
+      assert.equal(f.view.startSetup(), false);
+      assert.equal(f.posts.length, 0); assert.equal(f.clientCreations.length, 0);
+    }
+  }],
+  ['unconfirmed save receipt cannot be discarded by switching setup entrypoints', async () => {
+    const f = fixture({credentials: [], rules: []}); let saves = 0;
+    f.workspace.mutate = async (path, body, status, receipt) => {
+      assert.equal(path, 'credentials/npm-token'); saves++;
+      receipt({revision: 2, policy: clone(f.raw.policy), credential: npmCredential({name: body.name})}); f.workspace.render(); return true;
+    };
+    assert.equal(f.view.addCredential(), true); await f.event('connect-use-npm');
+    f.node('connect-credential-name').value = 'Awaiting catalog'; f.node('connect-credential-secret').value = PRIVATE;
+    await f.event('connect-credential-form', 'submit'); assert.equal(saves, 1);
+    assert(f.node('connect-credential-saved').hidden); assert(f.node('connect-application-step').hidden);
+    assert.equal(f.view.addCredential(), false); assert.equal(f.view.selectCredential(IDS.credential), false);
+    assert.equal(f.view.startSetup(), false);
+    await f.event('connect-credential-form', 'submit'); f.workspace.refresh(); assert.equal(saves, 1);
+    assert.equal(f.clientCreations.length, 0); assert.equal(f.node('connect-credential-secret').value, '');
+  }],
+  ...['key', 'github', 'npm'].map(method => [method + ' save-only creation uses actual core CAS transport and exact refreshed identity', async () => {
+    const f = await credentialSaveFixture(method, {receipt: result => { result.credential.secret = PRIVATE; }});
+    await f.save(); assert.equal(f.workspace.state.uncertain, false); assert(!f.node('connect-credential-saved').hidden);
+    assert(f.node('connect-application-step').hidden); f.clean();
+    await f.event('connect-saved-use'); assert(!f.node('connect-application-step').hidden);
+    assert.equal(f.node('connect-credential-choice').value, IDS.credential); f.clean();
+  }]),
+  ...['key', 'github', 'npm'].map(method => [method + ' mismatched creation receipts hold writes and never replay or select a different credential', async () => {
+    const changes = [
+      (result, prior) => { result.credential.id = prior; },
+      result => { result.credential.id = 'not-a-uuid'; },
+      result => { result.credential.name = 'Unreviewed name'; },
+      result => { result.credential.auth_type = method === 'key' ? 'bearer' : 'header'; },
+      result => { result.credential.header_name = 'X-Unreviewed-Header'; },
+      result => { result.credential.connection_type = method === 'key' ? 'github_token_v1' : null; },
+      result => { result.credential.provider_id = method === 'key' ? 'github' : 'unreviewed-provider'; },
+      result => { result.credential.active_rule_count = 1; },
+      result => { result.credential.created_at = 'not-a-date'; },
+      result => { result.credential.credential_generation = 2; },
+      result => { result.revision = 1; },
+      result => { result.revision = 3; },
+      result => { result.policy.policy_hash = digest(2); },
+      result => { result.policy.sequence = 2; },
+      result => { delete result.policy; },
+      result => { result.client_token = 'unexpected-client-token'; },
+    ];
+    for (const receipt of changes) {
+      const f = await credentialSaveFixture(method, {receipt}); await f.save();
+      assert.equal(f.workspace.state.uncertain, true); assert(f.node('connect-credential-saved').hidden);
+      assert(f.node('connect-application-step').hidden); assert.equal(f.view.selectCredential(IDS.credential), false);
+      await f.event('connect-credential-form', 'submit'); await f.workspace.refresh(); f.clean();
+    }
+  }]),
+  ...['key', 'github', 'npm'].map(method => [method + ' refreshed identity drift never confirms the saved credential or repeats creation', async () => {
+    const changes = [
+      raw => { raw.credentials.at(-1).name = 'Changed after receipt'; },
+      raw => { raw.credentials.at(-1).header_name = 'X-Changed-After-Receipt'; },
+      raw => { raw.credentials.at(-1).credential_generation = 2; },
+      raw => { raw.credentials.at(-1).created_at = new Date(NOW + 1000).toISOString(); },
+      raw => { raw.credentials.at(-1).status = 'revoked'; },
+      raw => { raw.credentials.pop(); },
+      raw => { raw.policy.policy_hash = raw.policy.loaded_policy_hash = digest(2); raw.policy.sequence = 2; },
+    ];
+    for (const refreshed of changes) {
+      const f = await credentialSaveFixture(method, {refreshed}); await f.save();
+      assert(f.node('connect-credential-saved').hidden); assert(f.node('connect-application-step').hidden);
+      assert.equal(f.view.addCredential(), false); assert.equal(f.view.selectCredential(IDS.credential), false);
+      await f.event('connect-credential-form', 'submit'); await f.workspace.refresh(); f.clean();
+    }
+  }]),
   ['actual connect handlers review exact packages then send one small npm grant', async () => {
     const f = fixture({rules: []}); await existingPair(f);
     assert(!f.node('connect-npm-packages-group').hidden); assert(f.node('connect-exact-destination').hidden);

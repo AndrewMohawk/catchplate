@@ -155,9 +155,9 @@ function createGoogleView(workspace, applications, connect) {
     } catch (_) { notice = 'Saved Google connection status is unavailable. No retry or account selection was performed.'; return false; }
     finally { checking = false; render(); }
   }
-  function open() {
+  function open(event) {
     if (!capability() || workspace.state.busy || workspace.state.uncertain) return;
-    if (!connect.openGoogle()) return;
+    if (!connect.openGoogle({credentialOnly: event?.currentTarget.id === 'credential-google-connect'})) return;
     opened = true; notice = ''; render(); element('google-consent-panel').scrollIntoView({block: 'nearest'});
     observe();
   }

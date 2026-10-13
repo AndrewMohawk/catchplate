@@ -129,7 +129,7 @@ function operatorGoogleAssignments(credential, catalog, status, includeIds = fal
   const rules = catalog.access_rules.filter(rule => rule.credential_id === credential.id && rule.status === status);
   return [...new Set(rules.map(rule => rule.application_id))].map(id => {
     const application = catalog.applications.find(item => item.id === id);
-    return (application?.name || 'Retained application') + (includeIds ? ' (' + id + ')' : '');
+    return (application?.name || 'Retained client') + (includeIds ? ' (' + id + ')' : '');
   }).join(', ') || 'None';
 }
 function operatorCredentialHasExpiredAppAccess(credential, catalog, now = Date.now()) {
@@ -144,10 +144,10 @@ function operatorCredentialHasExpiredAppAccess(credential, catalog, now = Date.n
 function operatorCredentialUseRows(credential, catalog) {
   const rules = catalog.access_rules.filter(rule => rule.credential_id === credential.id && rule.status === 'active');
   const apps = [...new Set(rules.map(rule => rule.application_id))].map(id =>
-    catalog.applications.find(item => item.id === id)?.name || 'Unavailable application');
-  return [['Assigned apps', apps.join(', ') || 'No active saved assignments'],
+    catalog.applications.find(item => item.id === id)?.name || 'Unavailable client');
+  return [['Assigned clients', apps.join(', ') || 'No active saved assignments'],
     ['Saved permissions', rules.map(rule => rule.name + ' — ' + operatorRuleRestrictions(rule)[0][1]).join('; ') ||
-      'None. Saving a key alone grants no app access.']];
+      'None. Saving a credential alone grants no client access.']];
 }
 function operatorGoogleAccountRows(credential, catalog) {
   return [['Google account', credential.provider_account], ['Permission preset', credential.permission_preset],
@@ -219,7 +219,7 @@ function operatorGoogleAccountCard(credential, catalog) {
   const badge = quarantined ? 'Quarantined · unusable' : known ? 'Saved' : 'Unsupported · unusable';
   const card = resourceCard(credential, badge, [['Google account', credential.provider_account],
     ['Permissions', operatorGooglePermission(credential)],
-    ['Assigned apps', operatorGoogleAssignments(credential, catalog, 'active')]]);
+    ['Assigned clients', operatorGoogleAssignments(credential, catalog, 'active')]]);
   card.dataset.credentialType = 'google_oauth';
   const notice = textNode('p', quarantined ?
     'Unavailable for use. Google revocation is not proven.' : !known ?
@@ -338,28 +338,19 @@ function createStaticKeyReplacementView(workspace) {
   return {open, render};
 }
 function createCredentialsView(workspace, actions = {}) {
-  const form = element('credential-form');
   const replacement = createStaticKeyReplacementView(workspace);
   const githubAppReplacement = createGithubAppKeyReplacementView(workspace);
   const aws = createAwsCredentialsView(workspace);
-  element('credential-auth-type').addEventListener('change', () => {
-    const custom = element('credential-auth-type').value === 'header';
-    element('credential-header-field').hidden = !custom; element('credential-header-name').required = custom;
-  });
-  form.addEventListener('submit', async event => {
-    event.preventDefault(); if (element('credential-storage-type').value !== 'manual' || !workspace.ready('credentials') || !form.reportValidity()) return;
-    const body = {name: element('credential-name').value.trim(), auth_type: element('credential-auth-type').value,
-      header_name: element('credential-auth-type').value === 'bearer' ? 'Authorization' : element('credential-header-name').value.trim(),
-      secret: element('credential-secret').value};
-    element('credential-secret').value = '';
-    await workspace.mutate('credentials', body, 'credential-form-status');
+  element('credential-add').addEventListener('click', () => {
+    if (element('credential-storage-type').value === 'manual' && workspace.ready('credentials') && !actions.add?.())
+      element('credential-action-status').textContent = 'Another setup still needs review. Open Set up access to inspect its saved result before adding another credential.';
   });
   function render() {
     const catalog = workspace.state.catalog;
     replacement.render();
     githubAppReplacement.render();
     element('credential-fields').disabled = element('credential-storage-type').value !== 'manual' || !workspace.ready('credentials');
-    if (!catalog) { element('credential-secret').value = ''; return; }
+    if (!catalog) return;
     const currentCards = []; const expiredCards = [];
     const expiredOpen = element('credentials-list').querySelector('[data-expired-app-access]')?.open;
     for (const credential of catalog.credentials) {
@@ -419,6 +410,14 @@ function createCredentialsView(workspace, actions = {}) {
         appendOperatorAccountActivity(card, details, credential, catalog); card.append(details);
       }
       if (credential.legacy_upstream_origin) card.append(textNode('p', 'Migrated credential remains limited to ' + credential.legacy_upstream_origin + '.', 'small muted'));
+      if (credential.status === 'active' && !isAwsCredential(credential) && typeof actions.use === 'function') {
+        const use = textNode('button', 'Use with a client', 'secondary'); use.dataset.action = 'use-credential';
+        use.disabled = workspace.state.busy || workspace.state.uncertain || !operatorCredentialCanSetUpAccess(credential, catalog);
+        use.addEventListener('click', () => {
+          if (!actions.use(credential.id)) element('credential-action-status').textContent =
+            'This exact credential is unavailable for setup. Refresh and review its state and supported permissions; no request was sent.';
+        }); card.append(use);
+      }
       if (google && credential.status === 'active' && catalog.capabilities.google_reauthorization && typeof actions.reauthorize === 'function') {
         const button = textNode('button', 'Reauthorize Google', 'secondary'); button.dataset.action = 'reauthorize-google';
         button.disabled = workspace.state.busy || workspace.state.uncertain;
@@ -463,12 +462,11 @@ function createCredentialsView(workspace, actions = {}) {
       const retained = textNode('details', undefined, 'card'); retained.dataset.expiredAppAccess = ''; retained.open = Boolean(expiredOpen);
       retained.append(textNode('summary', 'Connections with expired app access (' + expiredCards.length + ')'), textNode('p',
         'Every linked application has an expired token or is revoked. These saved records remain intact; grouping does not validate or revoke provider keys. Review application access and permissions before using them.', 'small muted'));
-      const review = textNode('a', 'Review applications and tokens'); review.href = '#applications';
+      const review = textNode('a', 'Review clients and tokens'); review.href = '#applications';
       const list = textNode('div', undefined, 'stack'); list.append(...expiredCards); retained.append(review, list); currentCards.push(retained);
     }
-    renderCards('credentials-list', currentCards, 'No saved accounts or keys. Use Connect an app for guided setup, or save an API key above.');
+    renderCards('credentials-list', currentCards, 'No saved credentials. Add a provider account or key above, then separately choose which clients may use it.');
   }
-  window.addEventListener('pagehide', () => { element('credential-secret').value = ''; });
   workspace.subscribe(render); return {render};
 }
 function createAccessRulesView(workspace) {
@@ -585,7 +583,7 @@ function createAccessRulesView(workspace) {
     chooseModeOptions('rule-response-mode', responseFormChoices(catalog, element('rule-response-mode').value), 'No supported response mode available');
     renderResponseMode();
     chooseOptions('rule-application-id', catalog.applications.filter(item => item.status === 'active'), 'Create an application first');
-    chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active' && !isAwsCredential(item) && !isGithubCredential(item) && !isNpmCredential(item) && !isXCredential(item) && !isXOAuthCredential(item) && !isAlchemyCredential(item)), 'Provider presets need Connect an app; AWS storage cannot grant access');
+    chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active' && !isAwsCredential(item) && !isGithubCredential(item) && !isNpmCredential(item) && !isXCredential(item) && !isXOAuthCredential(item) && !isAlchemyCredential(item)), 'Provider presets need Set up access; AWS storage cannot grant access');
     chooseOptions('rule-credential-input', credentialInputModes.map(mode => ({id: mode, name: operatorCredentialInputModes[mode]})), 'No supported credential input available');
     renderCredentialInput();
     renderRequestBody();

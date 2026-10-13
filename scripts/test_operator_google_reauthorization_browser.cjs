@@ -330,14 +330,14 @@ const tests = [
   ['missing and malformed capability do not expose account maintenance', async browser => {
     for (const capability of [undefined, null, {...CAPABILITY, path: '/api/operator-demo/oauth/google/start'}, {...CAPABILITY, preserves_assignments: false}])
       await fixture(browser, {capability}, async (page, state, observed) => {
-        assert.equal(await action(page).count(), 0); assert(await page.locator('#credential-save').isEnabled());
+        assert.equal(await action(page).count(), 0); assert(await page.locator('#credential-add').isEnabled());
         assert.equal(observed.reads.length, 0); assert.equal(observed.posts.length, 0); assert.equal(observed.navigations, 0);
       });
   }],
   ['exact active account review shows its assigned apps and rules without recreating them', browser => fixture(browser, {}, async (page, state, observed) => {
     await open(page); const text = await page.locator('#google-reauthorization-review').innerText();
     assert.match(text, /ordinary-fixture@example.test/); assert(!text.includes('other-fixture@example.test'));
-    assert.match(text, /Current reviewed credential version\s+7/); assert.match(text, /Assigned apps \(2\)/);
+    assert.match(text, /Current reviewed credential version\s+7/); assert.match(text, /Assigned clients \(2\)/);
     for (const row of [...state.applications, ...state.rules]) assert(text.includes(row.name));
     assert.match(await panel(page).innerText(), /not Disconnect|does not disconnect/i);
     assert.match(await panel(page).innerText(), /not a Gmail request test/i);
@@ -365,9 +365,9 @@ const tests = [
     const id = observed.posts[0].operation_id; assert.equal(await page.evaluate(key => sessionStorage.getItem(key), STORAGE), id);
     await page.locator('#google-reauthorization-refresh').click(); await checkStatus(page, /^Waiting for Google consent\./);
     assert(observed.reads.slice(1).every(path => path === PATH + '/' + id));
-    assert(await page.locator('#google-reauthorization-start').isHidden()); assert(await page.locator('#credential-save').isDisabled());
+    assert(await page.locator('#google-reauthorization-start').isHidden()); assert(await page.locator('#credential-add').isDisabled());
     await page.locator('#google-reauthorization-leave').click(); assert(await panel(page).isHidden());
-    assert(await page.locator('#credential-save').isDisabled()); assert(await page.locator('#mutation-review').isVisible());
+    assert(await page.locator('#credential-add').isDisabled()); assert(await page.locator('#mutation-review').isVisible());
     assert.equal(await page.evaluate(key => sessionStorage.getItem(key), STORAGE), id, 'leave does not erase an uncertain recovery locator');
     await refreshCatalog(page); await page.locator('#mutation-review-confirm').click(); await ready(page);
     assert.equal(observed.posts.length, 1); assert.match(state.dialogs.at(-1), /does not cancel.*disconnect.*retry/is);
@@ -384,7 +384,7 @@ const tests = [
       assert(observed.reads.length > priorReads, 'the new document performs fresh exact-operation recovery');
       assert.equal(observed.oldConsentReads, priorInitialConsentReads, 'unselected initial consent does not start a competing recovery read');
       assert(observed.reads.slice(1).every(path => path === PATH + '/' + id));
-      assert.equal(observed.posts.length, 1); assert.equal(observed.navigations, 0); assert(await page.locator('#credential-save').isDisabled());
+      assert.equal(observed.posts.length, 1); assert.equal(observed.navigations, 0); assert(await page.locator('#credential-add').isDisabled());
     });
     await fixture(browser, {}, async (page, state, observed, controls) => {
       observed.current = operation(review(state));
@@ -399,7 +399,7 @@ const tests = [
       assert.match(await page.locator('#google-consent-status').innerText(), /^Waiting for Google consent/);
       assert.equal(new URL(page.url()).search, ''); assert.equal(observed.reads.length, 0, 'explicit initial return suppresses automatic reauthorization reads');
       assert.equal(await page.evaluate(key => sessionStorage.getItem(key), STORAGE), OPERATION);
-      assert(await page.locator('#credential-save').isDisabled()); assert.equal(observed.posts.length, 0);
+      assert(await page.locator('#credential-add').isDisabled()); assert.equal(observed.posts.length, 0);
       await page.locator('#google-consent-leave').click(); await ready(page); await view(page, 'credentials');
       await open(page); await checkStatus(page, /^Waiting for Google consent\./);
       assert.deepEqual(observed.reads, [PATH + '/' + OPERATION]); assert(await page.locator('#google-reauthorization-start').isHidden());
@@ -412,7 +412,7 @@ const tests = [
       await fixture(browser, options, async (page, state, observed) => {
         await open(page); await start(page, observed, false);
         assert.equal(observed.posts.length, 1); assert.equal(observed.navigations, 0);
-        assert(await page.locator('#mutation-review').isVisible()); assert(await page.locator('#credential-save').isDisabled());
+        assert(await page.locator('#mutation-review').isVisible()); assert(await page.locator('#credential-add').isDisabled());
         assert(await page.locator('#google-reauthorization-start').isHidden());
       });
   }],
@@ -423,7 +423,7 @@ const tests = [
       await controls.landing(); await checkStatus(page, /^Reauthorization saved for the same account\./);
       assert.match(await page.locator('#google-reauthorization-status').innerText(), /permissions and application tokens were preserved.*not been tested/is);
       assert(observed.reads.includes(PATH + '/' + OPERATION)); assert(observed.reads.includes(PATH + '/' + IDS.credential + '/review'));
-      assert(await page.locator('#credential-save').isEnabled()); assert.equal(observed.posts.length, 0);
+      assert(await page.locator('#credential-add').isEnabled()); assert.equal(observed.posts.length, 0);
       if (generation === 8) await screenshot(page, 'same-account-adopted-desktop');
       await page.locator('#google-reauthorization-leave').click(); assert.equal(await page.evaluate(key => sessionStorage.getItem(key), STORAGE), null);
     });
@@ -434,7 +434,7 @@ const tests = [
     for (const [status, label] of Object.entries(labels)) await fixture(browser, {}, async (page, state, observed, controls) => {
       observed.current = operation(review(state), {status}); await controls.landing(); await checkStatus(page, label);
       assert(!await page.locator('#google-reauthorization-status').innerText().then(text => text.includes('saved for the same account')));
-      assert(await page.locator('#credential-save').isDisabled()); assert(await page.locator('#google-reauthorization-start').isHidden());
+      assert(await page.locator('#credential-add').isDisabled()); assert(await page.locator('#google-reauthorization-start').isHidden());
       assert(observed.reads.every(path => path === PATH + '/' + OPERATION), 'pending recovery must not request a new eligibility review');
       if (status === 'candidate_held') { await page.setViewportSize({width: 390, height: 844}); await screenshot(page, 'candidate-held-mobile');
         assert(await page.locator('#google-reauthorization-refresh').isVisible()); assert(await page.locator('#google-reauthorization-leave').isVisible());
@@ -448,7 +448,7 @@ const tests = [
       await fixture(browser, {}, async (page, state, observed, controls) => {
         observed.current = adopted(review(state)); observed.reviewChanges = changes;
         await controls.landing(); await checkStatus(page, /could not be verified/);
-        assert(await page.locator('#credential-save').isDisabled()); assert(await page.locator('#google-reauthorization-start').isHidden());
+        assert(await page.locator('#credential-add').isDisabled()); assert(await page.locator('#google-reauthorization-start').isHidden());
         assert.equal(observed.posts.length, 0);
       });
   }],
@@ -457,7 +457,7 @@ const tests = [
       await fixture(browser, {reviewTransform: value => ({...value, ...changes})}, async (page, state, observed) => {
         await open(page); assert(await page.locator('#google-reauthorization-start').isDisabled());
         assert.equal(observed.posts.length, 0); assert.equal(observed.navigations, 0);
-        assert(await page.locator('#credential-save').isEnabled(), 'unstarted review does not permanently hold unrelated writes');
+        assert(await page.locator('#credential-add').isEnabled(), 'unstarted review does not permanently hold unrelated writes');
       });
   }],
   ['catalog drift invalidates the review without silently rebasing or submitting', browser => fixture(browser, {allowCatalogDrift: true}, async (page, state, observed) => {
@@ -474,7 +474,7 @@ const tests = [
       await fixture(browser, {}, async (page, state, observed, controls) => {
         observed.current = operation(review(state), {status, reason, private_error: PRIVATE[2],
           ...(status === 'expired' ? {expires_at_epoch: NOW / 1000 - 1} : {})});
-        await controls.landing(); await checkStatus(page, label); assert(await page.locator('#credential-save').isEnabled());
+        await controls.landing(); await checkStatus(page, label); assert(await page.locator('#credential-add').isEnabled());
         assert(await page.locator('#google-reauthorization-start').isHidden()); assert.equal(observed.posts.length, 0);
         assert(!await page.locator('#google-reauthorization-status').innerText().then(text => /healthy|provider.*revoked/i.test(text)));
       });
@@ -493,23 +493,23 @@ const tests = [
     })],
   ['a late initial-consent observation cannot release the selected reauthorization hold', browser => fixture(browser,
     {deferOldConsent: true, startFault: 'lost'}, async (page, state, observed, controls) => {
-      await open(page); await start(page, observed, false); assert(await page.locator('#credential-save').isDisabled());
+      await open(page); await start(page, observed, false); assert(await page.locator('#credential-add').isDisabled());
       const priorCatalogReads = state.catalogCalls;
       const completed = page.waitForResponse(item => item.url() === ORIGIN + GOOGLE_CAPABILITY.intents_path);
       controls.releaseOld(); await (await completed).finished(); await page.waitForLoadState('networkidle');
       assert.equal(state.catalogCalls, priorCatalogReads, 'a late unselected consent read cannot supersede selected recovery with another catalog refresh');
       // Clear only generic mutation uncertainty while the reauthorization hold
       // remains: its review-confirm control is intentionally ineffective.
-      assert(await page.locator('#credential-save').isDisabled()); await page.locator('#mutation-review-confirm').click();
-      assert(await page.locator('#mutation-review').isVisible()); assert(await page.locator('#credential-save').isDisabled());
-      await page.locator('#google-reauthorization-leave').click(); assert(await page.locator('#credential-save').isDisabled());
+      assert(await page.locator('#credential-add').isDisabled()); await page.locator('#mutation-review-confirm').click();
+      assert(await page.locator('#mutation-review').isVisible()); assert(await page.locator('#credential-add').isDisabled());
+      await page.locator('#google-reauthorization-leave').click(); assert(await page.locator('#credential-add').isDisabled());
       await refreshCatalog(page); await page.locator('#mutation-review-confirm').click(); await ready(page);
       assert.equal(observed.posts.length, 1); assert.equal(observed.navigations, 0);
     })],
   ['capability withdrawal preserves recovery and requires explicit exit rather than clearing a pending attempt', browser => fixture(browser, {}, async (page, state, observed, controls) => {
     observed.current = operation(review(state)); await controls.landing(); await checkStatus(page, /Waiting for Google consent/);
     observed.capability = null; await refreshCatalog(page); assert(await page.locator('#google-reauthorization-refresh').isDisabled());
-    assert(await page.locator('#credential-save').isDisabled());
+    assert(await page.locator('#credential-add').isDisabled());
     assert.equal(await page.locator('#google-reauthorization-status').innerText(),
       'Reauthorization is unavailable in this deployment. No request will be retried.');
     await page.locator('#google-reauthorization-leave').click(); await ready(page); assert.equal(observed.posts.length, 0);
@@ -521,7 +521,7 @@ const tests = [
         await open(page); await start(page, observed, false); await page.locator('#google-reauthorization-refresh').click();
         await checkStatus(page, /could not be verified/); assert.equal(observed.posts.length, 1); assert.equal(observed.navigations, 0);
         assert(observed.reads.slice(1).every(path => path === PATH + '/' + observed.posts[0].operation_id));
-        assert(await page.locator('#google-reauthorization-start').isHidden()); assert(await page.locator('#credential-save').isDisabled());
+        assert(await page.locator('#google-reauthorization-start').isHidden()); assert(await page.locator('#credential-add').isDisabled());
       });
   }],
   ['invalid callback marker is removed without status lookup or a new start', browser => fixture(browser, {}, async (page, state, observed, controls) => {

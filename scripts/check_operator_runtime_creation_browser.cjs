@@ -414,9 +414,12 @@ async function run(args) {
     await page.goto(PUBLIC + '/', {waitUntil: 'networkidle'});
     need(lastCatalog?.revision === original.revision && loaded(lastCatalog), 'browser_baseline_drifted');
     phase = 'create_credential'; await navigate('credentials');
-    await page.locator('#credential-name').fill(resourceName(runId, 0)); await page.locator('#credential-secret').fill(secret);
-    await perform(0, false, () => page.locator('#credential-save').click());
-    need(await page.locator('#credential-secret').inputValue() === '', 'submitted_secret_not_cleared');
+    await page.locator('#credential-add').click(); await page.locator('#connect-use-key').click();
+    await page.locator('#connect-credential-name').fill(resourceName(runId, 0)); await page.locator('#connect-credential-secret').fill(secret);
+    await perform(0, false, () => page.locator('#connect-credential-next').click());
+    need(await page.locator('#connect-credential-secret').inputValue() === '', 'submitted_secret_not_cleared');
+    need(await page.locator('#connect-credential-saved').isVisible() &&
+      await page.locator('#connect-application-step').isHidden(), 'save_only_credential_boundary_differs');
     phase = 'create_application'; await navigate('applications');
     await page.locator('#application-name').fill(resourceName(runId, 1)); await page.locator('#application-token-ttl').selectOption('3600');
     await perform(1, false, () => page.locator('#application-create').click());

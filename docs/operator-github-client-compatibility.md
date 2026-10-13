@@ -8,8 +8,12 @@ Synthetic verification does not establish a successful real-provider request.
 
 ## Operator journey
 
-In **Connect an app**, choose **GitHub**, then select a personal access token or
-a GitHub App connection:
+In **Credentials → Add credential**, choose **GitHub**, then select a personal
+access token or a GitHub App connection. This saves the credential only; it
+creates no Serverware client, proxy token or permission. The same editor is
+available inline from the **Set up access** action, not a separate sidebar page.
+These consolidated labels await live deployment; see the
+[UI checkpoint](operator-demo.md#navigation-update--source-verified-not-yet-deployed).
 
 | Connection | Inputs saved in Serverware | Credential lifecycle |
 | --- | --- | --- |
@@ -20,9 +24,12 @@ For a GitHub App, first register and install your App in GitHub with access to t
 selected repository and the required Issues permission. This is an existing App
 installation, not a GitHub OAuth user-login or consent flow. The GitHub App ID and
 installation ID are also **not** the Serverware application ID: the latter
-identifies the client allowed to use the proxy.
+identifies an entry under **Clients**, the script or job allowed to use the proxy.
+A GitHub App is a provider credential, not a Serverware client.
 
-Select or create a Serverware application, review the exact repository, and grant:
+On the saved credential, choose **Use with a client**. Setup reuses that exact
+credential without asking for its secret again. Select or create a client,
+review the exact repository, and grant:
 
 - **Read issues and comments**: list and read issues/comments, including supported
   pagination.
@@ -72,7 +79,7 @@ policy to be loaded by the accepted app/gate pair.
 
 When the instance advertises this capability, open **Credentials**, select
 **Replace GitHub App private key**, and review the repository and affected
-applications. Generate a new private key for the same App in GitHub, then submit
+clients. Generate a new private key for the same App in GitHub, then submit
 that PEM. Do not create another Serverware connection or remove existing grants.
 GitHub supports overlapping keys for rotation; deleting the old key is a
 separate [GitHub-side action](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps).

@@ -269,7 +269,7 @@ async function story(context, bridge, directory, evidence, progress) {
     && !document.querySelector('#google-configuration-check').disabled
     && document.querySelector('#credential-fields')?.disabled === true);
   assert(observed.requests.slice(beforeReload).some(item => item.path === CATALOG));
-  assert(await page.locator('#credential-save').isDisabled(), 'unresolved retained operation holds ordinary writes');
+  assert(await page.locator('#credential-add').isDisabled(), 'unresolved retained operation holds ordinary writes');
   assert.equal(observed.posts.length, 1); assert.deepEqual(await noMaterial(page), reference);
   assert(await node(page, 'prepare').isDisabled());
   await act('check', 'GET', PREFIX + '/' + reference.operation_id); await pendingDOM(); await noMaterial(page);

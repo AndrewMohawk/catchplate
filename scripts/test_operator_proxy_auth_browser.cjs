@@ -177,7 +177,7 @@ async function uncertain(page, freshRequired = false) {
   if (freshRequired) assert(await page.locator('#mutation-review-confirm').isDisabled());
   else await page.waitForFunction(() => !document.querySelector('#mutation-review-confirm').disabled);
   assert.match(await page.locator('#mutation-review-text').innerText(), /no automatic retry/i);
-  for (const id of ['application-create', 'credential-save', 'rule-save']) assert(await page.locator('#' + id).isDisabled());
+  for (const id of ['application-create', 'credential-add', 'rule-save']) assert(await page.locator('#' + id).isDisabled());
   assert(await action(page).isDisabled()); await privateAbsent(page);
 }
 const argsFor = command => JSON.parse(execFileSync('python3', ['-B', '-c',

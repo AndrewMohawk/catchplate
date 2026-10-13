@@ -256,7 +256,7 @@ const tests = [
     // Playwright's native-control disabled matcher excludes FIELDSET itself;
     // inspect its DOM property and prove inherited disabling on real controls.
     assert.equal(await page.locator('#credential-fields').evaluate(node => node.disabled), true);
-    assert(await page.locator('#credential-secret').isDisabled()); assert(await page.locator('#credential-save').isDisabled());
+    assert.equal(await page.locator('#credential-secret').count(), 0); assert(await page.locator('#credential-add').isDisabled());
     await view(page, 'proxy'); assert(await page.locator('#copy-command').isDisabled());
   })],
   ['malformed advertised response contract cannot authorize bundle creation', browser => fixture(browser, options({bundles: [{...descriptor(), response_contract: {...descriptor().response_contract, body_presence: 'optional'}}]}), async page => {

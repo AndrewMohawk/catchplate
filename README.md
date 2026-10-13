@@ -44,8 +44,9 @@ Add credential** uses the same provider editor in save-only mode: it creates no
 client, proxy token or permission. On a saved credential, **Use with a client**
 continues setup with that exact credential selected, without asking for its
 secret again. A GitHub App is a provider credential, not a Serverware client.
-These consolidated UI labels are source-verified and await live deployment;
-see the [walkthrough checkpoint](docs/operator-demo.md#navigation-update--source-verified-not-yet-deployed).
+This flow is deployed in `6bf463c5` and passed the actual read-only desktop/mobile
+check; the separate isolated journey verified saving, reuse, proxy access and
+revocation. See the [walkthrough checkpoint](docs/operator-demo.md#navigation-update--deployed-october-13).
 **Proxy setup** provides
 the proxy address, public CA download and client instructions; **Audit log**
 shows recorded changes and request outcomes. New supported JSON permissions need

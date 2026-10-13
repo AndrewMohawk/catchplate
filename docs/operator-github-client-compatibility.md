@@ -12,8 +12,9 @@ In **Credentials → Add credential**, choose **GitHub**, then select a personal
 access token or a GitHub App connection. This saves the credential only; it
 creates no Serverware client, proxy token or permission. The same editor is
 available inline from the **Set up access** action, not a separate sidebar page.
-These consolidated labels await live deployment; see the
-[UI checkpoint](operator-demo.md#navigation-update--source-verified-not-yet-deployed).
+This consolidated flow is deployed in `6bf463c5`; see the
+[UI checkpoint](operator-demo.md#navigation-update--deployed-october-13).
+Its deployment does not establish real GitHub account or repository acceptance.
 
 | Connection | Inputs saved in Serverware | Credential lifecycle |
 | --- | --- | --- |

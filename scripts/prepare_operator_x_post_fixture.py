@@ -126,8 +126,20 @@ def dependencies_sha256(value):
         ensure_ascii=True, allow_nan=False).encode("ascii")).hexdigest()
 
 
+def bytecode_requested(root, manifest_sha256):
+    require((root is None) == (manifest_sha256 is None), "paired Python bytecode inputs required")
+    if root is None:
+        return False
+    require(isinstance(root, Path) and root.is_absolute() and ".." not in root.parts,
+        "absolute Python bytecode root required")
+    base.validated_binary_sha256(manifest_sha256)
+    return True
+
+
 def build(source, binary, initializer, root, node, node_modules, python_runtime, python_packages, go,
-          *, expected_binary_sha256, expected_go_sha256, expected_dependencies_sha256, quota=False, fault_mode=None):
+          *, expected_binary_sha256, expected_go_sha256, expected_dependencies_sha256, quota=False, fault_mode=None,
+          python_bytecode=None, expected_python_bytecode_manifest_sha256=None):
+    with_bytecode = bytecode_requested(python_bytecode, expected_python_bytecode_manifest_sha256)
     require(type(quota) is bool, "closed quota profile required")
     require(fault_mode is None or (type(fault_mode) is str and fault_mode in FAULT_MODES), "closed fault profile required")
     require(not (quota and fault_mode is not None), "separate fresh quota and fault fixtures required")
@@ -177,6 +189,10 @@ def build(source, binary, initializer, root, node, node_modules, python_runtime,
         SERVERWARE_OPERATOR_X_CUSTODY_DIR="/x-custody", SSL_CERT_FILE="/x-public/ca.pem")
     app["volumes"] += [bind(runtime / "x-custody", "/x-custody", False),
         bind(runtime / "upstream-data/x/ca.pem", "/x-public/ca.pem")]
+    if with_bytecode:
+        from scripts import prepare_operator_python_bytecode as bytecode
+        require(app["image"] == bytecode.APP_IMAGE, "Python bytecode app image differs")
+        app["volumes"] += bytecode.mounts(python_bytecode)
     gate["environment"]["SERVERWARE_OPERATOR_MANAGED_X_ENABLED"] = "1"
     gate["volumes"] = [mount for mount in gate["volumes"] if mount["target"] != "/data"]
     gate["volumes"] += [bind(runtime / "app-data/gate-runtime", "/data"),

@@ -76,6 +76,7 @@ SUITES = (
     Suite("backend", "test_operator_x_quota_fault_fixture.py", seconds=60),
     Suite("backend", "test_operator_x_quota_fault_checker.py", seconds=60),
     Suite("backend", "test_prepare_operator_x_post_fixture.py", seconds=60),
+    Suite("backend", "test_prepare_operator_python_bytecode.py", seconds=60),
     Suite("backend", "test_run_operator_x_post_fixture.py", seconds=60),
     Suite("backend", "test_operator_rollout_x_quota.py", seconds=60),
     Suite("backend", "test_operator_rollout_snapshot.py", seconds=60),

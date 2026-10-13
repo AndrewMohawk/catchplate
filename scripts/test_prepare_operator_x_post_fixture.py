@@ -62,6 +62,56 @@ class RecipeTests(InertTests):
             self.assertEqual(len(targets), len(set(targets)))
             self.assertTrue(all(not row['bind']['create_host_path'] for row in service['volumes']))
 
+    def test_optional_bytecode_is_exactly_two_app_only_readonly_mounts(self):
+        from scripts import prepare_operator_python_bytecode as bytecode
+        root, pin = Path('/synthetic/bytecode'), 'd' * 64
+        expected_mounts = [recipe.bind(root / 'cache/serverware', '/app/serverware/__pycache__'),
+            recipe.bind(root / 'cache/authority_store', '/app/serverware/authority_store/__pycache__')]
+        self.assertEqual(bytecode.mounts(root), expected_mounts)
+        for lane in ({}, {'quota': True}, {'fault_mode': 'drop-ack'}, {'fault_mode': 'revoke-before-release'}):
+            with self.subTest(lane=lane):
+                original = recipe.build(*ARGS, **PINS, **lane)
+                self.assertEqual(recipe.build(*ARGS, **PINS, **lane, python_bytecode=None,
+                    expected_python_bytecode_manifest_sha256=None), original)
+                cached = recipe.build(*ARGS, **PINS, **lane, python_bytecode=root,
+                    expected_python_bytecode_manifest_sha256=pin)
+                expected = deepcopy(original)
+                expected['services']['serverware']['volumes'] += expected_mounts
+                self.assertEqual(cached, expected)
+                self.assertEqual(cached['services']['serverware']['image'], bytecode.APP_IMAGE)
+                self.assertEqual(cached['services']['serverware']['command'],
+                    ['python', '-B', '-m', 'serverware.operator_demo_runner'])
+                recipe.validate(cached, *ARGS, **PINS, **lane, python_bytecode=root,
+                    expected_python_bytecode_manifest_sha256=pin)
+                for index in (-1, -2):
+                    changed = deepcopy(cached)
+                    changed['services']['serverware']['volumes'][index]['read_only'] = False
+                    with self.assertRaises(ValueError):
+                        recipe.validate(changed, *ARGS, **PINS, **lane, python_bytecode=root,
+                            expected_python_bytecode_manifest_sha256=pin)
+        with patch.object(bytecode, 'APP_IMAGE', 'sha256:' + 'f' * 64), self.assertRaises(ValueError):
+            recipe.build(*ARGS, **PINS, python_bytecode=root, expected_python_bytecode_manifest_sha256=pin)
+
+    def test_bytecode_pair_is_explicit_closed_and_default_does_not_import_validator(self):
+        self.assertFalse(recipe.bytecode_requested(None, None))
+        self.assertTrue(recipe.bytecode_requested(Path('/synthetic/cache'), 'd' * 64))
+        for root, pin in ((None, 'd' * 64), (Path('/synthetic/cache'), None),
+                ('/synthetic/cache', 'd' * 64), (Path('relative'), 'd' * 64),
+                (Path('/synthetic/../cache'), 'd' * 64), (Path('/synthetic/cache'), 'D' * 64),
+                (Path('/synthetic/cache'), 'sha256:' + 'd' * 64), (Path('/synthetic/cache'), True)):
+            with self.subTest(root=root, pin=pin), self.assertRaises(ValueError):
+                recipe.build(*ARGS, **PINS, python_bytecode=root, expected_python_bytecode_manifest_sha256=pin)
+        # Default projection must not inspect/create a cache or depend on the
+        # optional module being installed. This is not payload validation.
+        import builtins
+        original_import = builtins.__import__
+        def without_bytecode(name, globals=None, locals=None, fromlist=(), level=0):
+            if 'prepare_operator_python_bytecode' in name or 'prepare_operator_python_bytecode' in (fromlist or ()):
+                raise AssertionError('default recipe imported optional bytecode owner')
+            return original_import(name, globals, locals, fromlist, level)
+        with patch.object(builtins, '__import__', side_effect=without_bytecode):
+            self.assertEqual(recipe.build(*ARGS, **PINS), self.config)
+
     def test_managed_app_only_custody_and_original_curated_gate_leaf_binds(self):
         app, gate = (self.config['services'][name] for name in ('serverware', 'decision-gate-rs'))
         env = app['environment']

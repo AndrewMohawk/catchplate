@@ -272,6 +272,66 @@ class RunnerTests(unittest.TestCase):
             args.go.chmod(0o600)
             with self.assertRaises(ValueError): value.inputs("unreadable")
 
+    def test_bytecode_pre_post_validator_and_actual_image_join_are_required(self):
+        from scripts import prepare_operator_python_bytecode as bytecode
+        value = self.instance()
+        self.assertIsNone(value.bytecode_input("before"))
+        value.save.assert_not_called()
+        self.assertIsNone(value.admit_bytecode_image("unused without artifact"))
+        value.args.python_bytecode = self.root / "bytecode"
+        value.args.expected_python_bytecode_manifest_sha256 = "d" * 64
+        value.args.commit = "e" * 40
+        # Explicit validator double: package/header/source integrity is tested
+        # by the bytecode owner's suite, not fabricated by this wiring control.
+        receipt = {"schema": "synthetic validator receipt", "manifestSha256": "d" * 64,
+            "image": bytecode.APP_IMAGE, "payload": "unchanged synthetic identity"}
+        with patch.object(bytecode, "validate", return_value=receipt) as validate:
+            self.assertEqual(value.bytecode_input("before"), receipt)
+            validate.assert_called_once_with(value.args.python_bytecode, source=self.root,
+                commit="e" * 40, expected_manifest_sha256="d" * 64)
+            value.save.assert_called_with("python-bytecode-before.json", receipt)
+            self.assertIsNone(value.admit_bytecode_image(bytecode.APP_IMAGE))
+            with self.assertRaises(ValueError): value.admit_bytecode_image("sha256:" + "f" * 64)
+            self.assertEqual(value.bytecode_input("after"), receipt)
+            self.assertEqual(validate.call_count, 2)
+            value.save.assert_called_with("python-bytecode-after.json", receipt)
+            for changed in (dict(receipt, payload="changed"), dict(receipt, image="sha256:" + "f" * 64)):
+                validate.return_value = changed
+                with self.assertRaises(ValueError): value.bytecode_input("after")
+            validate.side_effect = ValueError("synthetic invalid manifest or source")
+            with self.assertRaises(ValueError): value.bytecode_input("after")
+        value.args.expected_python_bytecode_manifest_sha256 = None
+        with self.assertRaises(ValueError): value.bytecode_input("before")
+
+    def test_bytecode_image_check_precedes_creation_and_postcheck_uses_real_input_path(self):
+        tree = ast.parse(Path(runner.__file__).read_text())
+        execute = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "execute")
+        body = next(node for node in execute.body if isinstance(node, ast.Try)).body
+        source = [ast.unparse(node) for node in body]
+        image = next(index for index, row in enumerate(source) if row.startswith("self.admit_bytecode_image("))
+        armed = source.index("armed = True")
+        self.assertLess(image, armed)
+        self.assertTrue(any("self.inputs('before')" in row for row in source[:image]))
+        self.assertTrue(any("self.inputs('after')" in row for row in source[image:]))
+        inputs = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "inputs")
+        self.assertIn("self.bytecode_input(suffix)", ast.unparse(inputs))
+        # Actual runtime mount inspector covers both mounts, not just recipe
+        # labels. Synthetic inspect rows here remain explicitly non-runtime.
+        from scripts import prepare_operator_python_bytecode as bytecode
+        config = configuration()
+        config["services"]["serverware"]["volumes"] += bytecode.mounts(Path('/synthetic/cache'))
+        rows, images = inspect_rows(config)
+        value = self.instance(); value.container_rows = Mock(return_value=rows)
+        value.image_environments = {image: {"PATH": "/usr/bin:/bin"} for image in images}
+        self.assertEqual(value.inspect_runtime(config, images, keeper_anchor=950), IDS)
+        for target in ("/app/serverware/__pycache__", "/app/serverware/authority_store/__pycache__"):
+            changed = deepcopy(rows)
+            app = next(row for row in changed if row["Id"] == IDS["serverware"])
+            next(mount for mount in app["Mounts"] if mount["Destination"] == target)["RW"] = True
+            value.container_rows.return_value = changed
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                value.inspect_runtime(config, images, keeper_anchor=950)
+
     def test_cli_has_no_provider_override_and_clears_ambient_docker_endpoint(self):
         argv = ["runner"]
         for name in ("source", "job-root", "evidence", "binary", "go", "node", "node-modules", "initializer", "python-runtime", "python-packages"):
@@ -290,6 +350,19 @@ class RunnerTests(unittest.TestCase):
         for option in ("--provider-url", "--timeout-seconds", "--keep-containers", "--recipe-module"):
             with patch.object(runner.sys, "argv", argv + [option, "untrusted"]), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 runner.main()
+        for extra in (["--python-bytecode", "/synthetic/cache"],
+                ["--expected-python-bytecode-manifest-sha256", "d" * 64]):
+            with patch.object(runner.sys, "argv", argv + extra), redirect_stderr(io.StringIO()), \
+                    patch.object(runner, "XPostRun") as construct, self.assertRaises(SystemExit):
+                runner.main()
+            construct.assert_not_called()
+        with patch.object(runner.sys, "argv", argv + ["--python-bytecode", "/synthetic/cache",
+                "--expected-python-bytecode-manifest-sha256", "d" * 64]), \
+                patch.object(runner, "XPostRun", return_value=instance) as construct, \
+                patch.object(runner.os, "umask"), patch.dict(os.environ, {}):
+            self.assertEqual(runner.main(), 0)
+            self.assertEqual(construct.call_args.args[0].python_bytecode, Path("/synthetic/cache"))
+            self.assertEqual(construct.call_args.args[0].expected_python_bytecode_manifest_sha256, "d" * 64)
 
     def test_actual_result_pin_guard_and_terminal_boundary_without_fake_end_to_end_acceptance(self):
         # Exercise the actual isolated guard, not a duplicate comparison. The

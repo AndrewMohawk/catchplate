@@ -125,6 +125,43 @@ refused a one-file compressed log setting; the corrected two-file setting
 was used in a fresh container. Both owned check containers were removed.
 These checks still do not replace either joined app/proxy/provider fault lane.
 
+At `5f0ab174`, [CI 38369900173](https://github.com/example/private-deployment)
+passed all 51 suites in 414.778 seconds, with 427 observed Python tests,
+145 Node groups and no skips. The next joined dropped-ACK attempt,
+`x-quota-fault-drop-loopback.6Fcyi1v4`, stopped before relay, gate or SDK startup:
+the app remained running without logs or a listening socket through the
+original startup deadline. Cleanup succeeded after 51.083 seconds. Its image,
+command, resources and normalized mounts match the successful A+B app; only
+the fault profile's loopback bind differs, and binding happens after imports.
+This is a pre-listen startup failure, not demonstrated quota or relay failure.
+Host I/O pressure and earlier import/compilation stacks are compatible with a
+delay but do not prove its cause. Further joined fault runs are paused pending
+a bounded startup comparison; live services and the successful A+B evidence
+are unchanged.
+
+The optional startup optimization prepares checked-hash Python bytecode once,
+outside the source tree, using the exact app image's CPython 3.11.15. The
+`prepare_operator_python_bytecode.py` helper separates host-side committed
+source inventory, offline compilation, validation and non-executing cache
+consumption checks. Its externally pinned manifest binds the helper, every
+selected source file, interpreter and every compiled file. The caller must
+retain the actual compiler-container image/configuration receipt; the helper
+does not authenticate its own container. Identical Python/helper bytes may be
+reused across documentation-only commits after comparison with Git objects.
+
+The X fixture accepts the paired `--python-bytecode` and
+`--expected-python-bytecode-manifest-sha256` inputs. Without them, behavior is
+unchanged. With them, only two read-only app cache mounts are added, and the
+artifact is checked before and after the run. No timeout, application code,
+proxy guard or page-load path changes. Source mountpoints must already exist;
+Docker must not create them or write bytecode into a checkout. Actual image-side
+cache consumption and a matched startup-only comparison remain separate
+acceptance. A release must also reconcile its exact-source readback with these
+explicit cache mounts before adopting them on the live app.
+The initial source batch passed 59 focused cache/recipe/runner/quota controls
+and 12 ordinary-orchestration controls; the new cache suite is included in the
+52-suite ordinary CI inventory. These component results are not startup timing.
+
 The rendered account/setup suite subsequently passed all ten groups with eight
 masked 1280/390-pixel screenshots and unchanged source. It verified default
 omission, exact limited grants, invalid input and capability withdrawal. The

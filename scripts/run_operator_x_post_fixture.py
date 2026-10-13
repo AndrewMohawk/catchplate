@@ -131,7 +131,31 @@ class XPostRun(NpmExampleRun):
         observed = recipe.dependencies(args.node_modules, args.python_runtime, args.python_packages)
         require(recipe.dependencies_sha256(observed) == args.expected_dependencies_sha256, "full SDK payload differs")
         self.save("dependencies-" + suffix + ".json", observed)
+        self.bytecode_input(suffix)
         return observed
+
+    def bytecode_input(self, suffix):
+        args = self.args
+        root = getattr(args, "python_bytecode", None)
+        pin = getattr(args, "expected_python_bytecode_manifest_sha256", None)
+        if not recipe.bytecode_requested(root, pin):
+            return None
+        require(suffix in {"before", "after"}, "closed Python bytecode observation phase required")
+        from scripts import prepare_operator_python_bytecode as bytecode
+        observed = bytecode.validate(root, source=args.source, commit=args.commit, expected_manifest_sha256=pin)
+        require(observed["image"] == bytecode.APP_IMAGE, "Python bytecode image differs")
+        if suffix == "before":
+            require(not hasattr(self, "python_bytecode_before"), "Python bytecode baseline already observed")
+            self.python_bytecode_before = observed
+        else:
+            require(observed == getattr(self, "python_bytecode_before", None), "Python bytecode artifact changed")
+        self.save("python-bytecode-" + suffix + ".json", observed)
+        return observed
+
+    def admit_bytecode_image(self, actual_image):
+        if recipe.bytecode_requested(getattr(self.args, "python_bytecode", None),
+                getattr(self.args, "expected_python_bytecode_manifest_sha256", None)):
+            require(actual_image == self.python_bytecode_before["image"], "actual app bytecode image differs")
 
     def public_view(self, container, mode, suffix, *, initial):
         require(re.fullmatch(r"[0-9a-f]{64}", container) and mode in {"app", "gate"})
@@ -376,7 +400,9 @@ class XPostRun(NpmExampleRun):
             config = recipe.build(args.source, args.binary, args.initializer, args.job_root, args.node,
                 args.node_modules, args.python_runtime, args.python_packages, args.go,
                 expected_binary_sha256=args.expected_binary_sha256, expected_go_sha256=args.expected_go_sha256,
-                expected_dependencies_sha256=args.expected_dependencies_sha256, quota=quota, fault_mode=fault_mode)
+                expected_dependencies_sha256=args.expected_dependencies_sha256, quota=quota, fault_mode=fault_mode,
+                python_bytecode=getattr(args, "python_bytecode", None),
+                expected_python_bytecode_manifest_sha256=getattr(args, "expected_python_bytecode_manifest_sha256", None))
             self.project, self.services = config["name"], config["services"]
             image_ids, self.image_environments = {}, {}
             for index, image in enumerate(sorted({service["image"] for service in self.services.values()})):
@@ -387,6 +413,7 @@ class XPostRun(NpmExampleRun):
                     and re.fullmatch(r"sha256:[0-9a-f]{64}", value["id"])
                     and (not image.startswith("sha256:") or value["id"] == image))
                 image_ids[image], self.image_environments[image] = value["id"], environment(value["environment"])
+            self.admit_bytecode_image(image_ids[self.services["serverware"]["image"]])
             require(not self.container_rows("preexisting") and self.no_project_networks("preexisting-networks"))
             armed = True
             (args.job_root / "runtime").mkdir(mode=0o700)
@@ -408,6 +435,8 @@ class XPostRun(NpmExampleRun):
                 "project": self.project, "images": image_ids, "initialProviderTokenSeconds": recipe.INITIAL_TOKEN_SECONDS,
                 "checkerSeconds": recipe.CHECKER_SECONDS, "keeperSeconds": recipe.KEEPER_SECONDS,
                 "edgeSeconds": recipe.EDGE_SECONDS, "workSeconds": WORK_SECONDS, "cleanupSeconds": CLEANUP_SECONDS,
+                **({"pythonBytecodeManifestSha256": self.python_bytecode_before["manifestSha256"]}
+                    if hasattr(self, "python_bytecode_before") else {}),
                 "dependencyPayloadRehashed": True, "syntheticOnly": True, "realXVerified": False, "productionReady": False})
             for phase, profile, limit in (("initialize", "prepare", 35), ("x-post-pki", "x-post-pki", 25)):
                 self.command(phase, compose + ["--profile", profile, "run", "--rm", "--no-deps", "--pull", "never", phase], limit)
@@ -501,7 +530,11 @@ def main():
     lane.add_argument("--quota-fault", choices=recipe.FAULT_MODES, help="one fresh process/claim-ACK fault per fixture")
     for name in ("expected-binary-sha256", "expected-go-sha256", "expected-dependencies-sha256"):
         parser.add_argument("--" + name, type=sha256, required=True)
+    parser.add_argument("--python-bytecode", type=absolute_path)
+    parser.add_argument("--expected-python-bytecode-manifest-sha256", type=sha256)
     args = parser.parse_args()
+    if (args.python_bytecode is None) != (args.expected_python_bytecode_manifest_sha256 is None):
+        parser.error("--python-bytecode and --expected-python-bytecode-manifest-sha256 are required together")
     for name in ("DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "DOCKER_API_VERSION"):
         os.environ.pop(name, None)
     os.environ["DOCKER_HOST"] = "unix:///var/run/docker.sock"

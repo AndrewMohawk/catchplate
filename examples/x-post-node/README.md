@@ -1,8 +1,12 @@
 # One text-only X post with the official Node SDK
 
-**Posting integration is pending, not available or end-to-end verified.** This
-example does not turn the existing app-only username-read permission into a
-posting grant. No real X, proxy or OAuth requests were made to develop it.
+**Isolated synthetic-provider posting acceptance passed; deployment and real X
+remain unverified.** This actual entrypoint passed before and after genuine
+token expiry/automatic refresh through normal Rust and verified outer/inner
+TLS, plus wrong-app, wrong-CA, disconnected and reflected-response controls.
+See the [full checkpoint](../../docs/project-completion.md) for the 19-phase
+joined run and retained receipts. It does not authorize live X, quota or native
+use, or turn an app-only username-read permission into a posting grant.
 
 The official `@xdevplatform/xdk` **0.6.6** performs exactly one
 `client.posts.create({text})` call to `POST https://api.x.com/2/tweets`. Its
@@ -15,9 +19,9 @@ Saving an app-only token or inventing scopes is not sufficient.
 There is no media, reply, quote, thread, delete, lookup, OAuth exchange, refresh,
 polling or automatic retry. The confirmation below authorizes one local
 invocation; it is not durable deduplication. Manually running it twice can create
-two posts once the posting integration is available.
+two posts when the posting permission is active.
 
-## Future use, after posting support is available
+## Use after the matching posting deployment is enabled
 
 Obtain a loaded posting permission, a Serverware application configured for
 `basic_and_bearer_v1`, its scoped application token, and authenticated CA files
@@ -97,8 +101,8 @@ the inner intercepted-connection trust. The optional
 `SERVERWARE_PROXY_CA_FILE` supplies separate outer-proxy trust; otherwise the
 outer connection uses Node's default roots. The inner CA is not automatically
 added to outer trust. No system trust store is changed and no direct fallback
-exists. These configuration checks are not yet a posting TLS/proxy acceptance
-test.
+exists. The isolated joined run verified these TLS boundaries separately from
+the offline configuration tests below; it did not contact real X.
 
 Ambient X credentials, proxy variables and `NO_PROXY` do not select credentials
 or transport. TLS-disable settings and nonempty `NODE_OPTIONS`, `NODE_DEBUG`,

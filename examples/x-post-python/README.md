@@ -1,9 +1,12 @@
 # One text-only X post with the official Python SDK
 
-**Posting integration is not yet available or end-to-end verified.** This is a
-client example, not a working operator grant, provider entitlement check or
-deployment claim. Do not use the existing username-read preset as posting
-authorization. No real X or proxy requests were made to develop this example.
+**Isolated synthetic-provider posting acceptance passed; deployment and real X
+remain unverified.** This actual entrypoint passed before and after genuine
+token expiry/automatic refresh through normal Rust and verified outer/inner
+TLS, plus wrong-app, wrong-CA and disconnected controls. See the
+[full checkpoint](../../docs/project-completion.md) for the 19-phase joined run
+and retained receipts. It is not a provider-entitlement, quota or native claim;
+the username-read preset does not authorize posting.
 
 The pinned official [xdk 0.10.6 release](https://pypi.org/project/xdk/0.10.6/) uses
 `Client(access_token=...)` for OAuth2 user context. Its actual
@@ -11,15 +14,15 @@ The pinned official [xdk 0.10.6 release](https://pypi.org/project/xdk/0.10.6/) u
 is `client.posts.create(body=CreateRequest(text=text))`: one POST to
 `https://api.x.com/2/tweets`. This example calls that method unchanged, with only
 the public dummy `serverware-x-post-placeholder-v1`. Never give this program a
-real X token. Future Serverware posting support must admit the request and
+real X token. Serverware's explicit posting permission must admit the request and
 replace the dummy with the separately stored, authorized user credential.
 
 There is no media, reply, quote, thread, delete, token exchange, refresh, lookup
 or automatic retry. Each invocation needs `SERVERWARE_X_POST_CONFIRM=post-once`.
 This is an intent check, not durable deduplication: manually running it twice
-can create two posts once posting support becomes available.
+can create two posts when the posting permission is active.
 
-## Future use, only after the paired posting integration is available
+## Use after the matching posting deployment is enabled
 
 Create a new environment, from this directory:
 

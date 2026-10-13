@@ -27,6 +27,16 @@ Offline tests remain separate results in
 X request, GitHub Actions run nor deployment acceptance is claimed. X controls
 require a fresh matching gate capability; an older gate cannot implicitly enable the preset.
 
+The separate managed-X **posting** flow also passed isolated acceptance at
+`1e891965`: actual Node/Python/Go entrypoints through normal Rust and both TLS
+legs, six successful posts across 120-second expiry and one refresh, one
+reflected-response block without replay, and 12 negative controls with no extra
+provider posts. Disconnect, four synthetic revocations and final audit passed;
+cleanup completed in 202.355 seconds. See [project completion](project-completion.md)
+and [the posting lifecycle record](operator-x-account-lifecycle.md#connected-sdk-acceptance).
+Posting is not deployed or verified against real X; quota and native acceptance
+are not claimed. The username-read preset remains distinct.
+
 Alchemy's adapter, catalog/API, UI source, examples and isolated fixture/checker
 are implemented. Source `062180fe` passed the complete synthetic-provider SDK
 flow in 86.005 seconds including cleanup, not native startup. This does not
@@ -143,10 +153,11 @@ and exactly one of `result` or `error`; an RPC error is not a successful method
 result. X may return structured provider errors; do not call any HTTP-200 body
 proof of token validity or successful user lookup.
 
-X app-only authentication is distinct from user OAuth. A future “Post to X”
-permission needs its own user-token lifecycle and authorization review; OAuth1
-signatures are not static header replacement. This lookup slice does not fulfill
-the original posting example. [X authentication](https://docs.x.com/fundamentals/authentication/overview),
+X app-only authentication is distinct from user OAuth. The separate
+[Post to X permission](operator-x-posting.md) has its own managed user-token
+lifecycle and isolated acceptance; OAuth1 signatures are not static header
+replacement. This lookup slice does not authorize posting.
+[X authentication](https://docs.x.com/fundamentals/authentication/overview),
 [username lookup](https://docs.x.com/x-api/users/get-user-by-username).
 
 ## Implementation seams and ownership

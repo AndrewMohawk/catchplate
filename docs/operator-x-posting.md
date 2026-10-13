@@ -5,9 +5,11 @@
 Status on 2026-10-12: the typed posting contract, ordinary SDK examples and
 feature-gated account/permission console flow are implemented in source,
 including connected consent, refresh and protective disconnect at `c207ac75`.
-**This work is not deployed and has not passed actual TLS/Rust/SDK-through-proxy
-or real-X acceptance.** The deployed username-read preset does not authorize
-posting. No pilot is required to finish or verify this ordinary workflow.
+**Isolated synthetic-provider TLS/Rust/SDK-through-proxy acceptance passed at
+`1e891965`; deployment and real-X acceptance remain unverified.** The deployed
+username-read preset does not authorize posting. See
+[project completion](project-completion.md) for the full checkpoint. No pilot is
+required to finish or verify this ordinary workflow.
 
 ## Fixed permission
 
@@ -143,13 +145,11 @@ the separate `x_oauth` account type, PKCE callback, encrypted custody, refresh,
 protective disconnect and capability-gated quota-free posting UI. These do not
 automatically enable the feature on the running instance.
 
-1. Execute connected acceptance with the independently joined normal Rust
-   artifact, then complete the matching app/proxy release.
-2. Exercise actual SDKs through verified TLS and the real proxy against an
-   isolated provider, including denials, uncertain writes and durable audit.
-3. Add durable shared-account quota execution before offering that restriction;
+1. Complete the matching app/proxy release; the isolated connected SDK run does
+   not enable the running instance.
+2. Add durable shared-account quota execution before offering that restriction;
    the current account/grant flow must continue to refuse it.
-4. With operator-supplied provider configuration and consent, verify the real X
+3. With operator-supplied provider configuration and consent, verify the real X
    journey separately. Public proxy DNS repair remains a separate approval.
 
 ### Connected lifecycle checkpoint
@@ -168,8 +168,14 @@ Rust source `6d67ab37` passed 112 tests across 15 filters and produced
 normal executable `811082ac5e87f9ec…`, with an actual 515-input compiler receipt.
 This is separate from the historical 45-test core result above. The independent
 join subsequently verified the normal compiler inputs against committed
-`1ee2f04d`; normal-binary runtime acceptance remains pending. None of these
-results establishes deployed or real-X posting.
+`1ee2f04d`. The later `x-post-sdk-acceptance.rdUYbhx5` run at `1e891965` used
+that normal binary and passed all 19 SDK phases: six successful posts across
+genuine 120-second expiry and one refresh, one reflected-response block without
+replay, and 12 negative controls with no extra provider posts. Four synthetic
+revocations, seven audit attempt pairs and final audit verification passed;
+cleanup completed in the 202.355-second total. See
+[project completion](project-completion.md) for the receipts. These results
+establish neither deployed nor real-X posting, quota or native acceptance.
 
 ### Ordinary X account ownership contract
 

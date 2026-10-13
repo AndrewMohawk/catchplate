@@ -1,8 +1,11 @@
-# X plain-text posting with Go — offline example
+# X plain-text posting with Go
 
-Serverware posting integration is **not yet available or verified**. Do not use
-this example against a live proxy or X account. Its tests exercise the real SDK
-through an intercepted transport, not a provider or deployed proxy.
+**Isolated synthetic-provider posting acceptance passed; deployment and real X
+remain unverified.** This actual entrypoint passed before and after genuine
+token expiry/automatic refresh through normal Rust and verified outer/inner
+TLS, plus wrong-app, wrong-CA and disconnected controls. See the
+[full checkpoint](../../docs/project-completion.md) for the 19-phase joined run
+and retained receipts. It is not live-provider, quota or native acceptance.
 
 This is the community `github.com/g8rswimmer/go-twitter/v2` SDK, pinned to
 `v2.1.5`, not an official X SDK. It invokes the SDK's `CreateTweet` exactly once
@@ -13,8 +16,8 @@ accepts HTTP 201, matching the [X create-post API](https://docs.x.com/x-api/post
 
 ## Prepared input contract
 
-These are interface details for a future reviewed integration, not live setup
-instructions:
+Use only after the matching posting deployment is enabled and the operator has
+issued an explicit posting grant; isolated acceptance is not live authorization:
 
 | Input | Meaning |
 | --- | --- |
@@ -32,7 +35,7 @@ example profile, not complete X weighted-character or account-entitlement
 validation. No naive 280-codepoint limit is applied.
 
 The inner request carries only the public dummy bearer
-`serverware-x-post-placeholder-v1`. A future integration must keep the actual
+`serverware-x-post-placeholder-v1`. Serverware keeps the actual
 user-context X token on Serverware; this client does not perform OAuth or read
 ambient X/Twitter credentials. Application Basic authentication is attached only
 to CONNECT, never the inner request. Both TLS hops retain normal certificate

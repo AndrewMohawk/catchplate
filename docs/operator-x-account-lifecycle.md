@@ -6,6 +6,8 @@ This implementation belongs to the ordinary, persistent Serverware workspace;
 it is not a second demo or an alternative approval authority. It is feature
 gated and **not deployed or accepted against real X**. The running deployment
 remains the pair recorded in [project completion](project-completion.md).
+The connected Node/Python/Go posting flow has passed isolated synthetic-provider
+acceptance through the normal Rust proxy; see the checkpoint below.
 
 ## User workflow
 
@@ -113,8 +115,8 @@ removed and the failed attempt remains retained. The independent join in
 Its SHA-256 is `e6cdc8b79b90fea710ea8cf8bb8cdedabf44c370a4e68182a260fa908dae1c9f`.
 It also verified the separate test executable and terminal cleanup receipts.
 Preserved cache metadata does not authenticate cached compiler outputs or
-establish independent release provenance. The normal binary has not been run.
-Deployment, real TLS and SDK-through-proxy posting, shared daily quota and
+establish independent release provenance. The normal binary was subsequently
+executed in the connected checkpoint below. Deployment, shared daily quota and
 real-X acceptance remain open.
 
 Evidence is retained under
@@ -124,29 +126,29 @@ Evidence is retained under
 the earlier failed
 `x-ordinary-rust.epw6xQIQ` build, and `catalog-test-environment.8kKB0J` receipts.
 
-## Next connected acceptance
+## Connected SDK acceptance
 
-The managed-post runtime fixture is not implemented yet. It will compose the
-existing isolated X network/TLS containment and catalog/consent orchestration,
-without changing production provider URLs or weakening trust. Start the app
-before the gate so the original public manifest, lock and CA leaves exist;
-never mount private X custody into the gate. Real configuration, callback,
-account adoption and grant APIs must precede stock Node/Python/Go posting.
+Source `1e891965cdd8bb48cf8971cbd8d9a8fb7e1c3bd2` passed all 19 SDK phases
+through normal Rust `811082ac…`, with real configuration, synthetic-provider
+consent, identity, account adoption and grant APIs. Node/Python/Go each completed
+one post before the initial token's genuine 120-second expiry and one after
+exactly one automatic refresh. Both TLS legs were verified. A seventh, Node
+reflection response was withheld without replay; all 12 wrong-app, outer-CA,
+inner-CA and disconnected controls added zero provider posts. Four synthetic
+revocations, seven paired audit attempts and final audit-chain verification
+passed. Cleanup completed; total runtime was 202.355 seconds.
 
-Require three generation-one posts, genuine token expiry and three further
-posts with exactly one automatic refresh/identity verification. X refresh
-legitimately updates the catalog revision and account generation/expiry; policy,
-assignments, subject and client must remain exact. Join durable events by unique
-attempt ID, not by assuming request digests are unique. Wrong-app, wrong-trust
-and disconnected-account attempts must add no provider posts. A separately
-counted reflected-response write must be withheld with unknown outcome and no
-retry. This remains synthetic/local acceptance, not real X or daily-quota proof.
+Receipts are `x-post-sdk-acceptance.rdUYbhx5/checker-result.stdout.log` and
+`terminal.json` under the retained evidence root. See
+[project completion](project-completion.md) for the full checkpoint and preserved
+earlier failures. This is isolated synthetic-provider acceptance, not deployment,
+real-X access or revocation propagation, quota or native-authority acceptance.
 
 The posting-specific Go executable was built once offline in 41.584 seconds:
 `x-post-go-build.IYll2SyG/x-post`, SHA-256
 `e4f25370c9fa4e078a958adcbbe70e1fcd464abb283b060e6aceff4b49fb0129`.
 Go 1.23.12, go-twitter 2.1.5 and the complete toolchain/module input inventories
 were retained and unchanged; module verification passed. The build container
-was removed. The executable has not been invoked. Compatible cached Node/Python
-payloads were located, but their complete runtime inventories must still be
-pinned before the connected fixture executes.
+was removed. This executable was used in the connected pass above. The complete
+Node/Python runtime inventory was pinned as
+`2326e887f6e424632077a4ea90f81a083ed5eba584110ae54fe40cd7a671c463`.

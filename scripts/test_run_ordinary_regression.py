@@ -141,7 +141,7 @@ class RunnerTests(unittest.TestCase):
                 while time.monotonic() < deadline:
                     try:
                         state = Path(f"/proc/{child}/stat").read_text().split(")", 1)[1].split()[0]
-                    except FileNotFoundError:
+                    except (FileNotFoundError, ProcessLookupError):
                         break
                     if state == "Z":  # Awaiting the isolated container's init reaper.
                         break

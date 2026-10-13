@@ -640,6 +640,11 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_operator_npm_example_fixture.py \
 	scripts/test_operator_npm_example_recipe.py \
 	scripts/test_operator_npm_example_checker.py \
+	scripts/test_operator_x_post_profiles.py \
+	scripts/test_operator_x_post_fixture.py \
+	scripts/test_operator_x_post_checker.py \
+	scripts/test_prepare_operator_x_post_fixture.py \
+	scripts/test_run_operator_x_post_fixture.py \
 	scripts/test_agent_trust_import_identity.py \
 	scripts/test_codebase_attestation.py \
 	scripts/test_native_postgres_contract.py \

@@ -30,8 +30,13 @@ class RunnerTests(unittest.TestCase):
             "test_operator_x_lease_boundary.py", "test_operator_x_secret_boundary.py",
             "test_operator_x_readiness.py"}
         x_ui = {"test_operator_x_accounts_ui.cjs", "test_operator_x_configuration_ui.mjs"}
-        self.assertEqual({row.script for row in runner.SUITES if row.script.startswith("test_operator_x_")},
-            x_backend | x_ui)
+        x_fixture = {"test_operator_x_post_profiles.py", "test_operator_x_post_fixture.py",
+            "test_operator_x_post_checker.py", "test_prepare_operator_x_post_fixture.py",
+            "test_run_operator_x_post_fixture.py"}
+        self.assertTrue(x_fixture <= set(paths))
+        self.assertEqual({row.script for row in runner.SUITES if row.script.startswith(
+            ("test_operator_x_", "test_prepare_operator_x_", "test_run_operator_x_"))},
+            x_backend | x_ui | x_fixture)
         for row in runner.SUITES:
             if row.script in x_backend:
                 self.assertEqual((row.category, row.runtime, row.arguments, row.seconds),
@@ -39,6 +44,9 @@ class RunnerTests(unittest.TestCase):
             elif row.script in x_ui:
                 self.assertEqual((row.category, row.runtime, row.arguments, row.seconds),
                     ("ui_contract", "node", (), 60))
+            elif row.script in x_fixture:
+                self.assertEqual((row.category, row.runtime, row.arguments, row.seconds),
+                    ("backend", "python", (), 60))
         for excluded in ("test_operator_x_lifecycle_connected.py", "test_operator_x_configuration_connected.py",
                 "test_operator_x_browser.cjs"):
             self.assertNotIn(excluded, paths)

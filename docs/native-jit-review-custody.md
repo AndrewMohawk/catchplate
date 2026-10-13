@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Native JIT review custody: implemented boundary and remaining work
 
 The source now connects the protected proxy request to native sealing,
@@ -150,7 +152,35 @@ turn v26 into a combined all-purpose operator workspace.
 
 ### Current component verification
 
-These are separate isolated stages, not one full green integration run:
+Hosted [CI 38465762551](https://github.com/example/private-deployment)
+passed at exact `aca8e74e`: **74 suites, 737 Python tests, 210 Node groups,
+zero skips**, including the actual 32 npm groups and two SQLite bootstrap tests.
+Artifact receipts were joined to the checkout, all test scripts and
+`requirements.lock`; this is not an imported-source closure audit, Rust
+acceptance or deployment evidence. The retained `ordinary-ci-aca8e74e.yRbYZGBs`
+verification SHA-256 is
+`485ac69dbcb7f126076613efa62422e14b278ed59c1365ae4f743c4c54df1180`;
+its result SHA-256 is
+`744c440f892ed82b9a0268b631b5ad13bbfe20219a03585f8b0545b61cb2d855`.
+
+The separate Rust batch at exact `aca8e74e` passed **30 freshly executed library
+tests, 170 binary tests and all 14 API checks**, with no test-result reuse.
+All 58 owned containers were removed and six maintenance locks released.
+Only test artifacts were built: no normal executable, native/provider admission
+or deployment follows. Durable evidence is
+`native-jit-submission-rust.skpaNdl9`; result SHA-256 is
+`96d8dea3a72065011d86c113a91e0ee434f952870e6162bc4aa02dddf7323601`,
+and its `phase-receipts.tar.gz` SHA-256 is
+`3ccacb0947a9adc6b3d11133ba044f14c9168ef8e63770c99c61f2f2bfc1537e`.
+The earlier failed Rust stages below remain historical evidence.
+
+Separately, the [ordinary SQLite migration](operator-authority-contract-migration.md#verified-migration-controls)
+passed 12 synthetic tests with genuine old-source initialization, the actual
+migration, two target cold starts, seven rollback points and a postcommit
+unknown outcome control. This is not retained-data or native admission proof;
+retained-copy rehearsal and deployment remain pending.
+
+The earlier isolated stages remain separate, with their failures preserved:
 
 - `native-jit-integration-corrected.u5Ku9AJf` passed its first nine suites /
   130 tests, then failed the new ingress suite. The generic name guard rejected
@@ -165,7 +195,7 @@ These are separate isolated stages, not one full green integration run:
   including two starts and installed constraints with rollback-only fixture
   rows. This is development-schema evidence, not PostgreSQL or native admission.
 - `native-jit-runner-final.3aUJps1w` passed all 12 runner controls after the
-  explicit roster reached 74 suites. It did not run that full roster.
+  explicit roster reached 74 suites. That earlier run exercised runner controls only.
 - `native-jit-storage-postgres-corrected.Pz4gxn` passed 10 isolated PostgreSQL
   controls with zero skips: composed DDL/immutability, the actual pending kernel,
   production CAS/application order, SERIALIZABLE commit/rollback, foreign keys,
@@ -227,5 +257,5 @@ line 3, but with two primary diagnostic spans where the harness required one.
 The aggregate therefore failed; probes 12–13 did not run. No API visibility
 regression was observed, but this is not complete API or overall acceptance.
 
-No normal binary was built or deployed. The newer pending-submission Rust batch
-is outside this checkpoint and remains uncompiled.
+No normal binary was built or deployed. This historical checkpoint does not
+cover the later `aca8e74e` pending-submission batch verified above.

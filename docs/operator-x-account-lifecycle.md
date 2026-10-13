@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Connected X accounts
 
 This implementation belongs to the ordinary, persistent Serverware workspace;
@@ -67,17 +69,84 @@ disconnect with an unavailable gate. The first browser attempt exposed an
 incorrect test expectation for an intentionally disabled selector option;
 the corrected check passed without a production UI change.
 
-The first joined ASGI attempt completed configuration, consent, grants,
-refresh and disconnect against the synthetic provider, then failed in its
-second worker when reopening the retained database. The original frame-only
-diagnostic was initially misread as a first-start failure; the parent traceback
-and `interpretation-correction.md` retain the distinction. X metadata inspection
-had created an empty SQLite temporary schema on the borrowed startup connection.
-Inspection now checks an existing temp schema without creating one; shadow
-refusals and the Google main-only startup guard remain unchanged. The full
-four-group lifecycle suite still needs a successful post-fix result.
-Compiled Rust, actual SDK through the proxy, retained-state compatibility,
-deployment and real-provider acceptance must each be recorded separately
-before claiming those boundaries.
-Current test evidence is retained in `x-accounts-connected.hWXZjH` and
-`catalog-test-environment.8kKB0J` under the operator-workspace evidence directory.
+At source checkpoint `c207ac75`, the feature-gated connected account, callback,
+quota-free typed grant, refresh, protective disconnect and console controls are
+implemented. Joined attempt `joined-05` subsequently passed all four groups
+across five actual ASGI workers in 83.961 seconds (87.673 seconds outer), exit
+zero. It uses real SQLite, encrypted custody and lifecycle owners with synthetic
+provider HTTP wire and gate health, not actual TLS, Rust or SDK-through-proxy
+traffic. Controls include one-use callback binding, lost acknowledgements,
+uncertain outcomes without replay, refresh single-flight and a disconnect fence
+against a late refresh response.
+
+The fresh-process reopen preserves the key, signed policy, schema and all other
+retained cells. Its sole allowed database change is the `applied_at` startup
+stamp on the `policy_candidate_authority` row of `serverware_store_migrations`,
+proven within the actual startup interval. Earlier namespace and overly strict
+reopen-oracle failures remain retained; `interpretation-correction.md` explains
+why the first failure was a reopen, not a failure before consent. The namespace
+repair avoids creating an empty temp schema; it does not relax shadow detection
+or Google's main-only startup guard.
+
+The separate frozen `c207ac75` ordinary regression run finished **27/29 suites
+passing**, not a clean full-roster pass. Its two stale expectations were fixed:
+the focused body-routing suite passed 5/5 in 44.63 seconds outer, and the
+runtime-browser asset/checker suite passed 27 groups in 0.994 seconds. Those
+later source/results do not rewrite the original failed receipt.
+After pushing `1ee2f04d`, hosted [CI run 38326557489](https://github.com/example/private-deployment)
+passed all 29 suites in 396.277 seconds; every suite exited successfully, with
+no skips. Its
+downloaded structural result is retained in `x-ordinary-ci.3pUvRs5z`; this is a
+new full-roster pass, separate from the earlier local failure.
+
+Corrected Rust source `6d67ab37` passed 112 tests across 15 nonoverlapping
+filters. The initial run's two X failures came from a synthetic lease fixture
+using the wrong expiry metadata field; the closed production validator was not
+relaxed. The corrected test compilation took 328.625 seconds and the normal
+executable build took 363.707 seconds, with 224 cached dependency/library
+artifacts fresh. Normal executable SHA-256 is
+`811082ac5e87f9ec05b9252cc53c180e965e563799b07235976c1654e6672d6e`;
+its actual compiler receipt contains 515 inputs. All 18 owned containers were
+removed and the failed attempt remains retained. The independent join in
+`x-normal-source-join.514GRT8L/join.json` verified all 515 compiler inputs and
+1,173 pinned files against build `6d67ab37` and committed candidate `1ee2f04d`.
+Its SHA-256 is `e6cdc8b79b90fea710ea8cf8bb8cdedabf44c370a4e68182a260fa908dae1c9f`.
+It also verified the separate test executable and terminal cleanup receipts.
+Preserved cache metadata does not authenticate cached compiler outputs or
+establish independent release provenance. The normal binary has not been run.
+Deployment, real TLS and SDK-through-proxy posting, shared daily quota and
+real-X acceptance remain open.
+
+Evidence is retained under
+`serverware-operator-workspace-evidence/x-accounts-connected.hWXZjH`
+(`joined-05-result.json`, joined logs, and `ordinary-regression/`), alongside
+`x-ordinary-rust-r2.evutcaLq/attempt-result.json`, the independent source join,
+the earlier failed
+`x-ordinary-rust.epw6xQIQ` build, and `catalog-test-environment.8kKB0J` receipts.
+
+## Next connected acceptance
+
+The managed-post runtime fixture is not implemented yet. It will compose the
+existing isolated X network/TLS containment and catalog/consent orchestration,
+without changing production provider URLs or weakening trust. Start the app
+before the gate so the original public manifest, lock and CA leaves exist;
+never mount private X custody into the gate. Real configuration, callback,
+account adoption and grant APIs must precede stock Node/Python/Go posting.
+
+Require three generation-one posts, genuine token expiry and three further
+posts with exactly one automatic refresh/identity verification. X refresh
+legitimately updates the catalog revision and account generation/expiry; policy,
+assignments, subject and client must remain exact. Join durable events by unique
+attempt ID, not by assuming request digests are unique. Wrong-app, wrong-trust
+and disconnected-account attempts must add no provider posts. A separately
+counted reflected-response write must be withheld with unknown outcome and no
+retry. This remains synthetic/local acceptance, not real X or daily-quota proof.
+
+The posting-specific Go executable was built once offline in 41.584 seconds:
+`x-post-go-build.IYll2SyG/x-post`, SHA-256
+`e4f25370c9fa4e078a958adcbbe70e1fcd464abb283b060e6aceff4b49fb0129`.
+Go 1.23.12, go-twitter 2.1.5 and the complete toolchain/module input inventories
+were retained and unchanged; module verification passed. The build container
+was removed. The executable has not been invoked. Compatible cached Node/Python
+payloads were located, but their complete runtime inventories must still be
+pinned before the connected fixture executes.

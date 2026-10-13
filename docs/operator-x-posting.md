@@ -2,11 +2,12 @@
 
 # X account posting: implementation boundary
 
-Status on 2026-10-12: the typed posting contract and ordinary SDK examples are
-implemented in source. **Posting is not available in the operator console and
-has not passed SDK-through-proxy or real-provider acceptance.** The deployed
-username-read preset does not authorize posting. No pilot is required to finish
-or verify this ordinary application workflow.
+Status on 2026-10-12: the typed posting contract, ordinary SDK examples and
+feature-gated account/permission console flow are implemented in source,
+including connected consent, refresh and protective disconnect at `c207ac75`.
+**This work is not deployed and has not passed actual TLS/Rust/SDK-through-proxy
+or real-X acceptance.** The deployed username-read preset does not authorize
+posting. No pilot is required to finish or verify this ordinary workflow.
 
 ## Fixed permission
 
@@ -37,9 +38,10 @@ application, route, OAuth client, credential ID or credential version. All typed
 posting routes for that account must agree on whether a quota exists and its
 maximum. When selected, same-account legacy X writes and generic routes matching
 the posting endpoint are rejected. This is a policy consistency guarantee, not
-proof of a functioning quota backend. The ordinary deployment does not yet
-provide the required shared quota execution path; no local-counter fallback or
-native-authority bypass was added.
+proof of a functioning quota backend. The connected console/API offers only a
+quota-free typed grant and explicitly refuses requested daily-quota fields.
+The required shared quota execution path remains unsupported; no local-counter
+fallback or native-authority bypass was added.
 
 ## Ordinary client examples
 
@@ -136,20 +138,38 @@ verify a retained cache. No real build source, cache or deployment was changed.
 
 The intended story is: connect an X account in the console, give an application
 a posting permission, send its ordinary SDK request through the proxy, and
-inspect the durable audit result. First-save application configuration is now
-connected in source, but is not deployed. The next unimplemented boundary is
-account connection: `operator_catalog_schema.py` admits `google_oauth` but no X OAuth
-credential type, and `operator_demo.py` does not admit an X callback. Full-flow
-verification stops there; the component results above do not bridge that gap.
+inspect the durable audit result. The source now joins application configuration,
+the separate `x_oauth` account type, PKCE callback, encrypted custody, refresh,
+protective disconnect and capability-gated quota-free posting UI. These do not
+automatically enable the feature on the running instance.
 
-1. Join administrator X OAuth setup, genuine account consent, verified identity,
-   encrypted custody and managed refresh to the ordinary operator lifecycle.
-2. Join durable shared quota execution when that optional restriction is chosen.
-3. Add the capability-gated account/permission UI and matching app/proxy release.
-4. Exercise the actual SDKs through the real proxy against an isolated provider,
-   including denied requests, uncertain writes, quota boundaries and audit.
-5. With operator-supplied provider configuration and consent, verify the real X
+1. Execute connected acceptance with the independently joined normal Rust
+   artifact, then complete the matching app/proxy release.
+2. Exercise actual SDKs through verified TLS and the real proxy against an
+   isolated provider, including denials, uncertain writes and durable audit.
+3. Add durable shared-account quota execution before offering that restriction;
+   the current account/grant flow must continue to refuse it.
+4. With operator-supplied provider configuration and consent, verify the real X
    journey separately. Public proxy DNS repair remains a separate approval.
+
+### Connected lifecycle checkpoint
+
+`x-accounts-connected.hWXZjH/joined-05` passed four groups across five actual
+ASGI workers in 83.961 seconds, with synthetic provider wire and gate health.
+It exercises configuration through disconnect and a fresh-process reopen. Only
+the proven `policy_candidate_authority` migration row's `applied_at` startup
+stamp may change on reopen; all other retained cells, schema, key and policy
+remain exact. Earlier namespace/reopen-oracle failures remain in that evidence
+directory. The [lifecycle record](operator-x-account-lifecycle.md#verification-checkpoint)
+also records the frozen ordinary regression's 27/29 result and the two separate
+focused stale-test fixes. Hosted CI at `1ee2f04d` subsequently passed all 29
+suites in 396.277 seconds, without erasing the earlier failed receipt. Corrected
+Rust source `6d67ab37` passed 112 tests across 15 filters and produced
+normal executable `811082ac5e87f9ec…`, with an actual 515-input compiler receipt.
+This is separate from the historical 45-test core result above. The independent
+join subsequently verified the normal compiler inputs against committed
+`1ee2f04d`; normal-binary runtime acceptance remains pending. None of these
+results establishes deployed or real-X posting.
 
 ### Ordinary X account ownership contract
 
@@ -177,9 +197,10 @@ signed policy and upstream settings are unchanged by saving an X application.
 This configuration is per-operation control-plane state, not Google's cold
 app/proxy profile selection. Saving requires no restart and does not populate
 global X OAuth settings. Actual process admission still excludes native/enrolled
-ownership. Each future consent, refresh or cleanup operation must bind its exact
-retained configuration version before contacting X. Replacement and disabling
-remain refused until dependent account/cleanup ownership is implemented.
+ownership. Consent, refresh and cleanup owners bind the exact retained
+configuration version before contacting X. Client-configuration replacement and
+disabling remain refused; account disconnect does not implement those separate
+configuration-change workflows.
 
 The deployment owner must explicitly select
 `SERVERWARE_OPERATOR_MANAGED_X_ENABLED=1` and an existing private 0700
@@ -187,8 +208,11 @@ The deployment owner must explicitly select
 be separate and non-nested from both app data and Google's provider key directory;
 it must also be kept out of gate/notification mounts. The normal Compose
 deployment has not been changed or enabled by these source additions. X controls
-stay hidden when the deployment reports the feature disabled. No consent button
-or posting-ready claim is exposed.
+stay hidden when the deployment reports the feature disabled. When selected,
+account consent and new posting grants additionally require the actual matching
+app/gate configuration and policy observation; saved configuration alone cannot
+make them ready. Protective disconnect and operation recovery remain separate
+from posting readiness.
 
 The public profile/input validator remains separate from ownership admission.
 Write-only serialization omits the client secret; the connected HTTP handler
@@ -224,24 +248,26 @@ missing returned refresh token remain uncertain under this conservative preset,
 not rejection or permission to reuse the old token. It assumes no unconditional
 refresh-token rotation guarantee.
 
-These are codecs, not a transport or lifecycle owner. Request reconstruction
+These codecs are not themselves a transport or lifecycle owner. Request reconstruction
 checks client/phase consistency, but a parsed success or denial is not proof of
 provider contact, verified account ownership or permission to retire cleanup.
-The future owner must provide the authenticated, bounded no-redirect transport
-and durable material retention. Revocation recognizes bounded empty HTTP 200
+The connected owner now supplies the bounded no-redirect transport and durable
+material retention; joined tests feed synthetic wire, not real provider TLS.
+Revocation recognizes bounded empty HTTP 200
 and exact JSON `{"revoked":true}` acknowledgments; neither proves propagation.
 The latter shape is supported by X's [official TypeScript OAuth client](https://github.com/xdevplatform/twitter-api-typescript-sdk/blob/main/src/OAuth2User.ts),
 while endpoint and confidential-client behavior follow the [X OAuth flow guide](https://docs.x.com/fundamentals/authentication/oauth-2-0/user-access-token).
 
-The next integration must join these actual owners:
+The source now joins these owners; deployment and provider acceptance remain
+separate:
 
 | Boundary | Required owner and durable result |
 | --- | --- |
 | Configure | Implemented in source: explicit ordinary-development admission, provider-disjoint retained configuration/custody, exact version and atomic audit/revision. No restart or provider contact. |
-| Consent | Actor-owned X intent, browser-bound one-use state and S256 PKCE, exact profile/revision checks, and retained cleanup capacity before exchanging a code. |
-| Connect | Verify `/2/users/me`; atomically join encrypted token, credential generation, X catalog identity, completed intent, cleanup disposition and audit. No implicit app grant. |
-| Refresh | Retain issued material before validation; atomically join replacement generation and audit. Preserve uncertain outcomes and original-client cleanup custody; do not automatically replay after a CAS conflict. |
-| Disconnect | Fence credential and dependent permissions locally, publish reduced policy, then perform provider cleanup outside publication/DB locks. Report local denial separately from provider acknowledgment. |
+| Consent | Implemented: actor-owned X intent, browser-bound one-use state and S256 PKCE, exact profile/revision checks, and retained cleanup capacity before code exchange. |
+| Connect | Implemented: verify `/2/users/me`; atomically join encrypted token, credential generation, X catalog identity, completed intent, cleanup disposition and audit. No implicit app grant. |
+| Refresh | Implemented: retain issued material before validation; atomically join replacement generation and audit. Preserve uncertain outcomes and original-client cleanup custody; no automatic replay after a CAS conflict. |
+| Disconnect | Implemented: fence credential and dependent permissions locally, publish reduced policy, then perform provider cleanup outside publication/DB locks. Local denial is distinct from provider acknowledgment. |
 
 Stable numeric user ID is authority; `@username` is display metadata. Keep the
 current core X client binding (`x_app_id`) and any new public configuration
@@ -256,7 +282,8 @@ app-only key directory. First-key initialization refuses retained X configuratio
 or custody objects; Google first-key initialization is unchanged. There is no
 shared provider-key bootstrap or cross-provider key adoption.
 Decryption alone does not select the active profile/version. Client replacement
-must remain refused until original-client cleanup ownership is implemented.
+remains refused until a reviewed configuration-rotation workflow preserves all
+original-client account and cleanup obligations.
 
 Neither X consent nor posting capability should appear ready merely because a
 profile parses or the app is healthy. Posting additionally requires the actual

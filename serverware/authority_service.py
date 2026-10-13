@@ -61,6 +61,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 
 from serverware import authority_contract
+from serverware import authority_release_private_input
 from serverware import authority_approver_policy
 from serverware import authority_recovery_configuration as recovery_configuration
 from serverware import authority_challenge_policy as challenge_maintenance_policy
@@ -2861,18 +2862,22 @@ def _extract_v9_runtime_input(
             == authority_contract.OPERATION_MANIFEST_DIGEST
         and isinstance(runtime_input.get("arguments"), dict)
     ):
-        return dict(runtime_input["arguments"]), None, None
-    if (
+        arguments = dict(runtime_input["arguments"])
+        webauthn = None
+    elif (
         set(runtime_input) == {"input", "webauthnAuthorization"}
         and isinstance(runtime_input.get("input"), dict)
         and isinstance(runtime_input.get("webauthnAuthorization"), dict)
     ):
-        return (
-            dict(runtime_input["input"]),
-            dict(runtime_input["webauthnAuthorization"]),
-            None,
-        )
-    raise AuthorityServiceError("authority v9 accepts only semantic typed input")
+        arguments = dict(runtime_input["input"])
+        webauthn = dict(runtime_input["webauthnAuthorization"])
+    else:
+        raise AuthorityServiceError("authority v9 accepts only semantic typed input")
+    try:
+        authority_release_private_input.require_public_arguments(operation, arguments)
+    except authority_release_private_input.PrivateReleaseInputError:
+        raise AuthorityServiceError(authority_release_private_input.ERROR) from None
+    return arguments, webauthn, None
 
 
 def _authorization_arguments(

@@ -10,6 +10,7 @@ from functools import wraps
 from typing import Any
 
 from serverware import authority_contract
+from serverware import authority_release_private_input
 from serverware import authority_transition_registry
 
 _DB_GLOBALS: Mapping[str, Any] | None = None
@@ -392,6 +393,14 @@ def _install_authority_controlled_writer_boundaries() -> None:
                 raise _db_value("MetadataStoreError")(
                     "authority writer arguments are not closed"
                 )
+            try:
+                authority_release_private_input.require_public_arguments(
+                    __operation, marshaled_arguments
+                )
+            except authority_release_private_input.PrivateReleaseInputError:
+                raise _db_value("MetadataStoreError")(
+                    authority_release_private_input.ERROR
+                ) from None
             if __operation == "jit.request":
                 from serverware import authority_jit_private_request
                 from serverware.authority_transition_core import (

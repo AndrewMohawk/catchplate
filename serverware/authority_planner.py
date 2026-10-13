@@ -22,6 +22,7 @@ from serverware.authority_audit_trace import (
     audit_capacity_scan_key,
 )
 from serverware import authority_contract
+from serverware import authority_release_private_input
 from serverware import authority_credential_currentness as credential_currentness
 from serverware import authority_publication_approval as publication_approval
 from serverware import authority_public_revocation_approval as public_revocation_approval
@@ -4491,6 +4492,12 @@ class PlannerPersistence:
             expected_identity=self.expected_identity,
         )
         measured_plan = payload["measuredPlan"]
+        try:
+            authority_release_private_input.require_public_request(
+                payload["typedRequest"], operation=measured_plan["operation"]
+            )
+        except authority_release_private_input.PrivateReleaseInputError:
+            raise AuthorityPlannerError(authority_release_private_input.ERROR) from None
         import psycopg
         from psycopg.rows import dict_row
         from serverware import db

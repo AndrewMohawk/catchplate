@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from serverware import authority_contract
+from serverware import authority_release_private_input
 from serverware import authority_audit_capacity
 from serverware import authority_challenge_retention
 from serverware import authority_native_activation_hold
@@ -2431,6 +2432,9 @@ def reserve_authority_execution_envelope(
         raise ValueError("authority v9 request binding is not exact")
     if operation == "jit.request":
         _require_public_jit_retention_request(exact_request)
+    authority_release_private_input.require_public_request(
+        exact_request, operation=operation
+    )
     raw = _require_planner_writer(connection)
     request_base64url = _b64url(exact_request_bytes)
     request_bytes_digest = "sha256:" + hashlib.sha256(
@@ -3337,6 +3341,10 @@ def complete_authority_planner_transaction(
     if isinstance(planner_payload, dict):
         measured = planner_payload.get("measuredPlan")
         typed = planner_payload.get("typedRequest")
+        authority_release_private_input.require_public_request(
+            typed,
+            operation=measured.get("operation") if isinstance(measured, dict) else None,
+        )
         if (isinstance(measured, dict) and measured.get("operation") == "jit.request"
                 or isinstance(typed, dict) and typed.get("operation") == "jit.request"):
             _require_public_jit_retention_request(typed)

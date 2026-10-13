@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline history projection: real db function and disposable SQLite only.
+"""Offline approval metadata/history: real db functions and disposable SQLite.
 
 No production database, authority, native opener or HTTP server is exercised.
 The UI's pure history formatter is extracted verbatim to avoid app startup.
@@ -44,6 +44,24 @@ FILTERS = ("principal_id", "route_id", "credential_id", "policy_hash")
 PRIVATE = ("url", "canonical_request", "redacted_display", "approver_policy_json")
 AUTHN = {"method": "webauthn", "authenticator_class": "hardware",
          "user_verified": True, "ignored_internal_field": "not rendered"}
+
+# Independent expected roster, not derived from the implementation constant.
+# Unlike similar-history rows, single-request public metadata includes the URL
+# and complete retained policy, but never selects the private review documents.
+METADATA_PUBLIC = (
+    "id", "route_id", "method", "url", "status", "requested_at", "expires_at",
+    "approved_until", "decision_note", "principal_id", "credential_id",
+    "credential_version", "policy_hash", "request_digest", "operation_digest",
+    "grant_ttl_seconds", "grant_max_uses", "approver_policy_digest",
+    "verified_assertion_receipt_digest", "approved_by",
+)
+METADATA_PRIVATE = ("canonical_request", "redacted_display", "approval_authn")
+STORED_POLICY = {
+    "allowAnyApproverId": False, "allowedApproverIds": ["oidc:reviewer-a", "oidc:reviewer-b"],
+    "requiredRoles": ["approver", "finance"], "requireWebAuthn": True, "threshold": 2,
+    "credentialPolicy": {"userVerification": "required", "authenticatorClasses": ["hardware"],
+                         "requireAttestation": True},
+}
 
 
 def actual_history_formatter():
@@ -159,6 +177,118 @@ class ApprovalHistoryMetadataTests(unittest.TestCase):
         self.assertIsNone(rows[0]["operation_digest"])
         self.assertEqual(actual_history_formatter()(rows[0])["authn"], {
             "method": None, "authenticator_class": None, "user_verified": None})
+
+
+class ApprovalRequestMetadataTests(unittest.TestCase):
+    """Actual SQLite projection, not private opening or authority admission."""
+    def setUp(self):
+        self.connection = sqlite3.connect(":memory:", cached_statements=0)
+        self.connection.row_factory = sqlite3.Row
+        self.addCleanup(self.connection.close)
+        columns = METADATA_PUBLIC + ("approver_policy_json",) + METADATA_PRIVATE
+        integers = {"credential_version", "grant_ttl_seconds", "grant_max_uses"}
+        self.connection.execute("CREATE TABLE approval_requests (" + ",".join(
+            name + (" INTEGER" if name in integers else " TEXT") +
+            (" PRIMARY KEY" if name == "id" else "") for name in columns) + ")")
+
+        @contextmanager
+        def local_connection():
+            yield self.connection
+
+        for name, replacement in (
+            ("connect", {"side_effect": local_connection}),
+            ("_decrypt_approval_json", {"side_effect": AssertionError("metadata attempted private decryption")}),
+            ("row_to_approval", {"side_effect": AssertionError("metadata used private document projection")}),
+        ):
+            patcher = patch.object(db, name, **replacement)
+            setattr(self, name, patcher.start())
+            self.addCleanup(patcher.stop)
+
+    def insert(self, identifier="selected", **updates):
+        row = {
+            "id": identifier, "route_id": "route.synthetic", "method": "POST",
+            "url": "https://public.example.test/reviewed-operation", "status": "pending",
+            "requested_at": "2026-10-13T00:00:00Z", "expires_at": "2026-10-13T00:05:00Z",
+            "approved_until": None, "decision_note": None, "principal_id": "agent:synthetic",
+            "credential_id": "synthetic-credential", "credential_version": 7,
+            "policy_hash": "sha256:" + "1" * 64, "request_digest": "sha256:" + "2" * 64,
+            "operation_digest": "sha256:" + "3" * 64, "grant_ttl_seconds": 30,
+            "grant_max_uses": 1, "approver_policy_digest": "sha256:" + "4" * 64,
+            "verified_assertion_receipt_digest": None, "approved_by": None,
+            "approver_policy_json": json.dumps(STORED_POLICY),
+            **{name: "v2:INVALID-PRIVATE-CANARY:" + name for name in METADATA_PRIVATE}, **updates,
+        }
+        self.connection.execute("INSERT INTO approval_requests (" + ",".join(row) +
+            ") VALUES (" + ",".join("?" for _ in row) + ")", tuple(row.values()))
+        return {**{name: row[name] for name in METADATA_PUBLIC},
+                "approver_policy": json.loads(row["approver_policy_json"]) if row["approver_policy_json"] else None}
+
+    def query(self, identifier):
+        selected = set()
+        refused = []
+        queries = []
+
+        def authorize(action, table, column, _database, _trigger):
+            if action == sqlite3.SQLITE_READ:
+                if table != "approval_requests" or column not in METADATA_PUBLIC + ("approver_policy_json",):
+                    refused.append((table, column))
+                    return sqlite3.SQLITE_DENY
+                selected.add(column)
+            elif action != sqlite3.SQLITE_SELECT:
+                refused.append((action, table))
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        before = self.connection.total_changes
+        self.connection.set_authorizer(authorize)
+        self.connection.set_trace_callback(queries.append)
+        try:
+            result = db.get_approval_request_metadata(identifier)
+        finally:
+            self.connection.set_authorizer(None)
+            self.connection.set_trace_callback(None)
+        self.assertEqual(self.connection.total_changes, before)
+        self.assertEqual(refused, [])
+        self.assertEqual(selected, set(METADATA_PUBLIC) | {"approver_policy_json"})
+        self.assertEqual(len(queries), 1)
+        self._decrypt_approval_json.assert_not_called()
+        self.row_to_approval.assert_not_called()
+        self.assertNotIn("INVALID-PRIVATE-CANARY", json.dumps(result))
+        return result
+
+    def test_exact_public_fields_and_stored_policy_survive_invalid_private_ciphertext(self):
+        expected = self.insert()
+        result = self.query("selected")
+        self.assertEqual(result, expected)
+        self.assertEqual(set(result), set(METADATA_PUBLIC) | {"approver_policy"})
+        self.assertEqual(result["approver_policy"], STORED_POLICY)
+        self.assertEqual(result["approver_policy"]["threshold"], 2)
+
+    def test_exact_id_absence_and_parameter_binding(self):
+        self.insert("unrelated")
+        special = "approval' OR 1=1 --"
+        expected = self.insert(special)
+        self.assertIsNone(self.query("missing"))
+        self.assertIsNone(self.query("unrelated' OR 1=1 --"))
+        self.assertEqual(self.query(special), expected)
+
+    def test_status_and_metadata_do_not_depend_on_private_document_availability(self):
+        for index, (status, private) in enumerate((
+            ("pending", None), ("approved", "{"), ("denied", b"\x00\xffciphertext"),
+            ("expired", "v2:INVALID-PRIVATE-CANARY:no-key"),
+        )):
+            with self.subTest(status=status, private_type=type(private).__name__):
+                identifier = "state-" + str(index)
+                expected = self.insert(identifier, status=status,
+                    **{name: private for name in METADATA_PRIVATE})
+                self.assertEqual(self.query(identifier), expected)
+
+    def test_absent_stored_policy_is_not_reconstructed_from_private_documents(self):
+        expected = self.insert(approver_policy_json=None,
+            canonical_request=json.dumps({"approver_policy": STORED_POLICY}),
+            redacted_display=json.dumps({"approver_policy": STORED_POLICY}))
+        self.assertIsNone(expected["approver_policy"])
+        self.assertEqual(self.query("selected"), expected)
 
 
 if __name__ == "__main__":

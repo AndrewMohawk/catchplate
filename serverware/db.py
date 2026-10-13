@@ -69641,6 +69641,25 @@ def _ensure_policy_route_reference(conn: Any, route_id: str) -> None:
     )
 
 
+def get_approval_request_metadata(item_id: str) -> dict[str, Any] | None:
+    """Read public decision metadata, not private documents or authority proof."""
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, route_id, method, url, status, requested_at, expires_at,
+                   approved_until, decision_note, principal_id, credential_id,
+                   credential_version, policy_hash, request_digest,
+                   operation_digest, grant_ttl_seconds, grant_max_uses,
+                   approver_policy_digest, verified_assertion_receipt_digest,
+                   approved_by, approver_policy_json
+            FROM approval_requests
+            WHERE id = ?
+            """,
+            (item_id,),
+        ).fetchone()
+    return row_to_approval_public(row) if row else None
+
+
 def get_approval_request(item_id: str) -> dict[str, Any] | None:
     with connect() as conn:
         row = conn.execute(

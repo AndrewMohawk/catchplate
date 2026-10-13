@@ -5254,23 +5254,6 @@ def _assert_approver_allowed(identity: AdminIdentity, jit: dict[str, Any]) -> No
         )
 
 
-def _approval_review_authority_metadata(approval_id: str) -> dict[str, Any] | None:
-    with db.connect() as conn:
-        row = conn.execute(
-            """
-            SELECT id, route_id, method, url, status, requested_at, expires_at,
-                   approved_until, decision_note, principal_id, credential_id,
-                   credential_version, policy_hash, request_digest,
-                   operation_digest, grant_ttl_seconds, grant_max_uses,
-                   approved_by
-            FROM approval_requests
-            WHERE id = ?
-            """,
-            (approval_id,),
-        ).fetchone()
-    return db.approval_public_summary(dict(row)) if row else None
-
-
 def _assert_approval_reviewer_allowed(
     identity: AdminIdentity, approval: dict[str, Any]
 ) -> None:
@@ -17950,7 +17933,7 @@ def approval_review(
     approval_id: str,
     identity: AdminIdentity = Depends(require_role("approver")),
 ) -> dict[str, Any]:
-    authority = _approval_review_authority_metadata(approval_id)
+    authority = db.get_approval_request_metadata(approval_id)
     if not authority:
         raise HTTPException(status_code=404, detail="approval not found")
     if not identity.has_any_role({"approver"}):
@@ -17963,6 +17946,8 @@ def approval_review(
         }
     _assert_approval_reviewer_allowed(identity, authority)
 
+    # Private review opening is separate from metadata-only decision preflight.
+    # This legacy reader is not a native-custody review-opening authority.
     approval = db.get_approval_request(approval_id)
     if not approval:
         raise HTTPException(status_code=404, detail="approval not found")
@@ -18008,7 +17993,7 @@ def approve(
     payload: ApprovalApprove | None = Body(default=None),
     identity: AdminIdentity = Depends(require_role("approver")),
 ) -> dict[str, Any]:
-    approval = db.get_approval_request(approval_id)
+    approval = db.get_approval_request_metadata(approval_id)
     if not approval:
         raise HTTPException(status_code=404, detail="approval not found")
     if approval["status"] != "pending":
@@ -18108,7 +18093,7 @@ def _denial_review_context(
     identity: AdminIdentity,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     try:
-        approval = db.get_approval_request(approval_id)
+        approval = db.get_approval_request_metadata(approval_id)
     except db.MetadataStoreError as exc:
         raise HTTPException(status_code=503, detail="approval authority is unavailable") from exc
     if not approval:
@@ -18204,7 +18189,7 @@ def approval_webauthn_options(
     payload: ApprovalWebAuthnOptionsRequest,
     identity: AdminIdentity = Depends(require_role("approver")),
 ) -> dict[str, Any]:
-    approval = db.get_approval_request(approval_id)
+    approval = db.get_approval_request_metadata(approval_id)
     if not approval:
         raise HTTPException(status_code=404, detail="approval not found")
     if approval["status"] != "pending":

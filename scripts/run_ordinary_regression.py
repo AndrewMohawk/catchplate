@@ -54,6 +54,7 @@ SUITES = (
     Suite("backend", "test_jit_denial_api.py", seconds=60),
     Suite("backend", "test_authority_jit_denial.py", seconds=60),
     Suite("backend", "test_authority_jit_approval.py", seconds=60),
+    Suite("backend", "test_approval_history_metadata.py", seconds=60),
     Suite("backend", "test_operator_catalog_npm_install.py"),
     Suite("backend", "test_github_app.py"),
     Suite("backend", "test_operator_catalog_github_app.py"),

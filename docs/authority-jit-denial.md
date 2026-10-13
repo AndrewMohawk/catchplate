@@ -1,7 +1,10 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # JIT denial source repair
 
-Status: source implementation with passing focused and PostgreSQL component
-results. The new ordinary CI inventory has not yet run. This is not a completed
+Status: source implementation with passing focused, PostgreSQL and ordinary CI
+component results. The subsequent metadata-reader repair passed focused tests;
+its expanded CI inventory is pending. This is not a completed
 ordinary approval journey or deployment acceptance. The live application
 remains `a3899a95`; this repair has not been deployed.
 
@@ -112,10 +115,36 @@ Independent source review and the Make dry-run passed; failures above remain
 retained. The closeout receipt is `closeout.json`, SHA256
 `74252fe6a4c7c5dfd5ac01df1f3a53ceb134f635608f2bae0786a5bacfa34aa7`.
 
-The ordinary inventory now contains 55 suites, including the new API/denial
-suites and the existing approval pure suite; this new inventory has not yet
-run in CI. The three JIT suites are explicitly excluded from the historical
-Coder inventory, not prepared native tests. No broker roster was changed.
+At `4975b194`, [CI 38384885637](https://github.com/example/private-deployment)
+passed all 55 suites: 476 Python tests and 145 Node groups, zero skips,
+427.696 seconds. The retained result is
+`ci-38384885637.ifT6I5FC/quick/result.json`, SHA256
+`d7526eadf84bd23f21ee213228ebf023e1df88322727c898b23f5c53ca5be0f8`.
+This is ordinary component CI, not production acceptance.
+
+### Metadata-only decision preflight
+
+The subsequent repair adds `db.get_approval_request_metadata`, an exact-ID,
+explicit-column read of public metadata and the complete stored approver policy.
+Approve, deny, both WebAuthn-options paths and private-review preflight use it;
+they no longer invoke private-document decryption just to check eligibility.
+The actual private-review reader remains a separate, legacy operation. This
+does not implement native private opening or turn metadata into authority proof.
+
+The isolated `approval-metadata.mpWBMrrq/results/result.json` run passed six
+suites / 58 tests, zero skips, in 24.992 seconds, with selected source unchanged.
+SHA256: `ed190167e964a326acaad7fba3f2fa61c6f6f9820a09847bc94e64eb54432f01`.
+The eight metadata/history tests use actual SQLite queries and public
+projection; a database authorizer refuses private columns and writes. Sixteen
+route/model units retain explicit dependency doubles and stop at the private
+opening boundary. Other suites cover pure denial, approval, policy and the
+regression runner. No PostgreSQL service, live data, provider or installed
+authority was used; the network-isolated test container was removed.
+
+The ordinary inventory now contains 56 suites, adding the existing metadata
+suite; that expanded inventory has not yet run in CI. The metadata suite and
+three JIT suites are explicitly excluded from the historical Coder inventory,
+not prepared native tests. No broker roster was changed.
 
 Still open: native authenticated private-review opening; the connected
 ordinary approval UI; approve/deny/expire terminal presentation and expiry

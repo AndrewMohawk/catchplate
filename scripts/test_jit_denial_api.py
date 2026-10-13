@@ -25,7 +25,7 @@ def no_external_effects(event, _arguments):
 
 
 sys.addaudithook(no_external_effects)
-from fastapi import Depends, HTTPException
+from fastapi import Body, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,9 +68,13 @@ class WebAuthnError(RuntimeError):
     pass
 
 
+class PrivateReviewUnavailable(RuntimeError):
+    pass
+
+
 class Fixture:
     """These successful authority/DB seams are doubles, never admission."""
-    def __init__(self):
+    def __init__(self, *, metadata_routes=False):
         self.approval = {
             "id": ID, "status": "pending", "expires_at": "2999-01-01T00:00:00+00:00",
             "policy_hash": POLICY, "route_id": "route.synthetic",
@@ -80,13 +84,17 @@ class Fixture:
         }
         self.receipt = {"id": REVIEW, "review_digest": DIGEST}
         self.jit = {"approvers": {"users": [ACTOR], "authn": {"userVerification": "required"}}}
-        self.identity = SimpleNamespace(user_id=ACTOR)
+        self.identity = SimpleNamespace(user_id=ACTOR, has_any_role=Mock(return_value=True))
         self.updated = {"id": ID, "status": "denied", "private": CANARY}
         self.db = SimpleNamespace(
             MetadataStoreError=MetadataError, RBACBindingStoreError=RbacError,
-            get_approval_request=Mock(return_value=self.approval),
+            get_approval_request_metadata=Mock(return_value=self.approval),
+            get_approval_request=Mock(side_effect=PrivateReviewUnavailable("private review not opened by these units")),
             get_active_approval_review_receipt=Mock(return_value=self.receipt),
             deny_request=Mock(return_value=self.updated),
+            approve_request=Mock(return_value={"id": ID, "status": "approved", "private": CANARY}),
+            record_audit_event=Mock(),
+            issue_approval_review_receipt=Mock(side_effect=AssertionError("private review issuance is outside this fixture")),
             approval_public_summary=Mock(return_value={"id": ID, "status": "denied"}),
             issue_policy_authority_webauthn_challenge=Mock(return_value={"id": "authority-challenge", "challenge": "opaque-challenge"}),
         )
@@ -94,21 +102,26 @@ class Fixture:
         self.roles = []
         self.descriptors = Mock(return_value=[{"type": "public-key", "id": "synthetic-authenticator"}])
         self.policy = Mock(return_value=self.jit)
+        self.publish = Mock(return_value={"enabled": False})
         module = ModuleType("_jit_denial_api_selected")
         sys.modules[module.__name__] = module
         self.ns = module.__dict__
         self.ns.update({"Any": Any, "BaseModel": BaseModel, "ConfigDict": ConfigDict,
             "Field": Field, "field_validator": field_validator, "HTTPException": HTTPException,
-            "Depends": Depends, "datetime": datetime, "timezone": timezone,
+            "Body": Body, "Depends": Depends, "Query": Query, "datetime": datetime, "timezone": timezone,
             "db": self.db, "WebAuthnError": WebAuthnError, "WEBAUTHN_RP_ID": "console.example.test",
             "_credential_descriptors_for_policy": self.descriptors,
             "_approval_jit_policy": self.policy, "require_role": self.require_role,
-            "app": SimpleNamespace(post=self.post)})
+            "runtime": SimpleNamespace(publish_decision_gate_grant=self.publish),
+            "app": SimpleNamespace(post=self.post, get=self.post)})
         select(WEBAUTHN_TREE, {"_authority_jit_decision_options", "authority_approval_options", "authority_denial_options"}, self.ns, "serverware/webauthn.py")
         select(APP_TREE, {"_approval_decision_note", "ApprovalApprove", "ApprovalWebAuthnOptionsRequest",
             "ApprovalDenyOptionsRequest", "ApprovalDeny", "_approval_authn_policy", "_approval_is_expired",
             "_jit_decision_authority_arguments", "_jit_approve_authority_arguments", "_jit_deny_authority_arguments",
             "_assert_approver_allowed", "_denial_review_context", "deny", "denial_webauthn_options"}, self.ns, "serverware/app.py")
+        if metadata_routes:
+            select(APP_TREE, {"approve", "approval_webauthn_options", "approval_review",
+                "_assert_approval_reviewer_allowed"}, self.ns, "serverware/app.py")
 
     def require_role(self, *roles):
         self.roles.append(roles)
@@ -132,6 +145,20 @@ class Fixture:
 
     def challenge(self, **updates):
         return self.ns["denial_webauthn_options"](ID, self.options(**updates), self.identity)
+
+    def approve(self):
+        payload = self.ns["ApprovalApprove"].model_validate({"note": "Not approved",
+            "reviewReceiptId": REVIEW, "assertion": deepcopy(ASSERTION),
+            "authorityChallengeId": "authority-challenge"})
+        return self.ns["approve"](ID, 17, payload, self.identity)
+
+    def approval_options(self):
+        payload = self.ns["ApprovalWebAuthnOptionsRequest"].model_validate({
+            "reviewReceiptId": REVIEW, "ttlSeconds": 17, "note": "Not approved"})
+        return self.ns["approval_webauthn_options"](ID, payload, self.identity)
+
+    def review(self):
+        return self.ns["approval_review"](ID, self.identity)
 
 
 class DenialApiTests(unittest.TestCase):
@@ -187,6 +214,7 @@ class DenialApiTests(unittest.TestCase):
         fixture.db.issue_policy_authority_webauthn_challenge.assert_called_once_with(
             operation="jit.deny", input_value=ARGUMENTS, user_id=ACTOR, credential_id="synthetic-authenticator")
         fixture.db.deny_request.assert_not_called()
+        fixture.db.get_approval_request.assert_not_called()
 
     def test_deny_forwards_originals_and_only_returns_public_summary(self):
         fixture = Fixture()
@@ -198,6 +226,8 @@ class DenialApiTests(unittest.TestCase):
         fixture.db.get_active_approval_review_receipt.assert_called_once_with(REVIEW, approval_request_id=ID, reviewer_id=ACTOR)
         fixture.policy.assert_called_once_with(fixture.approval, require_current_policy=True)
         fixture.db.issue_policy_authority_webauthn_challenge.assert_not_called()
+        fixture.db.get_approval_request_metadata.assert_called_once_with(ID)
+        fixture.db.get_approval_request.assert_not_called()
 
     def test_options_and_execute_bind_same_original_reason_review_policy(self):
         fixture = Fixture()
@@ -214,7 +244,7 @@ class DenialApiTests(unittest.TestCase):
 
     def test_context_refuses_missing_terminal_expired_stale_or_wrong_actor(self):
         changes = [
-            (404, lambda f: setattr(f.db.get_approval_request, "return_value", None)),
+            (404, lambda f: setattr(f.db.get_approval_request_metadata, "return_value", None)),
             (409, lambda f: f.approval.update(status="denied")),
             (409, lambda f: f.approval.update(expires_at="2000-01-01T00:00:00+00:00")),
             (409, lambda f: setattr(f.policy, "side_effect", HTTPException(409, "policy changed"))),
@@ -231,7 +261,7 @@ class DenialApiTests(unittest.TestCase):
                     fixture.db.issue_policy_authority_webauthn_challenge.assert_not_called()
 
     def test_receipt_and_authority_errors_are_fixed_and_not_retried(self):
-        for method in ("get_approval_request", "get_active_approval_review_receipt"):
+        for method in ("get_approval_request_metadata", "get_active_approval_review_receipt"):
             for action in ("challenge", "deny"):
                 fixture = Fixture()
                 getattr(fixture.db, method).side_effect = MetadataError(CANARY)
@@ -313,6 +343,94 @@ class DenialApiTests(unittest.TestCase):
         self.assertIsNone(ast.literal_eval(defaults["review_receipt_id"]))
         self.assertIsNone(ast.literal_eval(defaults["review_digest"]))
         self.assertIs(ast.literal_eval(defaults["require_review_receipt"]), False)
+
+    def test_decision_and_options_preflight_use_only_metadata_in_order(self):
+        for action, terminal in (("deny", "deny"), ("challenge", "challenge"),
+                                 ("approve", "approve"), ("approval_options", "challenge")):
+            with self.subTest(action=action):
+                fixture = Fixture(metadata_routes=True)
+                calls = Mock()
+                for name, callback in (("metadata", fixture.db.get_approval_request_metadata),
+                        ("policy", fixture.policy), ("review", fixture.db.get_active_approval_review_receipt),
+                        ("deny", fixture.db.deny_request), ("approve", fixture.db.approve_request),
+                        ("challenge", fixture.db.issue_policy_authority_webauthn_challenge)):
+                    calls.attach_mock(callback, name)
+                fixture.db.approval_public_summary.return_value = {"id": ID, "status": "approved"}
+                getattr(fixture, action)()
+                self.assertEqual([call[0] for call in calls.mock_calls], ["metadata", "policy", "review", terminal])
+                fixture.db.get_approval_request_metadata.assert_called_once_with(ID)
+                fixture.db.get_approval_request.assert_not_called()
+                fixture.policy.assert_called_once_with(fixture.approval, require_current_policy=True)
+                fixture.db.get_active_approval_review_receipt.assert_called_once_with(
+                    REVIEW, approval_request_id=ID, reviewer_id=ACTOR)
+                if action in {"approve", "approval_options"}:
+                    if action == "approve":
+                        arguments = dict(fixture.db.approve_request.call_args.kwargs)
+                        self.assertEqual(arguments.pop("authn"), {"assertion": ASSERTION, "credential_id": ASSERTION["id"]})
+                        self.assertEqual(arguments.pop("challenge_id"), "authority-challenge")
+                    else:
+                        arguments = fixture.db.issue_policy_authority_webauthn_challenge.call_args.kwargs["input_value"]
+                    self.assertEqual(arguments, {**ARGUMENTS, "ttl_seconds": 17})
+
+    def test_approval_preflights_keep_refusals_without_private_documents(self):
+        controls = (
+            (404, lambda f: setattr(f.db.get_approval_request_metadata, "return_value", None)),
+            (409, lambda f: f.approval.update(status="denied")),
+            (409, lambda f: setattr(f.policy, "side_effect", HTTPException(409, "policy changed"))),
+            (403, lambda f: f.jit["approvers"].update(users=["oidc:other-reviewer"])),
+            (412, lambda f: setattr(f.db.get_active_approval_review_receipt, "return_value", None)),
+            (409, lambda f: f.approval.update(approver_policy=None)),
+        )
+        for action in ("approve", "approval_options"):
+            for status, change in controls:
+                with self.subTest(action=action, status=status):
+                    fixture = Fixture(metadata_routes=True)
+                    change(fixture)
+                    self.assert_http(status, getattr(fixture, action))
+                    fixture.db.get_approval_request.assert_not_called()
+                    fixture.db.approve_request.assert_not_called()
+                    fixture.db.issue_policy_authority_webauthn_challenge.assert_not_called()
+                    fixture.publish.assert_not_called()
+
+    def test_terminal_or_expired_review_is_metadata_only(self):
+        for updates in ({"status": "approved"}, {"status": "denied"}, {"status": "expired"},
+                        {"expires_at": "2000-01-01T00:00:00+00:00"}):
+            with self.subTest(updates=updates):
+                fixture = Fixture(metadata_routes=True)
+                fixture.approval.update(updates)
+                self.assertEqual(fixture.review(), {**fixture.approval,
+                    "review_detail_available": False, "review_receipt": None})
+                fixture.db.get_approval_request_metadata.assert_called_once_with(ID)
+                fixture.db.get_approval_request.assert_not_called()
+                fixture.policy.assert_not_called()
+                fixture.db.issue_approval_review_receipt.assert_not_called()
+
+    def test_private_review_reader_remains_separate_after_authorized_preflight(self):
+        controls = (
+            (404, lambda f: setattr(f.db.get_approval_request_metadata, "return_value", None)),
+            (403, lambda f: setattr(f.identity.has_any_role, "return_value", False)),
+            (409, lambda f: setattr(f.policy, "side_effect", HTTPException(409, "policy changed"))),
+            (403, lambda f: f.jit["approvers"].update(users=["oidc:other-reviewer"])),
+        )
+        for status, change in controls:
+            fixture = Fixture(metadata_routes=True)
+            change(fixture)
+            self.assert_http(status, fixture.review)
+            fixture.db.get_approval_request.assert_not_called()
+            fixture.db.issue_approval_review_receipt.assert_not_called()
+        fixture = Fixture(metadata_routes=True)
+        calls = Mock()
+        for name, callback in (("metadata", fixture.db.get_approval_request_metadata),
+                ("role", fixture.identity.has_any_role), ("policy", fixture.policy),
+                ("private", fixture.db.get_approval_request)):
+            calls.attach_mock(callback, name)
+        # Stop at the real private-reader call; do not fabricate opened documents
+        # or a successful native review receipt to make this preflight test pass.
+        with self.assertRaises(PrivateReviewUnavailable):
+            fixture.review()
+        self.assertEqual([call[0] for call in calls.mock_calls], ["metadata", "role", "role", "policy", "private"])
+        fixture.db.get_approval_request.assert_called_once_with(ID)
+        fixture.db.issue_approval_review_receipt.assert_not_called()
 
 
 if __name__ == "__main__":

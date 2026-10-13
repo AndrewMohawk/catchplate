@@ -172,6 +172,34 @@ class RunnerTests(unittest.TestCase):
             value.container_rows.return_value = [dict(row, Id="b" * 64)]
             with self.assertRaises(ValueError): value.inspect_runtime({}, {}, keeper_anchor=950)
 
+    def test_only_known_chromium_cache_ancestor_alias_is_admitted_with_original_pin(self):
+        value = self.instance(); value.source_unchanged = Mock()
+        value.args.binary, value.args.initializer = self.root / "gate", self.root / "initializer.py"
+        canonical = Path("/srv/catchplate-fast/home-offload/operator/.cache/ms-playwright/"
+            "chromium_headless_shell-1208/chrome-headless-shell-linux64/chrome-headless-shell")
+        self.assertEqual(runner.CHROME_CANONICAL, canonical)
+        pins = {value.args.binary: PIN, value.args.initializer: recipe.base.INITIALIZER_SHA256,
+            runner.NODE: runner.NODE_SHA256, runner.CHROME: "27e55cc30e487493b89b663085d6deeb0707be201a568657c922fac9076c317c"}
+        resolutions = {path: path for path in pins}
+        with patch.object(Path, "is_file", return_value=True), patch.object(Path, "is_symlink", autospec=True, return_value=False) as symlink, \
+                patch.object(Path, "stat", return_value=SimpleNamespace(st_mode=0o100644)), \
+                patch.object(Path, "resolve", autospec=True, side_effect=resolutions.__getitem__), \
+                patch.object(recipe.base, "digest", side_effect=pins.__getitem__):
+            self.assertEqual(value.inputs("direct"), {str(path): pin for path, pin in pins.items()})
+            resolutions[runner.CHROME] = canonical
+            self.assertEqual(value.inputs("known-alias"), {str(path): pin for path, pin in pins.items()})
+            for path in pins:
+                original = resolutions[path]
+                resolutions[path] = self.root / "alternate-target"
+                with self.subTest(path=path), self.assertRaises(ValueError): value.inputs("alternate")
+                resolutions[path] = original
+            pins[runner.CHROME] = "f" * 64
+            with self.assertRaises(ValueError): value.inputs("wrong-hash")
+            pins[runner.CHROME] = runner.CHROME_SHA256
+            symlink.side_effect = lambda path: path == runner.CHROME
+            with self.assertRaises(ValueError):
+                value.inputs("leaf-symlink")
+
     def test_browser_preflight_creates_private_pinned_temporary_directory_without_starting(self):
         value = self.instance(); value.project = "serverware-guided-private-" + "a" * 12
         value.browser_units = Mock(return_value=False)

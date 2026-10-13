@@ -29,6 +29,8 @@ from scripts.run_operator_x_examples_fixture import absolute_path, sha256, requi
 
 SOURCE_SCRIPT = "scripts/run_operator_guided_fixture.py"
 WORK_SECONDS, CLEANUP_SECONDS = 300, 60
+CHROME_CANONICAL = Path("/srv/catchplate-fast/home-offload/operator/.cache/ms-playwright/"
+    "chromium_headless_shell-1208/chrome-headless-shell-linux64/chrome-headless-shell")
 
 
 class GuidedRun(XPostRun):
@@ -39,7 +41,8 @@ class GuidedRun(XPostRun):
         pins = ((self.args.binary, self.args.expected_binary_sha256),
             (self.args.initializer, recipe.base.INITIALIZER_SHA256), (NODE, NODE_SHA256), (CHROME, CHROME_SHA256))
         for path, expected in pins:
-            require(path.is_file() and path.resolve() == path and not path.is_symlink()
+            resolutions = {path, CHROME_CANONICAL} if path == CHROME else {path}
+            require(path.is_file() and path.resolve() in resolutions and not path.is_symlink()
                 and path.stat().st_mode & 4 and recipe.base.digest(path) == expected, "guided pinned input differs")
         return {str(path): expected for path, expected in pins}
 

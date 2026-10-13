@@ -47962,7 +47962,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
     let gmail_child_authorizations = GmailMetadataChildAuthorizationLedger::default();
     let gmail_metadata_fanout = gmail_metadata_list.then_some(GmailMetadataFanoutExecution {
         parent_credential_binding: credential_release_binding.as_ref(),
-        injection_plan,
+        injection_plan: &injection_plan,
         upstream_send_deadlines: send_deadlines,
         prepared_upstream: &prepared_upstream,
         child_authorizations: &gmail_child_authorizations,

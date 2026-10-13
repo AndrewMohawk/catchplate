@@ -38,6 +38,14 @@ verified. Joined A+B success, separate lost-acknowledgement/revocation fault
 lanes, retained-data rollout and real-X acceptance remain open. The running
 instance has not received this feature.
 
+The correction at `94b7f755` adds two real signed-metadata/lease regression
+groups. Its first test compilation stopped on a missed borrow of the now-owned
+injection plan in the existing Gmail fanout initializer; no tests executed.
+The failed build and successful owned-container cleanup remain in
+`serverware-x-quota-rust.Wg85qphg`. The follow-up restores that explicit borrow
+without changing quota, Gmail or forwarding semantics; compilation and runtime
+acceptance are still required.
+
 The rendered account/setup suite subsequently passed all ten groups with eight
 masked 1280/390-pixel screenshots and unchanged source. It verified default
 omission, exact limited grants, invalid input and capability withdrawal. The

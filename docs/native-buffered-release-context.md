@@ -335,6 +335,26 @@ TLS-verified console HEAD returned 302 and proxy-health GET returned 200, not
 503. These are unauthenticated health/readback observations, not an authenticated
 operator, approval or provider workflow, and no deployment occurred.
 
+### Pure parent and child request derivation — October 13
+
+`authority_release_private_request.derive_native_requests` now reconstructs and
+validates the original private envelope before deriving two independently owned
+public V9 requests. The parent retains the untyped child commitment; each request
+has its own synthesized business intent and canonical request identity. Private
+review documents, later proof/pair bytes and newly sampled clocks are not added
+to either identity. This pure helper is not wired into service admission: the
+existing private-release service and new-retention refusals remain unchanged.
+
+The focused offline run passed **58 tests in five suites**, including 19
+private-release request groups, with zero skips in 23.622 seconds. All 24 selected
+source files remained unchanged. The network-disabled, bounded test container
+exited successfully without an OOM or restart and was removed. The retained
+result is `native-request-derivation.Pmhbi8Aq/results/result.json`, SHA256
+`2b656b918ad8032da4a4181e18db39f4a0878042030fb88d3732ff0235ce475c`.
+This covers synthetic commitment, isolation, bounds and existing private-review
+components; it does not establish native custody, broker admission, live database
+behavior, protected approval or deployment acceptance.
+
 Still required are purpose-specific compound native admission and sealing,
 exact parent-reserve/child-JIT bindings, atomic custody/evidence/pending-row
 retention, authenticated private-review opening, and a preservation migration

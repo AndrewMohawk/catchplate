@@ -4,8 +4,10 @@ This is profile grammar and original-byte binding, NOT policy, caller, custody
 or release admission. Every original parent argument is retained or committed;
 only the child's URL and two review documents move to the private channel.
 The public parent contains a child JIT-v2 commitment object without a nested
-businessIntent. Neither parent nor child authority request/opaque lookup IDs
-are created here. No signed input is rewritten, and the public raw-input
+businessIntent. Projection alone creates no authority request or lookup IDs.
+The separate native-only derivation reconstructs the original private input
+before deriving the two public V9 requests; their identities confer no custody
+or execution authority. No signed input is rewritten, and the public raw-input
 refusal remains applicable until genuine compound execution is implemented.
 
 Intentionally public operation_context, quotas and durable policy claims are
@@ -15,6 +17,7 @@ must validate their semantics and current authority before any state changes.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from functools import wraps
 import hashlib
 from typing import Any
@@ -22,6 +25,7 @@ from typing import Any
 from serverware import authority_contract as contract
 from serverware import authority_jit_private_request as child
 from serverware import authority_jit_request as raw_child
+from serverware import authority_request_commitment as commitment
 from serverware import authority_transition_core as core
 from serverware import release_authorization_profiles as profiles
 
@@ -219,3 +223,72 @@ def public_arguments(arguments: Mapping[str, Any], *, typed: bool = False) -> di
     opaque identities, produce a public authority request or admit execution.
     """
     return _public(arguments, typed=typed)
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseJitRequests:
+    """Owned public request graphs, not verified native or writer authority."""
+
+    parent_request: dict[str, Any]
+    child_request: dict[str, Any]
+
+
+def _derive_request(operation: str, public: Mapping[str, Any]) -> dict[str, Any]:
+    spec = contract.operation_spec(operation)
+    arguments = {**public,
+        "businessIntent": contract.synthesize_business_intent(operation, public)}
+    authorization = {
+        "schema": "serverware.policyAuthorityV9Authorization/v1",
+        "operation": operation,
+        "handler": spec["handler"],
+        "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST,
+        "arguments": commitment._authorization_arguments(arguments),
+    }
+    request_digest = commitment.framed_digest(
+        "serverware.policyAuthorityV9Request/v1",
+        commitment.canonical_bytes(authorization),
+    )
+    request = {
+        "schema": "serverware.policyAuthorityV9Request/v1",
+        "operation": operation,
+        "operationId": commitment.operation_id(operation, request_digest),
+        "requestDigest": request_digest,
+        "handler": spec["handler"],
+        "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST,
+        "arguments": arguments,
+    }
+    _require(len(commitment.canonical_bytes(request)) <= contract.MAX_REQUEST_BYTES)
+    try:
+        _require(commitment._typed_request_digest(request, work=None) == request_digest)
+    except commitment.AuthorityPlannerError:
+        raise core.TransitionKernelError(ERROR) from None
+    return request
+
+
+@_checked
+def derive_native_requests(runtime_input: Mapping[str, Any]) -> ReleaseJitRequests:
+    """Reconstruct originals and derive distinct parent/child V9 commitments.
+
+    This is pure derivation, not native-profile admission. The unchanged
+    runtime validator checks the exact private envelope and every original
+    commitment first; private documents are not returned. Each request owns
+    its graph and gets only its own synthesized businessIntent. In particular,
+    the parent retains the original *untyped* child commitment object, while
+    the separately derived child keeps the standalone private-JIT profile.
+
+    Pair/proof bytes, selected state and sampled clocks never enter either
+    request identity. Their later binding needs genuine compound custody and
+    execution admission; current service and retention refusals still apply.
+    """
+    public, _private_documents = validate_runtime_input(runtime_input)
+    _require(public["native_profile"] is True
+        and public["policy_aware_profile"] is False)
+    # A separately owned original child representation is essential: using
+    # public_arguments' normalized policy/lookup fields would change its V9
+    # identity, and sharing this graph would let one output modify the other.
+    child_public = _copy_fields(public["jit_approval_request"], child.PUBLIC_FIELDS)
+    parent_request = _derive_request(OPERATION, public)
+    child_request = _derive_request(child.OPERATION, child_public)
+    _public(parent_request["arguments"], typed=True)
+    raw_child.require_public_request(child_request)
+    return ReleaseJitRequests(parent_request=parent_request, child_request=child_request)

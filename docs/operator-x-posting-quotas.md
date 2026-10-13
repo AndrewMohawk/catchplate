@@ -46,6 +46,16 @@ The failed build and successful owned-container cleanup remain in
 without changing quota, Gmail or forwarding semantics; compilation and runtime
 acceptance are still required.
 
+At `5312c41b`, CI run `38361539528` passed all 51 offline suites with no
+skips. The separate Rust test compilation succeeded, but its first executed
+group passed 13 existing tests and failed the two new quota-release tests.
+The signed audit preflight correctly rejected the fixture after its real
+configuration reload lost a test-only quota selection. No audit guard was
+relaxed, no normal executable was published, and the live instance was not
+changed. The failed test output and successful container cleanup are retained
+in `serverware-x-quota-rust.btsZVUPw`; fixture repair and a fresh test run are
+required before continuing.
+
 The rendered account/setup suite subsequently passed all ten groups with eight
 masked 1280/390-pixel screenshots and unchanged source. It verified default
 omission, exact limited grants, invalid input and capability withdrawal. The

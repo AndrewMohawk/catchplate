@@ -207,6 +207,14 @@ impl Fixture {
             let permit=owner.acquire(Instant::now()+WAIT).unwrap();
             let configuration=if quota { crate::operator_x_profile::test_load_with_quota(&manifest_path,&permit) }
                 else { crate::operator_x_profile::test_load(&manifest_path,&permit) }.unwrap();
+            if quota {
+                // Audit preflight reloads this manifest under the real SH
+                // permit. Its explicit test selection must survive reload,
+                // just as the installed environment selection does at runtime.
+                let reloaded = configuration.state.clone().reload(&permit).unwrap();
+                configuration.state.require_successor(&reloaded.state).unwrap();
+                reloaded.state.validate_snapshot(&snapshot).unwrap();
+            }
             admitted.managed_x=Some(Arc::new(RwLock::new(configuration.state)));
         } else { admitted.google = Some(google()); }
         let approved = admitted.validate_snapshot(&snapshot).unwrap();

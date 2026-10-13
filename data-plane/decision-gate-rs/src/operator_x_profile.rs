@@ -143,6 +143,8 @@ pub(super) struct State {
     // Production construction fixes this to PATH; only the test loader can
     // select a temporary publication directory. Reload never accepts a caller path.
     path: PathBuf,
+    #[cfg(test)]
+    test_quota_selection: Option<bool>,
 }
 impl State {
     pub(super) fn require_successor(&self, next: &Self) -> Result<(), String> {
@@ -165,6 +167,10 @@ impl State {
         Ok(self.file_identity != Some(current))
     }
     pub(super) fn reload(&self, permit: &operator_audit_publication::Permit<'_>) -> Result<Configuration, String> {
+        #[cfg(test)]
+        if self.test_quota_selection == Some(true) {
+            return test_load_with_quota(&self.path, permit);
+        }
         load_at(&self.path, permit)
     }
 }
@@ -197,7 +203,9 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Configuration, String> {
         let binding = profile.binding_digest().to_owned();
         (Some(operation), Some(Arc::new(profile)), Some(binding))
     };
-    Ok(Configuration { deployment, state: State { profile, file_identity: None, path: PathBuf::from(PATH), identity: Identity {
+    Ok(Configuration { deployment, state: State { profile, file_identity: None, path: PathBuf::from(PATH),
+        #[cfg(test)] test_quota_selection: None,
+        identity: Identity {
         operation, profile_binding_digest: binding_digest, effective_settings_digest: digest.to_owned() } } })
 }
 
@@ -235,6 +243,7 @@ pub(crate) fn test_load(path: &Path, permit: &operator_audit_publication::Permit
 pub(crate) fn test_load_with_quota(path: &Path, permit: &operator_audit_publication::Permit<'_>) -> Result<Configuration, String> {
     let mut configuration = load_at(path, permit)?;
     Arc::get_mut(configuration.state.profile.as_mut().ok_or_else(refused)?).ok_or_else(refused)?.quota_enabled = true;
+    configuration.state.test_quota_selection = Some(true);
     Ok(configuration)
 }
 

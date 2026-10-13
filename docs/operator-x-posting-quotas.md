@@ -196,6 +196,14 @@ so they do not establish precise SDK startup/selection latency. The checker now
 paces pre-lease polling separately and reserves its final control calls, without
 increasing any control/request budget, SDK timeout or original claim deadline.
 
+The paced run, `x-quota-fault-revoke-paced.o54MGJmj`, reached actual rule revoke,
+loaded policy and ACK release, then failed its exact SDK-status assertion.
+The SDK status was not retained. Source review shows that the revoked snapshot
+withholds the inner HTTP response, so the hold-mode oracle now requires Node's
+exact `httpStatus: null`; dropped-ACK mode still requires 409. All unexpired-ACK,
+audit, no-replay and zero-provider-post checks remain. Fresh joined acceptance
+of the corrected hold-mode oracle is pending.
+
 The rendered account/setup suite subsequently passed all ten groups with eight
 masked 1280/390-pixel screenshots and unchanged source. It verified default
 omission, exact limited grants, invalid input and capability withdrawal. The

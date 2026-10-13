@@ -3,7 +3,8 @@
 
 No fake claims, direct quota calls, clock changes or retries. The hold mode
 proves the observed revoke/loaded-policy/unexpired-ACK/SDK-failure sequence;
-it does not identify the gate's exclusive internal failure cause. Actual
+the revoked snapshot withholds inner HTTP bytes, so Node reports null status.
+It does not identify the gate's exclusive internal failure cause. Actual
 acceptance still requires the pinned real app, normal Rust and local provider.
 """
 from __future__ import annotations
@@ -86,14 +87,37 @@ def validate_provider(value, *, connected, cleaned, anchor):
     return value
 
 
+def node_unknown(status):
+    return {"ok": False, "operation": "create-post", "outcome": "unknown",
+        "mayHaveBeenPosted": True, "automaticRetryAllowed": False, "httpStatus": status,
+        "error": base.profiles.NODE_UNKNOWN}
+
+
+def sdk_failure_diagnostic(client, code, stdout, stderr):
+    """Only a complete fixed SDK envelope may expose its typed public status."""
+    if (client != "node" or type(code) is not int or code != 2 or stdout != b""
+            or type(stderr) is not bytes or len(stderr) > 8192):
+        return None
+    try:
+        value = document(stderr)
+        if type(value) is not dict or "httpStatus" not in value:
+            return None
+        status = value["httpStatus"]
+        if status is not None and (type(status) is not int or not 100 <= status <= 599):
+            return None
+        if encoded(value) != encoded(node_unknown(status)):
+            return None
+    except (CheckFailure, ValueError, RecursionError):
+        return None
+    return {"stage": "sdk_validation", "client": "node", "httpStatus": status}
+
+
 def validate_sdk(client, code, stdout, stderr, status):
-    require(client in ("node", "python") and status in (409, 429)
+    require(client in ("node", "python") and (status in (409, 429) or client == "node" and status is None)
         and type(code) is int and code == 2 and stdout == b"" and type(stderr) is bytes and len(stderr) <= 8192,
         "quota fault SDK failed to preserve no-replay uncertainty")
     if client == "node":
-        exact(document(stderr), {"ok": False, "operation": "create-post", "outcome": "unknown",
-            "mayHaveBeenPosted": True, "automaticRetryAllowed": False, "httpStatus": status,
-            "error": base.profiles.NODE_UNKNOWN}, "quota fault Node response differs")
+        exact(document(stderr), node_unknown(status), "quota fault Node response differs")
     else:
         require(stderr == base.profiles.FAILURE_MESSAGES[client], "quota fault Python diagnostic differs")
     # Python's fixed diagnostic does not expose HTTP status. The429 must also be
@@ -164,6 +188,7 @@ class FaultCheck(base.XPostCheck):
         self.mode, self.cleaned, self.status_reads = args.fault_mode, False, 0
         self.arm_hash = None
         self.hold_proof = None
+        self.sdk_diagnostic = None
         now = time.time_ns() // 1_000_000
         self.day = now // quota.DAY_MS
         require((self.day + 1) * quota.DAY_MS - now > 180000, "fault fixture cannot span actual UTC boundary")
@@ -225,7 +250,12 @@ class FaultCheck(base.XPostCheck):
             raise CheckFailure("quota SDK execution failed") from None
         code, stdout, stderr = value
         self.clean(stdout); self.clean(stderr)
-        self.completed.append(validate_sdk(client, code, stdout, stderr, expected_status))
+        try:
+            result = validate_sdk(client, code, stdout, stderr, expected_status)
+        except CheckFailure:
+            self.sdk_diagnostic = sdk_failure_diagnostic(client, code, stdout, stderr)
+            raise
+        self.completed.append(result)
         return wall, mono
 
     def wait_for_fault(self, worker):
@@ -276,7 +306,9 @@ class FaultCheck(base.XPostCheck):
                 released_wall = time.time_ns() // 1_000_000
                 require(self.relay("/__fault/release", release)["status"] in {"release_requested", "released"},
                     "quota original ACK not released after loaded revoke")
-                finished_wall, finished_mono = self.finish_sdk(worker, results, "node", 409)
+                # Loaded revocation prevents ActiveSnapshotWriter from writing
+                # the old request's local409. The unchanged SDK reports no HTTP.
+                finished_wall, finished_mono = self.finish_sdk(worker, results, "node", None)
                 self.hold_proof = validate_hold({"heldAtEpochMs": held_wall, "loadedAtEpochMs": loaded_wall,
                     "releasedAtEpochMs": released_wall, "sdkCompletedAtEpochMs": finished_wall,
                     "expiresAtEpochMs": expiry, "elapsedAfterHeldNs": finished_mono - held_mono,
@@ -483,7 +515,8 @@ def validate_success_result(value):
     mode = value["faultMode"]
     validate_status(value["relay"], mode, terminal=True)
     validate_provider(value["provider"], connected=True, cleaned=True, anchor=value["preCallbackEpochMs"])
-    expected = [{"client": "node", "exitCode": 2, "confirmed": False, "sdkHttpStatus": 409}]
+    expected = [{"client": "node", "exitCode": 2, "confirmed": False,
+        "sdkHttpStatus": 409 if mode == "drop-ack" else None}]
     if mode == "drop-ack":
         expected.append({"client": "python", "exitCode": 2, "confirmed": False, "sdkHttpStatus": None})
         require(value["hold"] is None, "dropped ACK claimed revoke observation")
@@ -538,6 +571,8 @@ def main():
         result = {"schema": SCHEMA, "ok": False, "syntheticOnly": True, "productionReady": False,
             "faultMode": args.fault_mode, "error": "managed X quota fault acceptance failed; no retry authorized",
             "failureSite": failure_site(error, Path("/app")), "completed": check.completed if check is not None else []}
+        if check is not None and check.sdk_diagnostic is not None:
+            result["sdkDiagnostic"] = check.sdk_diagnostic
     finally:
         signal.alarm(0)
     print(json.dumps(result, sort_keys=True))

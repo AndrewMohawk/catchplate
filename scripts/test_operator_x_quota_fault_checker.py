@@ -5,8 +5,11 @@ fresh fixture must supply actual signed app replies, encrypted leases, durable
 SQLite claims and unchanged SDKs before either fault story can pass.
 """
 from copy import deepcopy
+from contextlib import redirect_stdout
 import hashlib
+import io
 import json
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -80,7 +83,8 @@ def result(mode):
         "actualManagedLifecycle": True, "actualExampleEntrypoints": True, "auditChainVerified": True,
         "faultMode": mode, "limit": 1, "dataPlaneBinaryDigest": sha(b"binary"), "goExampleSha256": "a" * 64,
         "dependenciesSha256": "b" * 64, "completed": [
-            {"client": "node", "exitCode": 2, "confirmed": False, "sdkHttpStatus": 409},
+            {"client": "node", "exitCode": 2, "confirmed": False,
+                "sdkHttpStatus": 409 if mode == "drop-ack" else None},
             *([{"client": "python", "exitCode": 2, "confirmed": False, "sdkHttpStatus": None}] if mode == "drop-ack" else [])],
         "provider": provider(), "relay": status(mode), "hold": None if mode == "drop-ack" else hold(),
         "preCallbackEpochMs": NOW, "credentialId": CREDENTIAL, "applicationId": APP, "ruleId": RULE,
@@ -129,6 +133,77 @@ class PollingFixture:
 
 
 class FaultCheckerTests(unittest.TestCase):
+    def test_failure_diagnostic_admits_only_complete_fixed_typed_sdk_envelope(self):
+        original = {"ok": False, "operation": "create-post", "outcome": "unknown",
+            "mayHaveBeenPosted": True, "automaticRetryAllowed": False, "httpStatus": None,
+            "error": check.base.profiles.NODE_UNKNOWN}
+        for status_code in (None, 100, 200, 403, 409, 429, 502, 599):
+            value = {**original, "httpStatus": status_code}
+            self.assertEqual(check.sdk_failure_diagnostic("node", 2, b"", wire(value)),
+                {"stage": "sdk_validation", "client": "node", "httpStatus": status_code})
+            if status_code != 409:
+                with self.assertRaises(check.CheckFailure):
+                    check.validate_sdk("node", 2, b"", wire(value), 409)
+        for status_code in (True, False, 99, 600, 409.0, "409", "secret-canary", [], {}):
+            self.assertIsNone(check.sdk_failure_diagnostic("node", 2, b"", wire({**original, "httpStatus": status_code})))
+        for change in (lambda v: v.update(extra="secret-canary"), lambda v: v.update(error="secret-canary"),
+                lambda v: v.update(outcome="not_attempted"), lambda v: v.update(automaticRetryAllowed=True),
+                lambda v: v.update(ok=0), lambda v: v.update(mayHaveBeenPosted=1), lambda v: v.pop("httpStatus")):
+            value = deepcopy(original); change(value)
+            self.assertIsNone(check.sdk_failure_diagnostic("node", 2, b"", wire(value)))
+        for raw in (b"secret-canary", b"null", b"[]", b"{}", b"x" * 8193,
+                wire(original)[:-1] + b',"httpStatus":null}', wire(original).replace(b"null", b"NaN")):
+            self.assertIsNone(check.sdk_failure_diagnostic("node", 2, b"", raw))
+        for client, code, stdout in (("python", 2, b""), ("node", 0, b""),
+                ("node", True, b""), ("node", 2, b"secret-canary")):
+            self.assertIsNone(check.sdk_failure_diagnostic(client, code, stdout, wire(original)))
+
+    def test_actual_failure_receipt_retains_only_sanitized_mismatch_not_raw_sdk_output(self):
+        args = SimpleNamespace(timeout_seconds=180, expected_binary_sha256=sha(b"binary"),
+            expected_initial_revision=1, fault_mode="drop-ack",
+            fixture_marker_file=None, run_claim_file=None)
+        original = {"ok": False, "operation": "create-post", "outcome": "unknown",
+            "mayHaveBeenPosted": True, "automaticRetryAllowed": False, "httpStatus": None,
+            "error": check.base.profiles.NODE_UNKNOWN}
+        for change, expected in (({}, {"stage": "sdk_validation", "client": "node", "httpStatus": None}),
+                ({"httpStatus": 502}, {"stage": "sdk_validation", "client": "node", "httpStatus": 502}),
+                ({"error": "secret-canary"}, None), ({"extra": "secret-canary"}, None)):
+            checker = object.__new__(check.FaultCheck)
+            checker.deadline = check.time.monotonic() + 60
+            checker.completed, checker.sdk_diagnostic, checker.clean = [], None, Mock()
+            worker = Mock(); worker.is_alive.return_value = False
+            results = check.queue.Queue(maxsize=1)
+            results.put((True, (2, b"", wire({**original, **change})), NOW, 100))
+            checker.run = lambda: checker.finish_sdk(worker, results, "node", 409)
+            output = io.StringIO()
+            with patch.object(check.argparse.ArgumentParser, "parse_args", return_value=args), \
+                    patch.object(check.signal, "signal"), patch.object(check.signal, "alarm"), \
+                    patch.object(check.base, "claim_fixture"), patch.object(check, "FaultCheck", return_value=checker), \
+                    redirect_stdout(output):
+                self.assertEqual(check.main(), 1)
+            value = json.loads(output.getvalue())
+            self.assertIs(value["ok"], False)
+            self.assertEqual(value["completed"], [])
+            self.assertEqual("sdkDiagnostic" in value, expected is not None)
+            self.assertEqual(value.get("sdkDiagnostic"), expected)
+            self.assertNotIn("secret-canary", output.getvalue())
+            self.assertNotIn("Posting was not confirmed", output.getvalue())
+
+    def test_successful_sdk_validation_creates_no_failure_diagnostic(self):
+        checker = object.__new__(check.FaultCheck)
+        checker.deadline = check.time.monotonic() + 60
+        checker.completed, checker.sdk_diagnostic, checker.clean = [], None, Mock()
+        worker = Mock(); worker.is_alive.return_value = False
+        results = check.queue.Queue(maxsize=1)
+        value = {"ok": False, "operation": "create-post", "outcome": "unknown",
+            "mayHaveBeenPosted": True, "automaticRetryAllowed": False, "httpStatus": 409,
+            "error": check.base.profiles.NODE_UNKNOWN}
+        results.put((True, (2, b"", wire(value)), NOW, 100))
+        self.assertEqual(checker.finish_sdk(worker, results, "node", 409), (NOW, 100))
+        self.assertIsNone(checker.sdk_diagnostic)
+        self.assertEqual(checker.completed,
+            [{"client": "node", "exitCode": 2, "confirmed": False, "sdkHttpStatus": 409}])
+
     def test_polling_preserves_budget_during_slow_sdk_startup_then_accelerates(self):
         for mode in check.MODES:
             selected = "dropped" if mode == "drop-ack" else "held"
@@ -253,6 +328,25 @@ class FaultCheckerTests(unittest.TestCase):
             with self.assertRaises(check.CheckFailure):
                 check.validate_sdk("node", 2, b"", wire(value), 409)
         self.assertNotEqual(check.base.profiles.post_body("node"), check.base.profiles.post_body("python"))
+
+    def test_hold_requires_no_http_while_drop_ack_still_requires_exact409(self):
+        for mode, expected in (("drop-ack", 409), ("revoke-before-release", None)):
+            node = {"ok": False, "operation": "create-post", "outcome": "unknown", "mayHaveBeenPosted": True,
+                "automaticRetryAllowed": False, "httpStatus": expected, "error": check.base.profiles.NODE_UNKNOWN}
+            self.assertEqual(check.validate_sdk("node", 2, b"", wire(node), expected),
+                {"client": "node", "exitCode": 2, "confirmed": False, "sdkHttpStatus": expected})
+            check.validate_success_result(result(mode))
+            for other in (None, 200, 403, 409, 429, 502, 503, True, "409"):
+                if other == expected:
+                    continue
+                with self.subTest(mode=mode, status=other):
+                    with self.assertRaises(check.CheckFailure):
+                        check.validate_sdk("node", 2, b"", wire({**node, "httpStatus": other}), expected)
+                    changed = result(mode); changed["completed"][0]["sdkHttpStatus"] = other
+                    with self.assertRaises(check.CheckFailure):
+                        check.validate_success_result(changed)
+        with self.assertRaises(check.CheckFailure):
+            check.validate_sdk("python", 2, b"", check.base.profiles.FAILURE_MESSAGES["python"], None)
 
     def test_inventory_forbids_fake_release_refund_replay_and_unknown_events(self):
         for mode in check.MODES:

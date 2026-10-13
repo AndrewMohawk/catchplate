@@ -28,6 +28,8 @@ INNER_CA_FILE = Path("/inner-ca.pem")
 PROXY_HOST = "proxy.operator-basic.example.test"
 PROXY_HOSTNAMES = (PROXY_HOST, "serverware-gmail-proxy.example.com")
 _DIRECTORIES = frozenset({"app-data", "gate-data", "upstream-data", "service-secrets"})
+_RUNTIME_PROFILES = {"baseline": _DIRECTORIES,
+    "managed-x-post": _DIRECTORIES | {"x-custody"}}
 _MARKER = ".private-fixture.json"
 _OWNER = (10001, 10001)
 
@@ -86,8 +88,11 @@ def _write(directory_fd, name, value):
         os.fsync(output.fileno())
 
 
-def prepare(runtime_root=RUNTIME_ROOT, inner_ca_file=INNER_CA_FILE, *, proxy_hostname=PROXY_HOST):
+def prepare(runtime_root=RUNTIME_ROOT, inner_ca_file=INNER_CA_FILE, *, proxy_hostname=PROXY_HOST,
+            runtime_profile="baseline"):
     require(type(proxy_hostname) is str and proxy_hostname in PROXY_HOSTNAMES)
+    require(type(runtime_profile) is str and runtime_profile in _RUNTIME_PROFILES)
+    directories = _RUNTIME_PROFILES[runtime_profile]
     require(runtime_root == RUNTIME_ROOT and inner_ca_file == INNER_CA_FILE and os.geteuid() == 0)
     require({name for _, name in socket.if_nameindex()} == {"lo"})
     os.umask(0o077)
@@ -95,8 +100,8 @@ def prepare(runtime_root=RUNTIME_ROOT, inner_ca_file=INNER_CA_FILE, *, proxy_hos
     output_fds = []
     try:
         require(stat.S_IMODE(os.fstat(root_fd).st_mode) == 0o700)
-        require(set(os.listdir(root_fd)) == _DIRECTORIES | {_MARKER})
-        for name in _DIRECTORIES:
+        require(set(os.listdir(root_fd)) == directories | {_MARKER})
+        for name in directories:
             info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
             require(stat.S_ISDIR(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o700
                 and (info.st_uid, info.st_gid) == _OWNER)
@@ -172,10 +177,12 @@ def main():
     parser.add_argument("--runtime-root", required=True, choices=(str(RUNTIME_ROOT),))
     parser.add_argument("--inner-ca-file", required=True, choices=(str(INNER_CA_FILE),))
     parser.add_argument("--proxy-hostname", choices=PROXY_HOSTNAMES, default=PROXY_HOST)
+    parser.add_argument("--runtime-profile", choices=tuple(_RUNTIME_PROFILES), default="baseline")
     args = parser.parse_args()
     signal.alarm(20)
     try:
-        prepare(Path(args.runtime_root), Path(args.inner_ca_file), proxy_hostname=args.proxy_hostname)
+        prepare(Path(args.runtime_root), Path(args.inner_ca_file), proxy_hostname=args.proxy_hostname,
+            runtime_profile=args.runtime_profile)
     except Exception:
         raise SystemExit("Private Basic fixture setup refused; any partial output is retained. Do not retry.") from None
     finally:

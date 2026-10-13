@@ -40,8 +40,9 @@ def inner_certificate():
 
 class ProxyBasicTransportTests(unittest.TestCase):
     def test_actual_leaf_and_receipt_bind_each_closed_hostname_with_legacy_default(self):
-        for selected in (None, LEGACY, GMAIL):
-            with self.subTest(selected=selected), ExitStack() as stack:
+        for selected, profile in ((None, None), (LEGACY, 'baseline'), (GMAIL, 'baseline'),
+                (LEGACY, 'managed-x-post')):
+            with self.subTest(selected=selected, profile=profile), ExitStack() as stack:
                 inner, inner_pem = inner_certificate()
                 files = {}
                 directory = SimpleNamespace(st_mode=0o040700, st_uid=10001, st_gid=10001)
@@ -49,7 +50,8 @@ class ProxyBasicTransportTests(unittest.TestCase):
                         "stat": directory, "fchown": None, "fsync": None, "close": None}.items():
                     stack.enter_context(patch.object(setup.os, name, return_value=value))
                 stack.enter_context(patch.object(setup.os, "listdir", side_effect=[
-                    list(setup._DIRECTORIES | {".private-fixture.json"}), sorted(OUTPUTS), []]))
+                    list(setup._DIRECTORIES | {".private-fixture.json"}
+                        | ({"x-custody"} if profile == 'managed-x-post' else set())), sorted(OUTPUTS), []]))
                 stack.enter_context(patch.object(setup.socket, "if_nameindex", return_value=[(1, "lo")]))
                 stack.enter_context(patch.object(setup, "_read_public_file", return_value=json.dumps({
                     "schema": "serverware.privateOperatorAuditFixture/v1", "syntheticOnly": True}).encode()))
@@ -58,7 +60,8 @@ class ProxyBasicTransportTests(unittest.TestCase):
                 writes = stack.enter_context(patch.object(setup, "_write",
                     side_effect=lambda fd, name, value: files.__setitem__(name, value)))
                 output = stack.enter_context(patch("builtins.print"))
-                setup.prepare(**({} if selected is None else {"proxy_hostname": selected}))
+                setup.prepare(**({} if selected is None else {"proxy_hostname": selected}),
+                    **({} if profile is None else {"runtime_profile": profile}))
                 hostname = LEGACY if selected is None else selected
                 self.assertEqual(set(files), OUTPUTS)
                 self.assertEqual([call.args for call in fresh.call_args_list], [(10, "basic-pki"), (10, "client-work")])
@@ -76,6 +79,48 @@ class ProxyBasicTransportTests(unittest.TestCase):
                 self.assertEqual(receipt["proxyHostname"], hostname)
                 self.assertEqual(receipt["outerLeafSha256"], "sha256:" + leaf.fingerprint(hashes.SHA256()).hex())
                 self.assertIs(receipt["rootPrivateKeyPersisted"], False)
+
+    def test_runtime_profile_refuses_missing_extra_symlink_and_wrong_owned_directory(self):
+        baseline = {'app-data', 'gate-data', 'upstream-data', 'service-secrets', '.private-fixture.json'}
+        cases = [
+            ('baseline', baseline | {'x-custody'}, None),
+            ('managed-x-post', baseline, None),
+            ('managed-x-post', baseline | {'x-custody', 'extra'}, None),
+            ('managed-x-post', baseline | {'x-custody', 'basic-pki'}, None),
+            ('managed-x-post', baseline | {'x-custody', 'client-work'}, None),
+        ]
+        cases += [('managed-x-post', baseline | {'x-custody'}, value) for value in (
+            SimpleNamespace(st_mode=0o040755, st_uid=10001, st_gid=10001),
+            SimpleNamespace(st_mode=0o040700, st_uid=0, st_gid=10001),
+            SimpleNamespace(st_mode=0o040700, st_uid=10001, st_gid=0),
+            SimpleNamespace(st_mode=0o120700, st_uid=10001, st_gid=10001))]
+        directory = SimpleNamespace(st_mode=0o040700, st_uid=10001, st_gid=10001)
+        for profile, roster, bad in cases:
+            with self.subTest(profile=profile, roster=sorted(roster), bad=bad), ExitStack() as stack:
+                for name, value in {'geteuid': 0, 'umask': None, 'open': 10,
+                        'fstat': directory, 'listdir': list(roster), 'close': None}.items():
+                    stack.enter_context(patch.object(setup.os, name, return_value=value))
+                observed = stack.enter_context(patch.object(setup.os, 'stat',
+                    side_effect=lambda name, **kwargs: bad if name == 'x-custody' and bad is not None else directory))
+                stack.enter_context(patch.object(setup.socket, 'if_nameindex', return_value=[(1, 'lo')]))
+                marker = stack.enter_context(patch.object(setup, '_read_public_file'))
+                inner = stack.enter_context(patch.object(setup, '_inner_root'))
+                fresh = stack.enter_context(patch.object(setup, '_fresh_directory'))
+                writes = stack.enter_context(patch.object(setup, '_write'))
+                with self.assertRaisesRegex(ValueError, '^private Basic fixture setup refused$'):
+                    setup.prepare(runtime_profile=profile)
+                marker.assert_not_called(); inner.assert_not_called()
+                fresh.assert_not_called(); writes.assert_not_called()
+                self.assertTrue(all(call.kwargs == {'dir_fd': 10, 'follow_symlinks': False}
+                    for call in observed.call_args_list))
+
+    def test_unlisted_runtime_profile_refuses_before_environment_or_filesystem(self):
+        for value in ('', 'managed-x', 'managed-x-post ', 'BASELINE', None, True, [], {}):
+            with self.subTest(value=value), patch.object(setup.os, 'geteuid') as uid, \
+                    patch.object(setup.os, 'open') as opened:
+                with self.assertRaisesRegex(ValueError, '^private Basic fixture setup refused$'):
+                    setup.prepare(runtime_profile=value)
+                uid.assert_not_called(); opened.assert_not_called()
 
     def test_unlisted_hostname_refuses_before_environment_checks_or_writes(self):
         for value in ("", GMAIL + ".", GMAIL.upper(), "other.example.com", "https://" + GMAIL,
@@ -96,12 +141,27 @@ class ProxyBasicTransportTests(unittest.TestCase):
                     patch.object(setup, "prepare") as prepare, patch.object(setup.signal, "alarm") as alarm:
                 setup.main()
                 prepare.assert_called_once_with(setup.RUNTIME_ROOT, setup.INNER_CA_FILE,
-                    proxy_hostname=LEGACY if value is None else value)
+                    proxy_hostname=LEGACY if value is None else value, runtime_profile='baseline')
                 self.assertEqual([call.args for call in alarm.call_args_list], [(20,), (0,)])
         with patch("sys.argv", prefix + ["--proxy-hostname", "other.example.com"]), \
                 patch.object(setup, "prepare") as prepare, redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit) as caught:
                 setup.main()
+            self.assertEqual(caught.exception.code, 2)
+            prepare.assert_not_called()
+
+    def test_cli_runtime_profile_is_closed_and_explicit_without_resetting_alarm(self):
+        prefix = ['setup', '--runtime-root', '/fixture-runtime', '--inner-ca-file', '/inner-ca.pem']
+        for profile in ('baseline', 'managed-x-post'):
+            with patch('sys.argv', prefix + ['--runtime-profile', profile]), \
+                    patch.object(setup, 'prepare') as prepare, patch.object(setup.signal, 'alarm') as alarm:
+                setup.main()
+                prepare.assert_called_once_with(setup.RUNTIME_ROOT, setup.INNER_CA_FILE,
+                    proxy_hostname=LEGACY, runtime_profile=profile)
+                self.assertEqual([call.args for call in alarm.call_args_list], [(20,), (0,)])
+        with patch('sys.argv', prefix + ['--runtime-profile', 'arbitrary']), \
+                patch.object(setup, 'prepare') as prepare, redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as caught: setup.main()
             self.assertEqual(caught.exception.code, 2)
             prepare.assert_not_called()
 

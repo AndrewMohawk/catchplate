@@ -266,6 +266,7 @@ class XPostRun(NpmExampleRun):
             self.command(phase, compose + ["up", "-d", "--no-build", "--pull", "never", "--wait", "--wait-timeout", "15", "network"], 20)
             phase = "app-before-gate"
             self.start_app_then_gate(compose)
+            phase = "proxy-pki"
             self.command("basic-pki", compose + ["--profile", "basic-pki", "run", "--rm", "--no-deps", "--pull", "never", "basic-pki"], 25)
             self.command("edge", compose + ["--profile", "edge", "up", "-d", "--no-build", "--pull", "never", "--no-deps", "edge"], 10)
             phase = "revision"

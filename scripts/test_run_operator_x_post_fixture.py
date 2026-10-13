@@ -314,6 +314,21 @@ class RunnerTests(unittest.TestCase):
                     exec(compiled, dict(namespace, result=changed))
         old_name = dict(valid); old_name["sdkDependenciesSha256"] = old_name.pop("dependenciesSha256")
         with self.assertRaises(KeyError): exec(compiled, dict(namespace, result=old_name))
+        pki_index = next(i for i, node in enumerate(body) if isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute)
+            and node.value.func.attr == 'command' and node.value.args
+            and isinstance(node.value.args[0], ast.Constant) and node.value.args[0].value == 'basic-pki')
+        self.assertEqual(ast.unparse(body[pki_index - 1]), "phase = 'proxy-pki'")
+        pki = compile(ast.fix_missing_locations(ast.Module(body=body[pki_index - 1:pki_index + 1],
+            type_ignores=[])), str(Path(runner.__file__)), 'exec')
+        original = ValueError('fixed synthetic PKI refusal')
+        command = Mock(side_effect=original)
+        state = {'self': SimpleNamespace(command=command), 'compose': ['docker', 'compose']}
+        with self.assertRaises(ValueError) as failure: exec(pki, state)
+        self.assertIs(failure.exception, original)
+        self.assertEqual(state['phase'], 'proxy-pki')
+        command.assert_called_once_with('basic-pki', ['docker', 'compose', '--profile', 'basic-pki',
+            'run', '--rm', '--no-deps', '--pull', 'never', 'basic-pki'], 25)
         terminal = next(node for node in ast.walk(execute) if isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute) and node.func.attr == "save"
             and node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == "terminal.json")

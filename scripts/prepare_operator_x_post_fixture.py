@@ -141,6 +141,7 @@ def build(source, binary, initializer, root, node, node_modules, python_runtime,
         service.setdefault("entrypoint", [])
     config["name"] = "serverware-x-post-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
     services, runtime = config["services"], root / "runtime"
+    services["basic-pki"]["command"] += ["--runtime-profile", "managed-x-post"]
     initialize = services["initialize"]
     initialize.update(command=["python", "-B", "-m", "scripts.operator_x_post_fixture_network", "initialize"],
         working_dir="/app", environment={"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": "/app"})

@@ -439,7 +439,12 @@ class XPostCheck(OperatorCatalogCheck):
     def exchange(self, endpoint, target, *, method="GET", payload=None, cookie=None, authenticated=False):
         require(target.startswith("/") and not target.startswith("//") and len(target) <= 8192
             and "\r" not in target and "\n" not in target, "closed X HTTP target required")
-        headers = {"Connection": "close"}
+        require(any(endpoint is selected and endpoint.scheme == "https" and endpoint.port == 443
+            and endpoint.host == host for selected, host in ((self.control, urlsplit(CONTROL).hostname),
+                (self.accounts, "x.com"), (self.upstream, "api.x.com"))), "fixed X HTTPS endpoint required")
+        # HTTPConnection supplies HTTP serialization over Endpoint's actual TLS
+        # socket. Its default port is 80, so automatic Host would append :443.
+        headers = {"Connection": "close", "Host": endpoint.host}
         if authenticated:
             require(endpoint is self.control, "admin token destination differs")
             headers["X-Serverware-Admin-Token"] = self.admin_token
@@ -466,8 +471,9 @@ class XPostCheck(OperatorCatalogCheck):
             connection.close()
 
     def observe(self, posts, *, connected=True, refreshed=False, disconnected=False, expired=False):
-        status, value = self.json_request(self.upstream, "/__test__/observations", context=self.upstream_ca)
+        status, _, raw = self.exchange(self.upstream, "/__test__/observations")
         require(status == 200, "X provider observation unavailable")
+        value = document(raw)
         validate_observations(value, posts=posts, connected=connected, refreshed=refreshed,
             disconnected=disconnected, first_anchor=getattr(self, "callback_anchor", None), expired=expired)
         if self.provider_checkpoints and connected:

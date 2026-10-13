@@ -100,6 +100,8 @@ class RecipeTests(InertTests):
             ['python', '-B', '-m', 'scripts.operator_x_post_fixture_network', 'initialize'])
         self.assertEqual(self.config['services']['x-post-pki']['command'],
             ['python', '-B', '-m', 'scripts.operator_x_post_fixture', '--setup'])
+        self.assertEqual(self.config['services']['basic-pki']['command'][-2:],
+            ['--runtime-profile', 'managed-x-post'])
         self.assertEqual((recipe.INITIAL_TOKEN_SECONDS, recipe.CHECKER_SECONDS, recipe.KEEPER_SECONDS,
             recipe.EDGE_SECONDS, recipe.CHECKER_OUTER_SECONDS, recipe.PRECHECK_SECONDS), (120, 180, 300, 240, 210, 75))
         self.assertEqual(recipe.PRECHECK_SECONDS + recipe.CHECKER_OUTER_SECONDS + 15, recipe.KEEPER_SECONDS)

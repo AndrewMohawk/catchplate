@@ -314,6 +314,83 @@ class CheckerTests(unittest.TestCase):
         with self.assertRaises(check.CheckFailure):
             check.callback_target([("Location", target.replace(check.CONTROL, "https://other.test"))], "s" * 43)
 
+    def test_actual_http_serializer_uses_fixed_https_host_without_default_port(self):
+        class RecordingSocket:
+            def __init__(self):
+                self.sent = bytearray()
+                self.closed = False
+            def sendall(self, data):
+                self.sent.extend(data)
+            def makefile(self, mode):
+                self.assert_mode = mode
+                return io.BytesIO(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{}")
+            def close(self):
+                self.closed = True
+
+        # Demonstrate the real stdlib default; no socket is constructed.
+        original = RecordingSocket()
+        connection = check.http.client.HTTPConnection("api.x.com", 443)
+        connection.sock = original
+        connection.request("GET", "/__test__/observations")
+        connection.close()
+        self.assertIn(b"\r\nHost: api.x.com:443\r\n", original.sent)
+
+        instance = object.__new__(check.XPostCheck)
+        instance.control = SimpleNamespace(host="serverware-x.example.com", port=443, scheme="https")
+        instance.accounts = SimpleNamespace(host="x.com", port=443, scheme="https")
+        instance.upstream = SimpleNamespace(host="api.x.com", port=443, scheme="https")
+        instance.control_ca, instance.upstream_ca = object(), object()
+        instance.admin_token = "synthetic-private-admin"
+        instance.timeout, instance.clean = Mock(return_value=0.25), Mock()
+        for endpoint in (instance.control, instance.accounts, instance.upstream):
+            recorded = RecordingSocket()
+            endpoint.connect = Mock(return_value=recorded)
+            self.assertEqual(instance.exchange(endpoint, "/observed")[0], 200)
+            self.assertEqual(recorded.sent.count(b"\r\nHost:"), 1)
+            self.assertIn(b"\r\nHost: " + endpoint.host.encode() + b"\r\n", recorded.sent)
+            self.assertNotIn(b":443\r\n", recorded.sent)
+            self.assertNotIn(instance.admin_token.encode(), recorded.sent)
+            self.assertTrue(recorded.closed)
+            endpoint.connect.assert_called_once_with(0.25,
+                instance.control_ca if endpoint is instance.control else instance.upstream_ca)
+        recorded = RecordingSocket(); instance.control.connect = Mock(return_value=recorded)
+        instance.exchange(instance.control, check.CONFIGURATION, method="POST", payload={"public": True}, authenticated=True)
+        self.assertIn(b"\r\nOrigin: https://serverware-x.example.com\r\n", recorded.sent)
+        self.assertIn(b"\r\nX-Serverware-Admin-Token: synthetic-private-admin\r\n", recorded.sent)
+        self.assertTrue(instance.clean.called)
+        for options in ({"authenticated": True}, {"cookie": "synthetic-private-cookie"}):
+            instance.upstream.connect.reset_mock()
+            with self.assertRaises(check.CheckFailure):
+                instance.exchange(instance.upstream, "/observed", **options)
+            instance.upstream.connect.assert_not_called()
+        for changed in ({"host": "unselected.example.com"}, {"port": 8443}, {"scheme": "http"}):
+            original_values = vars(instance.upstream).copy()
+            vars(instance.upstream).update(changed)
+            with self.assertRaises(check.CheckFailure):
+                instance.exchange(instance.upstream, "/observed")
+            vars(instance.upstream).update(original_values)
+
+    def test_provider_observation_uses_owned_exchange_and_strict_document(self):
+        observed = provider(disconnected=False)
+        observed.update(initialAccessIssuedAtEpochMs=None, initialAccessExpiresAtEpochMs=None,
+            initialAccessExpired=False, refreshAfterInitialExpiry=False, issuedGenerations=[], posts=[])
+        observed["counts"] = dict.fromkeys(observed["counts"], 0)
+        instance = object.__new__(check.XPostCheck)
+        instance.upstream = object()
+        instance.provider_checkpoints = []
+        instance.exchange = Mock(return_value=(200, [], canonical(observed)))
+        instance.json_request = Mock(side_effect=AssertionError("legacy HTTP Host framing used"))
+        self.assertEqual(instance.observe(0, connected=False), observed)
+        instance.exchange.assert_called_once_with(instance.upstream, "/__test__/observations")
+        instance.json_request.assert_not_called()
+        self.assertEqual(instance.provider_checkpoints, [observed])
+        self.assertEqual(instance.arrivals, [])
+        for status, body in ((503, canonical(observed)), (200, b'{"x":1,"x":2}'), (200, b'{}')):
+            instance.exchange = Mock(return_value=(status, [], body))
+            with self.assertRaises(check.CheckFailure):
+                instance.observe(0, connected=False)
+        self.assertEqual(instance.provider_checkpoints, [observed])
+
     def test_terminal_receipt_revalidates_all_nineteen_controls_and_no_live_claim(self):
         self.assertTrue(check.validate_success_result(receipt()))
         for mutate in (

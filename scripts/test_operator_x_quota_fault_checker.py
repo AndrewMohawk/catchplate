@@ -8,6 +8,7 @@ from copy import deepcopy
 import hashlib
 import json
 import unittest
+from unittest.mock import Mock, patch
 
 from scripts import check_operator_x_quota_fault as check
 
@@ -89,7 +90,102 @@ def result(mode):
         "namedAuditInventory": {**check.audit_inventory(mode), check.base.LEASE: 2, check.base.RELOAD: 3}}
 
 
+class PollingFixture:
+    """Virtual sleep/HTTP only; actual checker polling and control admission.
+
+    No SDK, provider or claim is run, and no production clock is altered.
+    """
+    def __init__(self, stage, *, mode="revoke-before-release", reads=2):
+        self.elapsed, self.sleeps, self.observed = 0.0, [], []
+        self.stage = stage
+        self.checker = object.__new__(check.FaultCheck)
+        self.checker.mode, self.checker.status_reads, self.checker.arm_hash = mode, reads, None
+        self.checker.clean = Mock()
+        self.checker.timeout = lambda: min(4, 180 - self.elapsed)
+        self.worker = Mock()
+        self.worker.is_alive.side_effect = lambda: self.elapsed < 35
+        self.connection = Mock()
+        self.connection.getresponse.side_effect = self.response
+
+    def response(self):
+        state = self.stage(self.elapsed)
+        self.observed.append((self.elapsed, state))
+        value = status(self.checker.mode, state)
+        if state == "armed":
+            value.update({key: None for key in check.STATUS_HASHES - {"arm_sha256"}})
+            value["http_status"] = None
+        response = Mock(status=200)
+        response.read.return_value = wire(value)
+        return response
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.elapsed += seconds
+
+    def wait(self):
+        with patch.object(check.http.client, "HTTPConnection", return_value=self.connection), \
+                patch.object(check.time, "sleep", side_effect=self.sleep):
+            return self.checker.wait_for_fault(self.worker)
+
+
 class FaultCheckerTests(unittest.TestCase):
+    def test_polling_preserves_budget_during_slow_sdk_startup_then_accelerates(self):
+        for mode in check.MODES:
+            selected = "dropped" if mode == "drop-ack" else "held"
+            for cold_seconds in (3, 12, 27, 33):
+                with self.subTest(mode=mode, cold_seconds=cold_seconds):
+                    fixture = PollingFixture(lambda elapsed: "armed" if elapsed < cold_seconds else
+                        "lease_inflight" if elapsed < cold_seconds + .25 else
+                        "bound" if elapsed < cold_seconds + .5 else
+                        "claim_inflight" if elapsed < cold_seconds + .75 else selected, mode=mode)
+                    self.assertEqual(fixture.wait()["status"], selected)
+                    self.assertEqual(fixture.elapsed, cold_seconds + .75)
+                    self.assertEqual(fixture.sleeps, [1.5] * int(cold_seconds // 1.5) + [.25] * 3)
+                    self.assertLessEqual(fixture.checker.status_reads, 28)
+                    self.assertTrue(all(call.args[:2] == ("GET", "/__fault/status")
+                        for call in fixture.connection.request.call_args_list))
+        fixture = PollingFixture(lambda elapsed: "armed" if elapsed < 30 else
+            "lease_inflight" if elapsed < 32 else "bound" if elapsed < 33 else
+            "claim_inflight" if elapsed < 34.75 else "held")
+        self.assertEqual(fixture.wait()["status"], "held")
+        self.assertEqual(fixture.elapsed, 34.75)
+        self.assertEqual(fixture.checker.status_reads, 42)
+
+    def test_polling_reserves_release_and_final_status_with_exact_48_control_cap(self):
+        fixture = PollingFixture(lambda _: "held", reads=45)
+        self.assertEqual(fixture.wait()["status"], "held")
+        self.assertEqual(fixture.checker.status_reads, 46)
+        fixture.stage = lambda _: "released"
+        with patch.object(check.http.client, "HTTPConnection", return_value=fixture.connection) as connection:
+            fixture.checker.relay("/__fault/release", {"test": "public control admission only"})
+            check.validate_status(fixture.checker.relay("/__fault/status"), fixture.checker.mode, terminal=True)
+            self.assertEqual(fixture.checker.status_reads, 48)
+            with self.assertRaises(check.CheckFailure):
+                fixture.checker.relay("/__fault/status")
+            self.assertEqual(connection.call_count, 2)
+        fixture = PollingFixture(lambda _: "claim_inflight", reads=45)
+        with self.assertRaisesRegex(check.CheckFailure, "final controls"):
+            fixture.wait()
+        self.assertEqual(fixture.checker.status_reads, 46)
+        self.assertEqual(len(fixture.observed), 1)
+
+    def test_polling_never_relabels_expiry_or_waits_for_a_second_sdk_attempt(self):
+        for mode in check.MODES:
+            for terminal in ("expired", "failed", "released"):
+                with self.subTest(mode=mode, terminal=terminal):
+                    fixture = PollingFixture(lambda elapsed: "armed" if elapsed < 12 else
+                        "claim_inflight" if elapsed < 12.25 else terminal, mode=mode)
+                    with self.assertRaisesRegex(check.CheckFailure, "expired or failed"):
+                        fixture.wait()
+                    self.assertEqual(fixture.elapsed, 12.25)
+                    self.assertEqual(fixture.observed[-1][1], terminal)
+            fixture = PollingFixture(lambda _: "armed", mode=mode)
+            with self.assertRaisesRegex(check.CheckFailure, "SDK ended"):
+                fixture.wait()
+            self.assertEqual(fixture.elapsed, 36)
+            self.assertEqual(fixture.checker.status_reads, 27)
+            self.assertEqual(fixture.sleeps, [1.5] * 24)
+
     def test_relay_status_is_closed_and_requires_actual_response_hashes(self):
         for mode in check.MODES:
             check.validate_status(status(mode), mode, terminal=True)

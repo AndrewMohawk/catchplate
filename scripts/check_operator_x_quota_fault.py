@@ -37,6 +37,8 @@ STATUS_FIELDS = {"schema", "status", "mode", "http_status"} | STATUS_HASHES
 STAGES = {"idle", "armed", "lease_inflight", "bound", "claim_inflight", "held", "release_requested",
     "released", "dropped", "expired", "failed"}
 EXHAUSTED = "X posting-attempt quota exhausted"
+RELAY_CONTROLS = 48
+FINAL_RELAY_CONTROLS = 2  # Actual release (hold mode) and final status.
 encoded, digest, document, exact = base.encoded, base.digest, base.document, quota.exact
 
 
@@ -183,7 +185,7 @@ class FaultCheck(base.XPostCheck):
         require(path in {"/__fault/arm", "/__fault/status", "/__fault/release"}
             and (payload is None) == (path == "/__fault/status"), "fixed local quota relay control required")
         self.status_reads += 1
-        require(self.status_reads <= 48, "quota relay observation budget exceeded")
+        require(self.status_reads <= RELAY_CONTROLS, "quota relay observation budget exceeded")
         headers = {"Host": "127.0.0.1:3001", "Connection": "close"}
         body = None if payload is None else encoded(payload)
         if body is not None:
@@ -226,6 +228,22 @@ class FaultCheck(base.XPostCheck):
         self.completed.append(validate_sdk(client, code, stdout, stderr, expected_status))
         return wall, mono
 
+    def wait_for_fault(self, worker):
+        selected = "dropped" if self.mode == "drop-ack" else "held"
+        while True:
+            require(self.status_reads < RELAY_CONTROLS - FINAL_RELAY_CONTROLS,
+                "quota relay polling would consume final controls")
+            observed = self.relay("/__fault/status")
+            require(observed["status"] not in {"failed", "expired", "released"}, "quota fault expired or failed")
+            if observed["status"] == selected:
+                return observed
+            require(worker.is_alive(), "quota SDK ended before actual claim fault")
+            # Cold SDK startup has no selected lease yet. Preserve the finite
+            # control budget for the real <=5s lease and <=3s claim connection;
+            # these sleeps neither create nor renew either original deadline.
+            delay = .25 if observed["status"] in {"lease_inflight", "bound", "claim_inflight"} else 1.5
+            time.sleep(min(delay, self.timeout()))
+
     def fault_attempt(self):
         self.current_phase = self.mode
         before = self.observe(0)
@@ -237,14 +255,7 @@ class FaultCheck(base.XPostCheck):
         require(armed["status"] == "armed" and armed["arm_sha256"] == self.arm_hash, "quota relay arm changed")
         worker, results = self.start_sdk("node")
         try:
-            selected = "dropped" if self.mode == "drop-ack" else "held"
-            while True:
-                observed = self.relay("/__fault/status")
-                require(observed["status"] not in {"failed", "expired", "released"}, "quota fault expired or failed")
-                if observed["status"] == selected:
-                    break
-                require(worker.is_alive(), "quota SDK ended before actual claim fault")
-                time.sleep(min(.05, self.timeout()))
+            observed = self.wait_for_fault(worker)
             # The claim audit is the real committed store receipt, not a relay
             # assertion, seeded row, direct store read or synthetic signature.
             claim = selected_claim(self.audit(), observed, self.scope, self.credential_id, self.fixture.SUBJECT)

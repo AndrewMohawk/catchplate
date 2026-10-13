@@ -5,6 +5,11 @@
 Implementation is being verified; this document is not a deployment or
 real-provider acceptance record.
 
+Current acceptance: the shared-limit/restart/refresh/reconnect story and the
+lost-claim-acknowledgement case have passed through real SDKs and the normal
+proxy against an isolated synthetic provider. Revocation, legacy compatibility
+and the retained-data rollout remain pending.
+
 At the October 13 source checkpoint, `acd157de` passed 120 focused Rust tests
 across 16 filters and produced normal executable
 `fd951c487b04c0c0e4d7a43e0c406484c2efcaa75635c697b9f6a2df9da7de08`.
@@ -173,6 +178,23 @@ the curated gate deliberately has no source mount
 (`x-quota-fault-drop-cached.5yDO3CDa`, 56.261 seconds, cleanup successful).
 The probe now carries only its fixed standard-library checks into that same
 container; no mount, production guard or deadline changes.
+
+The repaired dropped-ACK run at `a6347076`, `x-quota-fault-drop-probe.pGCAykD9`,
+passed in 71.883 seconds with successful cleanup. One actual durable claim's
+successful response was dropped; Node returned 409 without retry, and a distinct
+Python request was denied by the exhausted quota (429 in the signed audit).
+The provider received zero posts, original-client token cleanup completed,
+and the audit chain verified. The terminal and checker SHA-256 values are
+`188772bda64bee1976cba23aac5c8eee4c83602e5d6b0d03550a3b3719e90ab4`
+and `c4712da58f78482f41c5bbbd855dc87eb584947091a5e71864048b54789d56d5`.
+
+The first revocation run, `x-quota-fault-revoke.B108rt68`, failed on the
+checker's 49th control-call admission, exceeding its 48-call budget. The relay
+reached a real held claim ACK, then expired without release; no revoke request
+was observed. Cleanup succeeded after 64.740 seconds. Relay lines lack timestamps,
+so they do not establish precise SDK startup/selection latency. The checker now
+paces pre-lease polling separately and reserves its final control calls, without
+increasing any control/request budget, SDK timeout or original claim deadline.
 
 The rendered account/setup suite subsequently passed all ten groups with eight
 masked 1280/390-pixel screenshots and unchanged source. It verified default

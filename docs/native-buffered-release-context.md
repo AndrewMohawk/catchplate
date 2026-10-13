@@ -203,6 +203,32 @@ empty. These are focused components, not PostgreSQL, native-custody, complete
 approval-flow, provider or deployment acceptance. The earlier test results
 below cover their original checkpoints only.
 
+## Shared pending-request projection — source only
+
+`authority_transition_quota.jit_pending_projection` now supplies the existing
+standalone JIT kernel's pending key, immutable fields and complete pending row.
+It preserves the original document-expiry minimum, requested TTL cap and integer
+microsecond floor. The kernel still derives the child identity, authenticates
+both opaque values, and owns every selected-row, replay, aggregate, audit and
+mutation check. The helper does not admit custody or create an alternative
+clock or execution context. Its flat returned mappings are read-only.
+
+This extraction lets a future compound reserve transition reuse the exact row
+grammar while keeping the actual parent context; it does not yet implement that
+transition. The private-release service refusal and retention guards remain.
+
+All **59 focused tests in five suites** passed, with zero skips and unchanged
+selected source pins, in 20.090 seconds. Four new groups independently check
+complete row/key bytes and real-kernel mutation identity, expiry flooring,
+unusable original lifetimes and all immutable replay fields. Existing delayed
+admission and read-only replay checks remain. Evidence:
+`jit-pending-projection.vzEi4kXI/results/result.json`, SHA256
+`b40fe776599c3bdbb6752d095342163d6a4fdc97aec95ae9ec90ab8692fc34d9`.
+The network-disabled cached-image test process exited zero and was removed.
+Its inherited application healthcheck attempted loopback HTTP without a server;
+that separate test-container flag is not a live-service failure. No database,
+native custody, protected approval, provider or deployment acceptance follows.
+
 ## Python: temporary refusal at five boundaries
 
 `serverware/authority_release_private_input.py` rejects any non-`None`

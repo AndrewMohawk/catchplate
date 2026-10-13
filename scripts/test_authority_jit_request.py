@@ -490,6 +490,125 @@ class HeldRequestRows:
             selected.update(present=True, row=copy.deepcopy(mutation["row"]))
 
 
+class JitPendingProjectionTests(unittest.TestCase):
+    """Pure projection and real kernel parity, not row/custody admission."""
+
+    def project(self, fixture, now=NOW):
+        return quota.jit_pending_projection(
+            ingress.normalize(fixture.arguments, request_digest=fixture.digest),
+            approval_id=fixture.item, canonical_value=fixture.originals[0],
+            display_value=fixture.originals[1], database_now=now)
+
+    def expected_immutable(self, fixture):
+        # Independent old row/key grammar: no production projection or key
+        # helper supplies the expected bytes.
+        raw = public_arguments()
+        policy_digest = framed("serverware.jitApproverPolicy/v1", policy())
+        pending_key = framed("serverware.jitPendingApproval/v2", {
+            "routeId": raw["route_id"], "method": "PUT",
+            "urlCommitment": sha(raw["url"].encode("utf-8")),
+            "principalId": raw["principal_id"], "credentialId": raw["credential_id"],
+            "credentialVersion": 7, "policyHash": raw["policy_hash"],
+            "requestDigest": raw["request_digest"], "operationDigest": raw["operation_digest"],
+            "grantTtlSeconds": 30, "grantMaxUses": 1, "approverPolicyDigest": policy_digest})
+        return {"route_id": raw["route_id"], "method": "PUT",
+            "url": sha(raw["url"].encode("utf-8")), "principal_id": raw["principal_id"],
+            "credential_id": raw["credential_id"], "credential_version": 7,
+            "policy_hash": raw["policy_hash"], "request_digest": raw["request_digest"],
+            "operation_digest": raw["operation_digest"],
+            "canonical_request": fixture.originals[0]["ciphertext_base64url"],
+            "redacted_display": fixture.originals[1]["ciphertext_base64url"],
+            "grant_ttl_seconds": 30, "grant_max_uses": 1, "pending_key": pending_key,
+            "approver_policy_json": canonical(policy()).decode("ascii"),
+            "approver_policy_digest": policy_digest}
+
+    def test_complete_row_pending_key_bytes_and_kernel_mutation_identity_match(self):
+        fixture = HeldRequestRows(HeldRequestRows.EPOCH_NS + 12_345_678_999,
+            HeldRequestRows.EPOCH_NS + 20_000_000_000)
+        now = NOW + timedelta(seconds=3, microseconds=1000)
+        before = copy.deepcopy((fixture.arguments, fixture.originals, fixture.rows))
+        projection = self.project(fixture, now)
+        immutable = self.expected_immutable(fixture)
+        expected = {"id": identity(fixture.digest, "jit-approval-request"), **immutable,
+            "status": "pending", "requested_at": "2026-10-11T12:00:03.001000+00:00",
+            "expires_at": "2026-10-11T12:00:12.345678+00:00", "approved_until": None,
+            "decision_note": None, "approved_by": None, "approval_authn": None,
+            "approver_webauthn_credential_id": None, "verified_assertion_receipt_digest": None,
+            "approval_challenge_id": None}
+        self.assertEqual(canonical(dict(projection.immutable)), canonical(immutable))
+        self.assertEqual(canonical(dict(projection.row)), canonical(expected))
+        transition = fixture.transition(now)
+        self.assertEqual([(item["table"], item["operation"]) for item in transition.mutations], [
+            ("routes", "INSERT"), ("approval_requests", "INSERT"),
+            (fixture.AGGREGATE, "UPDATE"), ("metadata_audit_outbox", "INSERT")])
+        approval = transition.mutations[1]
+        self.assertEqual(approval["key"], {"id": expected["id"]})
+        self.assertIsNone(approval["expectedRow"])
+        self.assertEqual(canonical(approval["row"]), canonical(expected))
+        self.assertEqual(transition.mutations[0]["key"], {"id": "route:synthetic"})
+        self.assertEqual(transition.mutations[3]["key"], {
+            "id": identity(fixture.digest, "metadata-audit-outbox")})
+        self.assertEqual(transition.work_units, 44)
+        self.assertEqual((fixture.arguments, fixture.originals, fixture.rows), before)
+        for mapping in (projection.immutable, projection.row):
+            with self.assertRaises(TypeError):
+                mapping["method"] = "GET"
+        retained_bytes = canonical(dict(projection.row))
+        fixture.originals[0]["ciphertext_base64url"] = "changed-after-projection"
+        self.assertEqual(canonical(dict(projection.row)), retained_bytes)
+
+    def test_projection_original_expiry_minimum_and_integer_microsecond_floor(self):
+        epoch = HeldRequestRows.EPOCH_NS
+        for first, second, delay_us, ttl in (
+            (12_345_678_999, 20_000_000_000, 3_001_000, 300),
+            (20_000_000_000, 12_345_678_999, 3_001_000, 300),
+            (3_500_000_000_000, 3_600_000_000_000, 1000, 300),
+            (1000, 1999, 0, 300),
+        ):
+            with self.subTest(bounds=(first, second), delay_us=delay_us):
+                fixture = HeldRequestRows(epoch + first, epoch + second, pending_ttl=ttl)
+                projected = self.project(fixture, NOW + timedelta(microseconds=delay_us))
+                expected_ns = min(epoch + delay_us * 1000 + ttl * 1_000_000_000,
+                    epoch + first, epoch + second) // 1000 * 1000
+                self.assertIs(type(projected.expiry_epoch_ns), int)
+                self.assertEqual(projected.document_expiry_epoch_ns, epoch + min(first, second))
+                self.assertEqual(projected.expiry_epoch_ns, expected_ns)
+                self.assertEqual(projected.row["expires_at"], (NOW + timedelta(
+                    microseconds=(expected_ns - epoch) // 1000)).isoformat())
+
+    def test_projection_rejects_each_expired_or_unusable_original_without_mutation(self):
+        epoch = HeldRequestRows.EPOCH_NS
+        for index in range(2):
+            for bad in (None, True, 0, -1, epoch - 1, epoch, epoch + 999,
+                    float(epoch + 60_000_000_000), str(epoch), 2**63):
+                with self.subTest(document=index, bound=bad):
+                    bounds = [epoch + 60_000_000_000] * 2
+                    bounds[index] = bad
+                    fixture = HeldRequestRows(*bounds)
+                    before = copy.deepcopy((fixture.arguments, fixture.originals, fixture.rows))
+                    with self.assertRaises(core.TransitionKernelError):
+                        self.project(fixture)
+                    self.assertEqual((fixture.arguments, fixture.originals, fixture.rows), before)
+
+    def test_real_replay_refuses_each_changed_immutable_identity_field(self):
+        end = HeldRequestRows.EPOCH_NS + 60_000_000_000
+        fixture = HeldRequestRows(end, end)
+        fixture.apply_model(fixture.transition())
+        retained = copy.deepcopy(fixture.rows)
+        for field in self.expected_immutable(fixture):
+            with self.subTest(field=field):
+                fixture.rows = copy.deepcopy(retained)
+                approval = next(item["row"] for item in fixture.rows
+                    if item["table"] == "approval_requests")
+                value = approval[field]
+                approval[field] = value + 1 if type(value) is int else value + ":changed"
+                before = copy.deepcopy(fixture.rows)
+                with self.assertRaisesRegex(core.TransitionKernelError,
+                        "^JIT request identity was rebound$"):
+                    fixture.transition(NOW + timedelta(seconds=1))
+                self.assertEqual(fixture.rows, before)
+
+
 class JitRequestExpiryTests(unittest.TestCase):
     def assert_expiry(self, fixture, transition, expected_text, expected_ns):
         self.assertEqual([(item["table"], item["operation"]) for item in transition.mutations], [

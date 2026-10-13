@@ -1764,6 +1764,157 @@ def _jit_public(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 @dataclass(frozen=True, slots=True)
+class JitPendingProjection:
+    """Derived row data, not custody admission or mutation authority."""
+
+    immutable: Mapping[str, Any]
+    row: Mapping[str, Any]
+    document_expiry_epoch_ns: int
+    expiry_epoch_ns: int
+
+
+def jit_pending_projection(
+    normalized_child: Mapping[str, Any],
+    *,
+    approval_id: str,
+    canonical_value: Mapping[str, Any],
+    display_value: Mapping[str, Any],
+    database_now: datetime,
+) -> JitPendingProjection:
+    """Project a pending row from already admitted child/document originals.
+
+    The caller must normalize the child, derive its exact approval identity,
+    and authenticate both opaque values before calling this pure helper. The
+    supplied database time is never sampled here. No selection, proof check,
+    mutation template, or replay decision is supplied by this projection.
+    """
+    arguments = normalized_child
+    route_id = _text(arguments["route_id"], "JIT route", maximum_bytes=512)
+    method = _text(arguments["method"], "JIT method", maximum_bytes=32).upper()
+    if method != arguments["method"]:
+        raise core.TransitionKernelError("JIT method is not canonical uppercase")
+    url_commitment = _digest(arguments["url_commitment"], "JIT URL commitment")
+    principal_id = _text(
+        arguments["principal_id"], "JIT principal", maximum_bytes=512,
+    )
+    credential_id = _text(
+        arguments["credential_id"], "JIT credential", maximum_bytes=512,
+        allow_empty=True,
+    )
+    credential_version = _integer(
+        arguments["credential_version"], "JIT credential version",
+    )
+    policy_hash = _digest(arguments["policy_hash"], "JIT policy")
+    bound_request_digest = _digest(arguments["request_digest"], "JIT bound request")
+    operation_digest = _optional_digest(arguments["operation_digest"], "JIT operation")
+    pending_ttl = _integer(
+        arguments["pending_ttl_seconds"], "JIT pending TTL",
+        minimum=1, maximum=3600,
+    )
+    grant_ttl = _integer(
+        arguments["grant_ttl_seconds"], "JIT grant TTL",
+        minimum=1, maximum=3600,
+    )
+    grant_max_uses = _integer(
+        arguments["grant_max_uses"], "JIT grant uses",
+        minimum=1, maximum=1_000_000,
+    )
+    approver_policy, approver_policy_json = _canonical_mapping(
+        arguments["approver_policy"], "JIT approver policy",
+    )
+    if (
+        approver_policy.get("schema") != "serverware.jitApproverPolicy/v1"
+        or approver_policy.get("requireWebAuthn") is not True
+        or not isinstance(approver_policy.get("threshold"), int)
+        or isinstance(approver_policy.get("threshold"), bool)
+        or not 1 <= approver_policy["threshold"] <= 16
+    ):
+        raise core.TransitionKernelError("JIT approver policy is not closed")
+    approver_policy_digest = _digest(
+        arguments["approver_policy_digest"], "JIT approver policy digest",
+    )
+    if approver_policy_digest != core.framed_digest(
+        "serverware.jitApproverPolicy/v1", approver_policy_json.encode("ascii"),
+    ):
+        raise core.TransitionKernelError("JIT approver policy digest differs")
+
+    # The custody owner fixed both document lifetimes before planning.
+    # Neither delayed admission nor replay may restart that original TTL.
+    document_expiry_ns = min(
+        _integer(value.get("expires_at_epoch_ns"),
+            "JIT original document expiry", minimum=1,
+            maximum=_SIGNED_BIGINT_MAX)
+        for value in (canonical_value, display_value)
+    )
+    now_ns = core._epoch_nanoseconds(database_now)
+    expiry_ns = min(now_ns + pending_ttl * 1_000_000_000, document_expiry_ns)
+    # PostgreSQL timestamps and datetime represent microseconds. Round down,
+    # never past either authenticated nanosecond document bound.
+    expiry = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(
+        microseconds=expiry_ns // 1_000)
+    stored_expiry_ns = core._epoch_nanoseconds(expiry)
+    if stored_expiry_ns <= now_ns:
+        raise core.TransitionKernelError(
+            "JIT original document lifetime has no usable remainder"
+        )
+    pending_key = core.framed_digest(
+        "serverware.jitPendingApproval/v2",
+        core.canonical_bytes({
+            "routeId": route_id,
+            "method": method,
+            "urlCommitment": url_commitment,
+            "principalId": principal_id,
+            "credentialId": credential_id,
+            "credentialVersion": credential_version,
+            "policyHash": policy_hash,
+            "requestDigest": bound_request_digest,
+            "operationDigest": operation_digest,
+            "grantTtlSeconds": grant_ttl,
+            "grantMaxUses": grant_max_uses,
+            "approverPolicyDigest": approver_policy_digest,
+        }),
+    )
+    immutable = {
+        "route_id": route_id,
+        "method": method,
+        "url": url_commitment,
+        "principal_id": principal_id,
+        "credential_id": credential_id,
+        "credential_version": credential_version,
+        "policy_hash": policy_hash,
+        "request_digest": bound_request_digest,
+        "operation_digest": operation_digest,
+        "canonical_request": canonical_value["ciphertext_base64url"],
+        "redacted_display": display_value["ciphertext_base64url"],
+        "grant_ttl_seconds": grant_ttl,
+        "grant_max_uses": grant_max_uses,
+        "pending_key": pending_key,
+        "approver_policy_json": approver_policy_json,
+        "approver_policy_digest": approver_policy_digest,
+    }
+    row = {
+        "id": approval_id,
+        **immutable,
+        "status": "pending",
+        "requested_at": database_now.astimezone(timezone.utc).isoformat(),
+        "expires_at": expiry.isoformat(),
+        "approved_until": None,
+        "decision_note": None,
+        "approved_by": None,
+        "approval_authn": None,
+        "approver_webauthn_credential_id": None,
+        "verified_assertion_receipt_digest": None,
+        "approval_challenge_id": None,
+    }
+    return JitPendingProjection(
+        immutable=MappingProxyType(immutable),
+        row=MappingProxyType(row),
+        document_expiry_epoch_ns=document_expiry_ns,
+        expiry_epoch_ns=stored_expiry_ns,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class _JitRequestKernel:
     operation: str = "jit.request"
     handler: str = "ensure_jit_approval_request"
@@ -1855,50 +2006,9 @@ class _JitRequestKernel:
         arguments = jit_request.normalize(
             context.arguments, request_digest=context.request_digest,
         )
-        route_id = _text(
-            arguments["route_id"],
-            "JIT route",
-            maximum_bytes=512,
-        )
-        method = _text(
-            arguments["method"],
-            "JIT method",
-            maximum_bytes=32,
-        ).upper()
-        if method != arguments["method"]:
-            raise core.TransitionKernelError(
-                "JIT method is not canonical uppercase"
-            )
-        url_commitment = _digest(
-            arguments["url_commitment"],
-            "JIT URL commitment",
-        )
-        principal_id = _text(
-            arguments["principal_id"],
-            "JIT principal",
-            maximum_bytes=512,
-        )
-        credential_id = _text(
-            arguments["credential_id"],
-            "JIT credential",
-            maximum_bytes=512,
-            allow_empty=True,
-        )
-        credential_version = _integer(
-            arguments["credential_version"],
-            "JIT credential version",
-        )
-        policy_hash = _digest(
-            arguments["policy_hash"],
-            "JIT policy",
-        )
         bound_request_digest = _digest(
             arguments["request_digest"],
             "JIT bound request",
-        )
-        operation_digest = _optional_digest(
-            arguments["operation_digest"],
-            "JIT operation",
         )
         canonical_digest = _digest(
             arguments["canonical_request_digest"],
@@ -1908,50 +2018,6 @@ class _JitRequestKernel:
             arguments["redacted_display_digest"],
             "JIT redacted display plaintext",
         )
-        pending_ttl = _integer(
-            arguments["pending_ttl_seconds"],
-            "JIT pending TTL",
-            minimum=1,
-            maximum=3600,
-        )
-        grant_ttl = _integer(
-            arguments["grant_ttl_seconds"],
-            "JIT grant TTL",
-            minimum=1,
-            maximum=3600,
-        )
-        grant_max_uses = _integer(
-            arguments["grant_max_uses"],
-            "JIT grant uses",
-            minimum=1,
-            maximum=1_000_000,
-        )
-        approver_policy, approver_policy_json = _canonical_mapping(
-            arguments["approver_policy"],
-            "JIT approver policy",
-        )
-        if (
-            approver_policy.get("schema")
-                != "serverware.jitApproverPolicy/v1"
-            or approver_policy.get("requireWebAuthn") is not True
-            or not isinstance(approver_policy.get("threshold"), int)
-            or isinstance(approver_policy.get("threshold"), bool)
-            or not 1 <= approver_policy["threshold"] <= 16
-        ):
-            raise core.TransitionKernelError(
-                "JIT approver policy is not closed"
-            )
-        approver_policy_digest = _digest(
-            arguments["approver_policy_digest"],
-            "JIT approver policy digest",
-        )
-        if approver_policy_digest != core.framed_digest(
-            "serverware.jitApproverPolicy/v1",
-            approver_policy_json.encode("ascii"),
-        ):
-            raise core.TransitionKernelError(
-                "JIT approver policy digest differs"
-            )
         item_id = core.deterministic_uuid(
             operation=self.operation,
             request_digest=context.request_digest,
@@ -1987,45 +2053,15 @@ class _JitRequestKernel:
                 plaintext_digest=display_digest,
             ),
         )
-        # The custody owner fixed both document lifetimes before planning.
-        # Neither delayed admission nor replay may restart that original TTL.
-        document_expiry_ns = min(
-            _integer(value.get("expires_at_epoch_ns"),
-                "JIT original document expiry", minimum=1,
-                maximum=_SIGNED_BIGINT_MAX)
-            for value in (canonical_value, display_value)
+        projection = jit_pending_projection(
+            arguments,
+            approval_id=item_id,
+            canonical_value=canonical_value,
+            display_value=display_value,
+            database_now=context.database_now,
         )
-        now_ns = core._epoch_nanoseconds(context.database_now)
-        expiry_ns = min(now_ns + pending_ttl * 1_000_000_000,
-            document_expiry_ns)
-        # PostgreSQL timestamps and datetime represent microseconds. Round
-        # down, never past either authenticated nanosecond document bound.
-        expiry = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(
-            microseconds=expiry_ns // 1_000)
-        stored_expiry_ns = core._epoch_nanoseconds(expiry)
-        if stored_expiry_ns <= now_ns:
-            raise core.TransitionKernelError(
-                "JIT original document lifetime has no usable remainder"
-            )
-        pending_key = core.framed_digest(
-            "serverware.jitPendingApproval/v2",
-            core.canonical_bytes(
-                {
-                    "routeId": route_id,
-                    "method": method,
-                    "urlCommitment": url_commitment,
-                    "principalId": principal_id,
-                    "credentialId": credential_id,
-                    "credentialVersion": credential_version,
-                    "policyHash": policy_hash,
-                    "requestDigest": bound_request_digest,
-                    "operationDigest": operation_digest,
-                    "grantTtlSeconds": grant_ttl,
-                    "grantMaxUses": grant_max_uses,
-                    "approverPolicyDigest": approver_policy_digest,
-                }
-            ),
-        )
+        immutable = projection.immutable
+        route_id = immutable["route_id"]
         selected, existing = _selected_or_none(
             context,
             "approval_requests",
@@ -2036,7 +2072,7 @@ class _JitRequestKernel:
             "routes",
             {"id": route_id},
         )
-        now_s = context.database_now.astimezone(timezone.utc).isoformat()
+        now_s = projection.row["requested_at"]
         if route is None:
             route_mutations: tuple[dict[str, Any], ...] = (
                 core.mutation(
@@ -2058,39 +2094,8 @@ class _JitRequestKernel:
             )
         else:
             route_mutations = ()
-        immutable = {
-            "route_id": route_id,
-            "method": method,
-            "url": url_commitment,
-            "principal_id": principal_id,
-            "credential_id": credential_id,
-            "credential_version": credential_version,
-            "policy_hash": policy_hash,
-            "request_digest": bound_request_digest,
-            "operation_digest": operation_digest,
-            "canonical_request": canonical_value["ciphertext_base64url"],
-            "redacted_display": display_value["ciphertext_base64url"],
-            "grant_ttl_seconds": grant_ttl,
-            "grant_max_uses": grant_max_uses,
-            "pending_key": pending_key,
-            "approver_policy_json": approver_policy_json,
-            "approver_policy_digest": approver_policy_digest,
-        }
         if existing is None:
-            row = {
-                "id": item_id,
-                **immutable,
-                "status": "pending",
-                "requested_at": now_s,
-                "expires_at": expiry.isoformat(),
-                "approved_until": None,
-                "decision_note": None,
-                "approved_by": None,
-                "approval_authn": None,
-                "approver_webauthn_credential_id": None,
-                "verified_assertion_receipt_digest": None,
-                "approval_challenge_id": None,
-            }
+            row = dict(projection.row)
             request_mutations: tuple[dict[str, Any], ...] = (
                 core.mutation(
                     operation=self.operation,
@@ -2104,7 +2109,7 @@ class _JitRequestKernel:
                     live_delta=1,
                     active_delta=1,
                     next_sequence_delta=1,
-                    minimum_expiry_epoch_ns=stored_expiry_ns,
+                    minimum_expiry_epoch_ns=projection.expiry_epoch_ns,
                 ),
             )
             replay = False
@@ -2123,7 +2128,7 @@ class _JitRequestKernel:
                 raise core.TransitionKernelError(
                     "JIT retained request expiry is invalid"
                 ) from exc
-            if not 0 < retained_expiry_ns <= document_expiry_ns:
+            if not 0 < retained_expiry_ns <= projection.document_expiry_epoch_ns:
                 raise core.TransitionKernelError(
                     "JIT retained request exceeds its original document lifetime"
                 )
@@ -2134,23 +2139,23 @@ class _JitRequestKernel:
             context,
             event_type="approval.requested",
             actor_type="proxy",
-            actor_id=principal_id,
+            actor_id=immutable["principal_id"],
             event={
                 "schema": "serverware.jitApprovalRequested/v2",
                 "approvalRequestId": item_id,
                 "routeId": route_id,
-                "principalId": principal_id,
-                "credentialId": credential_id,
-                "credentialVersion": credential_version,
-                "policyHash": policy_hash,
+                "principalId": immutable["principal_id"],
+                "credentialId": immutable["credential_id"],
+                "credentialVersion": immutable["credential_version"],
+                "policyHash": immutable["policy_hash"],
                 "requestDigest": bound_request_digest,
-                "operationDigest": operation_digest,
-                "method": method,
-                "urlCommitment": url_commitment,
+                "operationDigest": immutable["operation_digest"],
+                "method": immutable["method"],
+                "urlCommitment": immutable["url"],
                 "expiresAt": row["expires_at"],
-                "grantTtlSeconds": grant_ttl,
-                "grantMaxUses": grant_max_uses,
-                "approverPolicyDigest": approver_policy_digest,
+                "grantTtlSeconds": immutable["grant_ttl_seconds"],
+                "grantMaxUses": immutable["grant_max_uses"],
+                "approverPolicyDigest": immutable["approver_policy_digest"],
             },
         )
         if replay != audit_replay:

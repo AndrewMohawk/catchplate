@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol
 
@@ -3322,11 +3322,18 @@ def checked_i64_add(left: Any, right: Any, label: str) -> int:
 
 
 def _epoch_nanoseconds(value: datetime) -> int:
-    if value.tzinfo is None:
+    if value.tzinfo is None or value.utcoffset() is None:
         raise TransitionKernelError(
             "authority transition database clock is not timezone-aware"
         )
-    return int(value.timestamp() * 1_000_000_000)
+    # Preserve the database datetime's exact microseconds. Floating-point
+    # timestamp conversion can move this bound before an equal stored instant.
+    delta = value.astimezone(timezone.utc) - datetime(1970, 1, 1, tzinfo=timezone.utc)
+    return (
+        delta.days * 86_400_000_000_000
+        + delta.seconds * 1_000_000_000
+        + delta.microseconds * 1_000
+    )
 
 
 def _selected_row(

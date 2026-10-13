@@ -54,7 +54,7 @@ def _history_sql(namespace: str, *, retain: bool) -> str:
             ON CONFLICT (assertion_receipt_digest) DO NOTHING;
     """ if retain else ""
     return f"""
-        IF capability.operation = 'jit.decide' THEN
+        IF capability.operation IN ('jit.decide', 'jit.deny') THEN
             DECLARE
                 historical_original pg_catalog.jsonb;
                 historical_expected pg_catalog.jsonb;

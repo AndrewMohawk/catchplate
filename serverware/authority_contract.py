@@ -2802,26 +2802,19 @@ _OPERATIONS = {
             + _WEBAUTHN
             + _VERIFIED_APPROVAL_AUTHORITY
             + _PHASE2_AGGREGATE
-            + _PHASE2_EVIDENCE
         ),
         writes=(
             "approval_requests",
             "approval_review_receipts",
             "metadata_audit_outbox",
+            "webauthn_challenges",
+            "webauthn_credentials",
         )
-        + _PHASE2_AGGREGATE
-        + _PHASE2_EVIDENCE,
+        + _PHASE2_AGGREGATE,
         selectors={"approval_requests": (("arguments", "item_id"),)},
         webauthn="bound-verified-assertion-receipt",
         approver_policy=True,
-        proof_primitives=(
-            "primary-key-row",
-            "exact-derived-row-set",
-            "aggregate-high-water",
-            "capacity-reservation",
-            "external-evidence-receipt",
-        ),
-        external_evidence_types=("webauthn-hardware-authorization/v1",),
+        proof_primitives=_PHASE2_EXACT_AGGREGATE_PROOF_SET,
         maximum_query_rows=24,
         maximum_mutations=12,
         maximum_work_units=256,

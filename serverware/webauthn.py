@@ -1609,12 +1609,15 @@ def approval_options(
     }
 
 
-def authority_approval_options(
+def _authority_jit_decision_options(
     *,
+    operation: str,
     user_id: str,
     authn_policy: dict[str, Any],
     target_arguments: dict[str, Any],
 ) -> dict[str, Any]:
+    if operation not in {"jit.decide", "jit.deny"}:
+        raise WebAuthnError("unsupported authority decision operation")
     credentials = _credential_descriptors_for_policy(
         user_id,
         authn_policy,
@@ -1630,7 +1633,7 @@ def authority_approval_options(
             "eligible WebAuthn credential identity is invalid"
         )
     challenge = db.issue_policy_authority_webauthn_challenge(
-        operation="jit.decide",
+        operation=operation,
         input_value=target_arguments,
         user_id=user_id,
         credential_id=credential_id,
@@ -1654,9 +1657,37 @@ def authority_approval_options(
         },
         "serverware": {
             "authorityChallengeId": challenge["id"],
-            "operation": "jit.decide",
+            "operation": operation,
         },
     }
+
+
+def authority_approval_options(
+    *,
+    user_id: str,
+    authn_policy: dict[str, Any],
+    target_arguments: dict[str, Any],
+) -> dict[str, Any]:
+    return _authority_jit_decision_options(
+        operation="jit.decide",
+        user_id=user_id,
+        authn_policy=authn_policy,
+        target_arguments=target_arguments,
+    )
+
+
+def authority_denial_options(
+    *,
+    user_id: str,
+    authn_policy: dict[str, Any],
+    target_arguments: dict[str, Any],
+) -> dict[str, Any]:
+    return _authority_jit_decision_options(
+        operation="jit.deny",
+        user_id=user_id,
+        authn_policy=authn_policy,
+        target_arguments=target_arguments,
+    )
 
 
 def control_plane_mutation_options(

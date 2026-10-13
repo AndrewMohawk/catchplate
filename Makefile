@@ -869,6 +869,9 @@ override CODER_BLOCKED_PREREQUISITE_TEST_SCRIPTS := \
 	scripts/test_portal_browser_oauth.py \
 	scripts/test_response_proof_capture.sh
 override CODER_EXCLUDED_TEST_SCRIPTS := \
+	scripts/test_authority_jit_approval.py \
+	scripts/test_authority_jit_denial.py \
+	scripts/test_jit_denial_api.py \
 	scripts/test_agent_enrollment.py \
 	scripts/test_agent_trust_wheel.py \
 	scripts/test_apparmor_runtime.sh \
@@ -11492,6 +11495,19 @@ verify-authority-jit-approval-postgres:
 	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
 	test "$${SERVERWARE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
 	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev SERVERWARE_METADATA_STORE_BACKEND=postgres SERVERWARE_METADATA_STORE_POSTGRES_DSN="$$SERVERWARE_TEST_POSTGRES_DSN" SERVERWARE_GRANT_STORE_BACKEND=postgres SERVERWARE_GRANT_STORE_POSTGRES_DSN="$$SERVERWARE_TEST_POSTGRES_DSN" python3 scripts/test_authority_jit_approval.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN"
+
+# Denial model/route units plus genuine synthetic-crypto/kernel components.
+# No ordinary SQLite approval owner, hardware admission or service startup.
+.PHONY: verify-authority-jit-denial verify-authority-jit-denial-postgres
+verify-authority-jit-denial:
+	python3 -B scripts/test_jit_denial_api.py
+	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_jit_denial.py
+
+# Caller-owned disposable Unix-socket PostgreSQL only; no cluster startup here.
+verify-authority-jit-denial-postgres:
+	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
+	test "$${SERVERWARE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
+	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev SERVERWARE_METADATA_STORE_BACKEND=postgres SERVERWARE_METADATA_STORE_POSTGRES_DSN="$$SERVERWARE_TEST_POSTGRES_DSN" SERVERWARE_GRANT_STORE_BACKEND=postgres SERVERWARE_GRANT_STORE_POSTGRES_DSN="$$SERVERWARE_TEST_POSTGRES_DSN" python3 -B scripts/test_authority_jit_denial.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN"
 
 # Component entrypoint only; not prepared native-controller coverage.
 # Changed-excluded-test admission must continue to refuse an unprepared lane.

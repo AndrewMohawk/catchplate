@@ -23,6 +23,10 @@ class RunnerTests(unittest.TestCase):
         paths = [row.script for row in runner.SUITES]
         self.assertEqual(len(paths), len(set(paths)))
         self.assertEqual({row.category for row in runner.SUITES}, {"backend", "notifications", "ui_contract"})
+        for script in ("test_jit_denial_api.py", "test_authority_jit_denial.py", "test_authority_jit_approval.py"):
+            denial = next(row for row in runner.SUITES if row.script == script)
+            self.assertEqual((denial.category, denial.runtime, denial.arguments, denial.seconds),
+                ("backend", "python", (), 60))
         self.assertIn("test_operator_notification_google_events.py", paths)
         self.assertIn("test_operator_catalog_github_app.py", paths)
         bytecode = next(row for row in runner.SUITES if row.script == "test_prepare_operator_python_bytecode.py")

@@ -82073,6 +82073,9 @@ def deny_request(
     approver_credential_policy: Mapping[str, Any] | None = None,
     authn: Mapping[str, Any] | None = None,
     challenge_id: str | None = None,
+    review_receipt_id: str | None = None,
+    review_digest: str | None = None,
+    require_review_receipt: bool = False,
 ) -> dict[str, Any] | None:
     _require_postgres_jit_authority("JIT approval denial")
     _require_external_measured_authority_writer_dispatch(

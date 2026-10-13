@@ -16,6 +16,7 @@ import copy
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -31,6 +32,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+# Import-only offline validator mode; never start an app or adopt live state.
+os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
+os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
 from serverware import authority_approver_policy as policies
 from serverware import authority_contract as contract
 from serverware import authority_query_reads as reads
@@ -320,6 +324,67 @@ class Fixture:
 
 
 class JitApprovalPureTests(unittest.TestCase):
+    def test_exact_database_nanoseconds_preserve_offsets_and_pre_epoch_instants(self):
+        from datetime import tzinfo
+
+        class NoOffset(tzinfo):
+            def utcoffset(self, value):
+                return None
+
+        vectors = (
+            (datetime(1970, 1, 1, tzinfo=timezone.utc), 0),
+            (datetime(1969, 12, 31, 23, 59, 59, 999999, tzinfo=timezone.utc), -1000),
+            (datetime(2026, 10, 13, 12, 0, 0, 1, tzinfo=timezone.utc), 1791892800000001000),
+            (datetime(2026, 10, 13, 12, 0, 0, 1000, tzinfo=timezone.utc), 1791892800001000000),
+            (datetime(2026, 10, 13, 17, 30, 0, 1000,
+                tzinfo=timezone(timedelta(hours=5, minutes=30))), 1791892800001000000),
+        )
+        for observed, expected in vectors:
+            with self.subTest(observed=observed.isoformat()):
+                self.assertEqual(core._epoch_nanoseconds(observed), expected)
+                self.assertEqual(core._epoch_nanoseconds(observed), jit.shared._database_epoch_ns(observed))
+        for observed in (datetime(2026, 10, 13), datetime(2026, 10, 13, tzinfo=NoOffset())):
+            with self.subTest(naive=observed.tzinfo is None), self.assertRaises(core.TransitionKernelError):
+                core._epoch_nanoseconds(observed)
+
+    def test_actual_jit_aggregate_same_clock_accepts_but_future_nanosecond_and_microsecond_refuse(self):
+        # Fixed admitted row inputs, not a clock mock or an authorization proof.
+        # The former float bound rounded the first instant up24ns and second
+        # down64ns. Exercise actual first-vote and second-vote producers alike.
+        item_id = "fixed-aggregate-timestamp-component"
+        aggregate_id, partition = jit.shared._aggregate_key("jit-approval-decisions", item_id)
+        missing = selected(AGGREGATE, key={"aggregate_id": aggregate_id})
+        for microseconds, expected in ((1, 1791892800000001000), (1000, 1791892800001000000)):
+            now = datetime(2026, 10, 13, 12, 0, 0, microseconds, tzinfo=timezone.utc)
+
+            def context(value):
+                return core.KernelContext("jit.decide", {}, (value,), now, sha(b"fixed aggregate request"))
+
+            def consume(value):
+                return context(selected(AGGREGATE, value)).bounded_aggregate(aggregate_id=aggregate_id,
+                    aggregate_kind="jit-approval-decisions", partition_digest=partition)
+
+            with self.subTest(microseconds=microseconds):
+                first = jit._add_vote(context(missing), item_id, missing)
+                first_row = first["row"]
+                self.assertEqual(first_row["updated_at_epoch_ns"], expected)
+                self.assertEqual(consume(first_row), first_row)
+                retained = selected(AGGREGATE, first_row)
+                second = jit._add_vote(context(retained), item_id, retained)
+                second_row = second["row"]
+                self.assertEqual(second_row["updated_at_epoch_ns"], expected)
+                self.assertEqual((second_row["live_count"], second_row["active_count"]), (2, 2))
+                self.assertEqual(consume(second_row), second_row)
+                for ahead in (1, 1000):
+                    # updated_at is a separately checked row field, not part
+                    # of the aggregate state material; keep its valid digest.
+                    future = {**second_row, "updated_at_epoch_ns": expected + ahead}
+                    self.assertEqual(core._aggregate_state_material(future, reserved_units={}, committed_units={}),
+                        json.loads(future["state_json"]))
+                    with self.subTest(ahead_ns=ahead), self.assertRaisesRegex(core.TransitionKernelError,
+                            "bounded aggregate state is not authoritative"):
+                        consume(future)
+
     def test_genuine_producer_originals_and_cold_facade_kernel(self):
         fixture = Fixture()
         signed = fixture.sign()

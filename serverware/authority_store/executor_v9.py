@@ -49,6 +49,7 @@ from serverware.authority_store.webauthn_receipt_history import (
     retain_webauthn_receipt_sql,
 )
 from serverware.authority_store.jit_prior_decision_sql import assert_prior_jit_decisions_sql
+from serverware.authority_store.jit_denial_sql import assert_jit_denial_sql
 from serverware.authority_store.webauthn_challenge_sql import challenge_original_sql
 from serverware.authority_store.root_transition_sql import (
     assert_root_transition_after_sql,
@@ -1881,6 +1882,7 @@ def install_authority_v9_executor(
             END IF;
 
             {assert_prior_jit_decisions_sql(namespace)}
+            {assert_jit_denial_sql(namespace)}
 
             -- Framework history uses only the admitted raw receipt. Retain it
             -- before the decision's immediate FK, in this same transaction;

@@ -128,6 +128,8 @@ def _policy(context, values, approval):
 
 
 def _assertion(context, values, policy, *, replay):
+    operation = context.operation
+    _require(operation in {OPERATION, "jit.deny"}, "JIT assertion operation is not admitted")
     evidence = context.verified_webauthn_evidence
     _require(isinstance(evidence, Mapping), "JIT requires independently verified assertion evidence")
     credential = shared._row(context.exact("webauthn_credentials", {"id": evidence["credentialRecordId"]}),
@@ -171,11 +173,11 @@ def _assertion(context, values, policy, *, replay):
         "JIT replay lacks its consumed original assertion")
     original_challenge = {**challenge, "used_at": None}
     original_credential = {**credential, "sign_count": evidence["priorCounter"]}
-    operation_id = core.framed_digest("serverware.policyAuthorityOperation/v2", OPERATION.encode("ascii"),
+    operation_id = core.framed_digest("serverware.policyAuthorityOperation/v2", operation.encode("ascii"),
         context.request_digest.encode("ascii"))
     public_challenge = {**payload, "challengeId": challenge["id"], "challenge": challenge["challenge"],
         "challengeRowDigest": assertions._challenge_row_digest(original_challenge, work=None)}
-    _require(evidence["operation"] == OPERATION and evidence["operationId"] == operation_id
+    _require(evidence["operation"] == operation and evidence["operationId"] == operation_id
         and evidence["requestDigest"] == context.request_digest
         and challenge["challenge_type"] == "policy_authority" and challenge["scope_key"] == operation_id
         and evidence["challengeDigest"] == assertions._challenge_public_digest(public_challenge, work=None),

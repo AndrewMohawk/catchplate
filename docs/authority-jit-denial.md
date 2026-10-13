@@ -1,0 +1,131 @@
+# JIT denial source repair
+
+Status: source implementation with passing focused and PostgreSQL component
+results. The new ordinary CI inventory has not yet run. This is not a completed
+ordinary approval journey or deployment acceptance. The live application
+remains `a3899a95`; this repair has not been deployed.
+
+## Connected denial contract
+
+The former mismatch between the denial API, its challenge target, verified
+evidence, transition kernel and writer history is repaired in source. The path
+still requires an already-issued, genuine review receipt and the existing
+authority owners; it does not create an alternate review or approval authority.
+
+In [`app.py`](../serverware/app.py), both denial routes require the authenticated
+`approver` dependency, a pending and unexpired request, current policy, an
+eligible actor and that actor's active review receipt for the same request:
+
+- `POST /api/approvals/{approval_id}/deny/webauthn/options` accepts
+  `reviewReceiptId` and optional `reason`. It issues an authority challenge for
+  exactly `jit.deny`, bound to the original decision arguments.
+- `POST /api/approvals/{approval_id}/deny` additionally requires the original
+  `assertion` and `authorityChallengeId`. It forwards the same reason, review
+  digest, actor and stored policy bindings to `db.deny_request`; it returns only
+  the public approval summary. Neither denial request accepts a grant TTL.
+
+The shared note validator admits at most 500 UTF-8 bytes, without silently
+trimming or normalizing text; leading/trailing whitespace, C0/DEL controls and
+invalid Unicode are rejected. `null` and an empty note remain supported. This
+removes the former 2,000-character API versus 500-byte kernel mismatch.
+[`webauthn.py`](../serverware/webauthn.py) shares the options producer with
+approval, but keeps `jit.decide` and `jit.deny` as distinct challenge targets.
+An unavailable denial outcome is not permission to resubmit: the API requires
+checking approval status before another decision and performs no automatic retry.
+
+## Kernel and independent writer checks
+
+[`authority_transition_jit_denial.py`](../serverware/authority_transition_jit_denial.py)
+requires independently verified v9 assertion evidence and the exact raw
+assertion bytes. It rechecks the actor, current roles/policy, credential/trust,
+challenge, request and review bindings. One eligible actor can deny even when
+approval needs multiple approvers. A fresh denial consumes the review and
+challenge, advances the authenticator counter and records the denied request
+plus `approval.denied` audit event. It creates no approval vote or grant and
+refuses an existing grant. Exact kernel replay is read-only and remains subject
+to its original evidence/currentness checks; the HTTP route does not accept a
+new decision against an already-terminal request.
+
+[`jit_denial_sql.py`](../serverware/authority_store/jit_denial_sql.py), called
+inside the existing v9 executor, independently rejects a mismatched selected
+row, mutation, actor/policy, review, capability, deadline or raw-receipt binding.
+It requires the exact denial update and refuses grant/vote mutations. The
+existing assertion, trust, challenge/counter and business-row CAS checks are
+not replaced by this denial-specific check.
+
+The executor also retains the admitted raw WebAuthn receipt through
+[`webauthn_receipt_history.py`](../serverware/authority_store/webauthn_receipt_history.py)
+in the same transaction, before the decision's history dependency. Later CAS
+or commit failure rolls it back with the decision. A committed executor replay
+only checks exact original history; it cannot backfill a missing receipt or
+turn historical evidence into fresh authority.
+
+## Evidence and remaining work
+
+The component suites deliberately retain these evidence boundaries:
+
+- [`test_jit_denial_api.py`](../scripts/test_jit_denial_api.py): actual
+  source-selected models, route functions, argument and options producers with
+  explicit DB/authority/dependency doubles. This is not full ASGI or native
+  review-opening acceptance.
+- [`test_authority_jit_denial.py`](../scripts/test_authority_jit_denial.py): real
+  ES256/Ed25519 verification and kernel controls using synthetic roots and
+  selected originals; optional disposable PostgreSQL checks exercise actual
+  denial/history/CAS SQL helpers. The SQL fixture is not the full installed
+  executor or a genuinely admitted authority capability.
+
+The initial component runs passed 12 API units and seven pure denial controls
+after correcting a fixture's revoked-key identifier. The denial PostgreSQL run
+passed ten controls (the same seven pure controls plus three actual SQL and
+rollback controls; not ten additional tests). The first PostgreSQL attempt
+refused the socket directory mode before tests; the directory was corrected to
+`0700` without relaxing the guard. Both failure and corrected-run evidence are
+retained under `jit-denial.6WXPZoci` and `jit-denial-fixed.ZDnMSB` in the
+operator-workspace evidence directory.
+
+The existing approval PostgreSQL regression then failed on its second-vote
+path: shared-core floating-point epoch conversion rounded an equal timestamp
+by 64 nanoseconds, making it appear to be in the future. The source now uses
+exact integer epoch-nanosecond conversion in
+[`authority_transition_core.py`](../serverware/authority_transition_core.py),
+with no tolerance or deadline extension. Deterministic precision controls in
+[`test_authority_jit_approval.py`](../scripts/test_authority_jit_approval.py)
+cover equal instants and rejection of genuinely future nanosecond/microsecond
+values.
+
+Final reruns passed, with source unchanged across 2,849 Python files:
+
+| Retained result under `jit-denial-final.I47aN5` | Observed result | SHA256 |
+| --- | --- | --- |
+| `focused/result.json` | 7/7 suites, 53 tests, zero skips, 27.661 seconds | `d0643ab520a0afab6524d9285748d351442779b63c8415d8db5ffe1eb8fc6b4a` |
+| `postgres/result.json` | 2/2 suites, 20 tests, zero skips, 34.394 seconds | `99a77dfd3d9bcb5094140ff42326d892c936f3ca899c6fd787d73011596f397a` |
+
+The PostgreSQL total includes denial's seven pure plus three SQL controls and
+approval's five pure plus five SQL controls: **eight additional PostgreSQL
+controls**, not 20 additional tests beyond the focused run. PostgreSQL 16.15
+ran network-none without host ports, through the exact owned `0700` Unix-socket
+directory, with fsync, full-page writes, synchronous commit and checksums
+enabled. No fixture schemas or public tables remained before clean shutdown;
+the container and empty owned temporary directory were removed. The full
+532.011-second session stayed inside its original 600-second deadline.
+Independent source review and the Make dry-run passed; failures above remain
+retained. The closeout receipt is `closeout.json`, SHA256
+`74252fe6a4c7c5dfd5ac01df1f3a53ceb134f635608f2bae0786a5bacfa34aa7`.
+
+The ordinary inventory now contains 55 suites, including the new API/denial
+suites and the existing approval pure suite; this new inventory has not yet
+run in CI. The three JIT suites are explicitly excluded from the historical
+Coder inventory, not prepared native tests. No broker roster was changed.
+
+Still open: native authenticated private-review opening; the connected
+ordinary approval UI; approve/deny/expire terminal presentation and expiry
+handling; exact-request continuation after approval; and an actionable ordinary
+pending-request notification source. This source repair does not enable any of
+them or bypass their owners. The four independently configured action/audit
+Slack/webhook destinations remain separate, and the legacy ordinary JIT action
+source stays disabled. Receiver acknowledgement is never human approval; see
+[notification boundaries](operator-notifications.md).
+
+Genuine measured-authority execution, authenticated operator/physical-key
+ceremony, end-to-end ordinary continuation, and deployment acceptance remain
+separate requirements in the [completion ledger](project-completion.md).

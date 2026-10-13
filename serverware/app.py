@@ -311,6 +311,7 @@ from serverware.webauthn import (
     _capture_registration_originals,
     _verify_registration_originals,
     authority_approval_options,
+    authority_denial_options,
     credential_trust_context,
     credential_trust_status,
     control_plane_mutation_options,
@@ -1616,10 +1617,27 @@ class RouteUpdate(BaseModel):
     mfa: dict[str, Any] | None = None
 
 
+def _approval_decision_note(value: str | None) -> str | None:
+    """Preserve the exact text bound by the authority's 500-byte contract."""
+    if value is None:
+        return None
+    try:
+        valid = (
+            value == value.strip()
+            and not any(ord(character) < 32 or ord(character) == 127 for character in value)
+            and len(value.encode("utf-8")) <= 500
+        )
+    except UnicodeEncodeError:
+        valid = False
+    if not valid:
+        raise ValueError("decision note must be trimmed text of at most 500 UTF-8 bytes without control characters")
+    return value
+
+
 class ApprovalApprove(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=500, strict=True)
     assertion: dict[str, Any] | None = None
     authority_challenge_id: str | None = Field(
         default=None,
@@ -1632,6 +1650,11 @@ class ApprovalApprove(BaseModel):
         alias="reviewReceiptId",
         pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     )
+
+    @field_validator("note")
+    @classmethod
+    def validate_note(cls, value: str | None) -> str | None:
+        return _approval_decision_note(value)
 
 
 class ApprovalWebAuthnOptionsRequest(BaseModel):
@@ -1647,11 +1670,34 @@ class ApprovalWebAuthnOptionsRequest(BaseModel):
         ge=1,
         le=3600,
     )
-    note: str | None = Field(default=None, max_length=2000)
+    note: str | None = Field(default=None, max_length=500, strict=True)
+
+    @field_validator("note")
+    @classmethod
+    def validate_note(cls, value: str | None) -> str | None:
+        return _approval_decision_note(value)
 
 
-class ApprovalDeny(BaseModel):
-    reason: str | None = Field(default=None, max_length=2000)
+class ApprovalDenyOptionsRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", strict=True)
+
+    reason: str | None = Field(default=None, max_length=500)
+    review_receipt_id: str = Field(
+        alias="reviewReceiptId",
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    )
+
+    @field_validator("reason")
+    @classmethod
+    def validate_reason(cls, value: str | None) -> str | None:
+        return _approval_decision_note(value)
+
+
+class ApprovalDeny(ApprovalDenyOptionsRequest):
+    assertion: dict[str, Any]
+    authority_challenge_id: str = Field(
+        alias="authorityChallengeId", min_length=1, max_length=512
+    )
 
 
 class BreakGlassGrantRequest(BaseModel):
@@ -5116,11 +5162,10 @@ def _approval_authn_policy(jit: dict[str, Any]) -> dict[str, Any]:
     return (jit.get("approvers") or {}).get("authn") or {}
 
 
-def _jit_approve_authority_arguments(
+def _jit_decision_authority_arguments(
     *,
     approval: dict[str, Any],
     actor_id: str,
-    ttl_seconds: int,
     review_receipt: dict[str, Any],
     note: str | None,
 ) -> dict[str, Any]:
@@ -5146,7 +5191,6 @@ def _jit_approve_authority_arguments(
         )
     return {
         "item_id": approval["id"],
-        "ttl_seconds": ttl_seconds,
         "note": note,
         "actor_id": actor_id,
         "review_receipt_id": review_receipt["id"],
@@ -5164,6 +5208,40 @@ def _jit_approve_authority_arguments(
         "approval_threshold": int(policy["threshold"]),
         "approver_credential_policy": credential_policy,
     }
+
+
+def _jit_approve_authority_arguments(
+    *,
+    approval: dict[str, Any],
+    actor_id: str,
+    ttl_seconds: int,
+    review_receipt: dict[str, Any],
+    note: str | None,
+) -> dict[str, Any]:
+    return {
+        **_jit_decision_authority_arguments(
+            approval=approval,
+            actor_id=actor_id,
+            review_receipt=review_receipt,
+            note=note,
+        ),
+        "ttl_seconds": ttl_seconds,
+    }
+
+
+def _jit_deny_authority_arguments(
+    *,
+    approval: dict[str, Any],
+    actor_id: str,
+    review_receipt: dict[str, Any],
+    note: str | None,
+) -> dict[str, Any]:
+    return _jit_decision_authority_arguments(
+        approval=approval,
+        actor_id=actor_id,
+        review_receipt=review_receipt,
+        note=note,
+    )
 
 
 def _assert_approver_allowed(identity: AdminIdentity, jit: dict[str, Any]) -> None:
@@ -18024,39 +18102,100 @@ def approve(
     return public
 
 
-@app.post("/api/approvals/{approval_id}/deny")
-def deny(
+def _denial_review_context(
     approval_id: str,
-    payload: ApprovalDeny | None = Body(default=None),
-    identity: AdminIdentity = Depends(require_role("approver")),
-) -> dict[str, Any]:
-    decision = payload if isinstance(payload, ApprovalDeny) else None
-    approval = db.get_approval_request(approval_id)
+    review_receipt_id: str,
+    identity: AdminIdentity,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    try:
+        approval = db.get_approval_request(approval_id)
+    except db.MetadataStoreError as exc:
+        raise HTTPException(status_code=503, detail="approval authority is unavailable") from exc
     if not approval:
         raise HTTPException(status_code=404, detail="approval not found")
     if approval["status"] != "pending":
-        raise HTTPException(
-            status_code=409, detail=f"approval is already {approval['status']}"
-        )
+        raise HTTPException(status_code=409, detail="approval is not pending")
     if _approval_is_expired(approval):
         raise HTTPException(status_code=409, detail="approval is expired")
     jit = _approval_jit_policy(approval, require_current_policy=True)
     _assert_approver_allowed(identity, jit)
-    allowed_approver_ids = set((jit.get("approvers") or {}).get("users") or [])
-    updated = db.deny_request(
-        approval_id,
-        note=decision.reason if decision else None,
-        actor_id=identity.user_id,
-        required_approver_roles={"approver"},
-        authority_policy_hash=str(approval.get("policy_hash") or ""),
-        authority_route_id=str(approval.get("route_id") or ""),
-        allowed_approver_ids=allowed_approver_ids,
+    try:
+        review_receipt = db.get_active_approval_review_receipt(
+            review_receipt_id,
+            approval_request_id=approval_id,
+            reviewer_id=identity.user_id,
+        )
+    except db.MetadataStoreError as exc:
+        raise HTTPException(status_code=503, detail="approval review authority is unavailable") from exc
+    if review_receipt is None:
+        raise HTTPException(
+            status_code=412,
+            detail="open or refresh the approval review before denying this request",
+        )
+    return approval, jit, review_receipt
+
+
+@app.post("/api/approvals/{approval_id}/deny")
+def deny(
+    approval_id: str,
+    payload: ApprovalDeny,
+    identity: AdminIdentity = Depends(require_role("approver")),
+) -> dict[str, Any]:
+    approval, _, review_receipt = _denial_review_context(
+        approval_id, payload.review_receipt_id, identity
     )
+    credential_id = payload.assertion.get("id") or payload.assertion.get("rawId")
+    if not isinstance(credential_id, str) or not credential_id:
+        raise HTTPException(status_code=400, detail="WebAuthn credential identity is invalid")
+    authority_arguments = _jit_deny_authority_arguments(
+        approval=approval,
+        actor_id=identity.user_id,
+        review_receipt=review_receipt,
+        note=payload.reason,
+    )
+    try:
+        updated = db.deny_request(
+            **authority_arguments,
+            authn={"assertion": payload.assertion, "credential_id": credential_id},
+            challenge_id=payload.authority_challenge_id,
+        )
+    except (db.MetadataStoreError, db.RBACBindingStoreError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="denial outcome is unavailable; check approval status before any new decision",
+        ) from exc
     if not updated:
         raise HTTPException(
             status_code=409, detail="approval state changed before it could be denied"
         )
     return db.approval_public_summary(updated)
+
+
+@app.post("/api/approvals/{approval_id}/deny/webauthn/options")
+def denial_webauthn_options(
+    approval_id: str,
+    payload: ApprovalDenyOptionsRequest,
+    identity: AdminIdentity = Depends(require_role("approver")),
+) -> dict[str, Any]:
+    approval, jit, review_receipt = _denial_review_context(
+        approval_id, payload.review_receipt_id, identity
+    )
+    authority_arguments = _jit_deny_authority_arguments(
+        approval=approval,
+        actor_id=identity.user_id,
+        review_receipt=review_receipt,
+        note=payload.reason,
+    )
+    try:
+        return authority_denial_options(
+            user_id=identity.user_id,
+            authn_policy=_approval_authn_policy(jit),
+            target_arguments=authority_arguments,
+        )
+    except WebAuthnError as exc:
+        raise HTTPException(status_code=403, detail="eligible authority-bound WebAuthn credential required") from exc
+    except (db.MetadataStoreError, db.RBACBindingStoreError) as exc:
+        raise HTTPException(status_code=503, detail="denial challenge authority is unavailable") from exc
 
 
 @app.post("/api/approvals/{approval_id}/webauthn/options")

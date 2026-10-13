@@ -4,11 +4,14 @@
 No sockets, subprocesses, database/custody activation or live acceptance.
 """
 from copy import deepcopy
+import ast
+import inspect
 import json
 import os
 from pathlib import Path
 import sys
 import tempfile
+import textwrap
 import unittest
 from unittest.mock import patch
 
@@ -193,6 +196,31 @@ class ControllerControls(unittest.TestCase):
         self.assertEqual(list(self.job.iterdir()), [])
         with patch.dict(os.environ, {}, clear=True), self.assertRaises(control.smoke.CheckFailure):
             self.owner.authorization_hash()
+
+    def test_managed_read_admission_precedes_configured_import_no_activation(self):
+        # Structural join only: does not substitute success for a custody guard.
+        tree = ast.parse(textwrap.dedent(inspect.getsource(control.Control.authorization_hash)))
+        statements = tree.body[0].body
+        bootstrap = next(index for index, node in enumerate(statements)
+            if isinstance(node, ast.Expr) and ast.unparse(node) == "managed.bootstrap()")
+        imported = next(index for index, node in enumerate(statements)
+            if isinstance(node, ast.ImportFrom) and node.module == "serverware" and any(alias.name == "db" for alias in node.names))
+        self.assertLess(bootstrap, imported)
+        self.assertIn("managed.selected() is False", ast.unparse(statements[bootstrap + 1]))
+        calls = [ast.unparse(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)]
+        self.assertFalse(any(name.endswith((".activate", ".initialize", ".init_db", ".startup_transaction", ".committed")) for name in calls))
+        self.assertLess(next(index for index, node in enumerate(statements) if "len(read(key" in ast.unparse(node)), bootstrap)
+
+    def test_failure_reports_only_class_and_bounded_code_locations(self):
+        secret = "PRIVATE-NOT-FOR-LOGS"
+        try:
+            raise ValueError(secret)
+        except ValueError as error:
+            result = control.failure("prepare", error)
+        self.assertEqual(result["error_type"], "ValueError")
+        self.assertTrue(0 < len(result["frames"]) <= 8)
+        self.assertEqual(set(result["frames"][0]), {"file", "function", "line"})
+        self.assertNotIn(secret, json.dumps(result))
 
 
 if __name__ == "__main__":

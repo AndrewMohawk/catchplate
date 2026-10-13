@@ -19,6 +19,7 @@ import signal
 import ssl
 import stat
 import time
+import traceback
 from types import SimpleNamespace
 
 from scripts import check_operator_live_smoke as smoke
@@ -155,6 +156,14 @@ class Control(smoke.LiveSmoke):
                 and stat.S_ISREG(database.lstat().st_mode) and database.lstat().st_nlink == 1
                 and CA.parent.resolve(strict=True) == CA.parent, "existing custody missing")
         original = identity(key.lstat())
+        # A docker-exec child is a fresh process: admit the existing managed
+        # Google read snapshot before config/db import, without runtime startup.
+        # This borrows the existing SH lock and WAL-aware mode=ro transaction;
+        # SQLite may coordinate sidecars, but no business state is initialized.
+        from serverware import operator_google_managed_config as managed
+        require(managed.enabled(), "retained managed profile required")
+        managed.bootstrap()
+        require(managed.selected() is False, "Google must remain unconfigured")
         from serverware import db
         core = db.get_credential(CREDENTIAL, include_secret=True)
         require(core is not None and core["id"] == CREDENTIAL and core["name"] == CREDENTIAL_NAME
@@ -289,6 +298,14 @@ def join_result(config, result, events, arrivals):
     return {"attempt_id": terminal["attempt_id"], "event_ids": [start["id"], release["id"], leases[0]["id"]]}
 
 
+def failure(phase, error):
+    """Code locations only: never exception messages, source text or locals."""
+    return {"ok": False, "phase": phase, "error": "controller_refused_or_incomplete_no_post_replay",
+        "error_type": type(error).__name__, "frames": [
+            {"file": Path(frame.filename).name, "function": frame.name, "line": frame.lineno}
+            for frame in traceback.extract_tb(error.__traceback__, limit=-8)]}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("phase", choices=("prepare", "status", "revoke"))
@@ -316,8 +333,8 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             owner = Control(args.job_dir)
             result = owner.prepare(args.expected_policy_hash) if args.phase == "prepare" else owner.status(args.client_result) if args.phase == "status" else owner.revoke()
-    except Exception:
-        result = {"ok": False, "phase": args.phase, "error": "controller_refused_or_incomplete_no_post_replay"}
+    except Exception as error:
+        result = failure(args.phase, error)
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
     print(json.dumps(result, sort_keys=True))

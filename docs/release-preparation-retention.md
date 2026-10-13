@@ -70,14 +70,17 @@ pending review within the same authority transaction. Wiring only standalone
 `jit.request` is insufficient: the nested private DB helper does not enter that
 public writer wrapper, and Rust refuses the legacy standalone JIT composition.
 
-The proposed next cut, not yet implemented, is:
+The compound path below remains unimplemented. The separate
+[buffered-context checkpoint](native-buffered-release-context.md) now carries
+the actual binary-local request/transport originals; it does not independently
+admit them inside the native signing library.
 
-1. Thread the genuine authenticated request/session owner and original deadline
-   into buffered release preparation. A principal string, canonical JSON or
-   copied success verdict cannot substitute for that owner. After the signed
-   `prepare_release_policy` exchange, retain and independently verify its exact
-   originals before native sealing; complete sealing and reserve under the
-   same original bounded operation, with no deadline renewal.
+1. Independently admit the retained authenticated request/session owner and
+   original deadline inside the native library. A principal string, canonical
+   JSON or copied success verdict cannot substitute for that owner. After the
+   signed `prepare_release_policy` exchange, independently verify its exact
+   retained originals before native sealing; complete sealing and reserve under
+   the same original bounded operation, with no deadline renewal.
 2. Define a versioned parent/child binding. Public `release.reserve` arguments
    carry the exact child JIT commitment; literal native pair/proof travels
    separately from public arguments. The native statement binds the parent

@@ -12,6 +12,8 @@ mod enclave_nsm_v1;
 mod tls_authority_v1;
 #[path = "native_canary_tls_v1.rs"]
 mod native_canary_tls_v1;
+#[path = "native_ingress_connection_v1.rs"]
+mod native_ingress_connection_v1;
 #[path = "credential_recipient_v1.rs"]
 mod credential_recipient_v1;
 #[path = "enclave_response_proof_key_v1.rs"]
@@ -33,6 +35,7 @@ pub use enclave_nsm_v1::PreparedNativeDeviceV1;
 pub use enclave_nsm_v1::{PreparedShadowNsmV1,PreparedShadowTimeNsmV1,ShadowNsmV1,ShadowRoleKeyQuoteV1,ShadowRecipientQuoteV1,ShadowTimeNsmV1};
 pub use tls_authority_v1::{GeneratedMutualTlsV1, TlsAuthorityV1};
 pub use native_canary_tls_v1::{NativeCanaryHttpClient, NativeCanaryTlsIdentity};
+pub use native_ingress_connection_v1::NativeIngressConnectionV1;
 use enclave_nsm_v1::NsmDeviceV1;
 use crate::release_profile_v1::ReleaseProfile;
 use rustls::ServerConfig;

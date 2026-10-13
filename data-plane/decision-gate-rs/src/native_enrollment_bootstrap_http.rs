@@ -101,7 +101,7 @@ pub(super) fn reject_buffered_plaintext(stream: &mut DirectProxyStream) -> Resul
     let DirectProxyStream::MutualTls(tls) = stream else {
         return Err("native bootstrap requires its original TLS stream".to_owned());
     };
-    match tls.conn.reader().read(&mut [0u8; 1]) {
+    match tls.read_plaintext(&mut [0u8; 1]) {
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(()),
         _ => Err("native bootstrap refuses buffered continuation or premature TLS close".to_owned()),
     }
@@ -119,6 +119,8 @@ fn reject(stream: &mut DirectProxyStream, clock: &mut AdmissionClock, failure: F
         &[("Cache-Control".to_owned(), "no-store".to_owned())]);
     if stream.write_all(&response).is_err() || restrict(stream, clock).is_err()
         || stream.flush().is_err() || clock.check(clock.deadline).is_err() { return; }
-    if let DirectProxyStream::MutualTls(tls) = stream { tls.conn.send_close_notify(); }
+    if let DirectProxyStream::MutualTls(tls) = stream {
+        if tls.send_close_notify().is_err() { return; }
+    }
     if restrict(stream, clock).is_ok() { let _ = stream.flush(); }
 }

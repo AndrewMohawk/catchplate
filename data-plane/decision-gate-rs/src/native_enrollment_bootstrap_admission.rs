@@ -296,8 +296,12 @@ impl PreparedNativeBootstrapPacket<'_> {
             let DirectProxyStream::MutualTls(tls) = &*self.admission.stream else {
                 return Err("native bootstrap signing lost its actual caller TLS connection".to_owned());
             };
-            let ingress = self.admission.configuration.native_owner.as_ref()
-                .ok_or("native bootstrap signing lost its generated ingress owner")?;
+            let owner = tls.native_connection()
+                .ok_or("native bootstrap signing lost its library-owned connection")?;
+            owner.verify_live()?;
+            require(Arc::ptr_eq(&tls.configuration, self.admission.configuration),
+                "native bootstrap signing configuration differs from actual connection")?;
+            let ingress = owner.ingress();
             let ResponseProofSigner::Custody(signer) = &state.response_proof_signer else {
                 return Err("native bootstrap signing lost its native custody owner".to_owned());
             };
@@ -322,7 +326,7 @@ impl PreparedNativeBootstrapPacket<'_> {
             // Per-request bounds must never shorten the shared native signer.
             signer.transport.verify_native_identity(identity, self.admission.lifetime.deadline())?;
             let original = signer.transport.sign_native_bootstrap_enrollment(identity, ingress,
-                &tls.conn, &self.original, roots.delegation_pem, roots.delegation_pem_sha256,
+                owner.connection(), &self.original, roots.delegation_pem, roots.delegation_pem_sha256,
                 roots.setup_pem, roots.setup_pem_sha256, self.admission.challenge,
                 self.admission.clock.deadline)?;
             self.admission.clock.check(self.setup.deadline())?;
@@ -339,7 +343,7 @@ impl PreparedNativeBootstrapPacket<'_> {
                 let quote_deadline = opening.checked_add(remaining)
                     .ok_or("native bootstrap quotation deadline overflow")?;
                 let session = super::native_ingress_attestation::bootstrap_original(state, identity,
-                    ingress, &tls.conn, self.admission.challenge,
+                    ingress, owner.connection(), self.admission.challenge,
                     self.admission.lifetime.deadline(), quote_deadline)?;
                 self.admission.clock.check(self.setup.deadline())?;
                 self.setup.check(self.admission.clock.deadline)?;
@@ -414,7 +418,7 @@ impl PreparedNativeBootstrapPacket<'_> {
         let DirectProxyStream::MutualTls(tls) = &mut *self.admission.stream else {
             return Err("native bootstrap delivery lost its original TLS connection".to_owned());
         };
-        tls.conn.send_close_notify();
+        tls.send_close_notify().map_err(|_| "native bootstrap TLS close owner expired")?;
         self.admission.stream.flush().map_err(|_| "native bootstrap TLS close failed")?;
         self.check()?;
         Ok(())

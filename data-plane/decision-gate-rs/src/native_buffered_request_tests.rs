@@ -3,7 +3,7 @@ use super::*;
 use crate::tests::{test_gate_state, test_snapshot};
 use rustls::ClientConnection;
 
-fn transport() -> (StreamOwned<ServerConnection, DirectProxyStream>, Arc<ProxyIngressTlsConfig>) {
+fn tls_pair() -> (ClientConnection, ServerConnection, Arc<ProxyIngressTlsConfig>) {
     let ca_key = KeyPair::generate().unwrap();
     let mut ca_params = CertificateParams::new(Vec::<String>::new()).unwrap();
     ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
@@ -47,21 +47,52 @@ fn transport() -> (StreamOwned<ServerConnection, DirectProxyStream>, Arc<ProxyIn
         client_trust_bundle_original: None, workload_identity_trust: None,
         native_owner: None, // Deliberately cannot claim genuine native admission.
     });
+    (client, outer, configuration)
+}
+
+fn deliver_plaintext(client: &mut ClientConnection, server: &mut ServerConnection,
+    plaintext: &[u8], close_notify: bool) {
+    client.writer().write_all(plaintext).unwrap();
+    if close_notify { client.send_close_notify(); }
+    let mut records = Vec::new();
+    while client.wants_write() { assert!(client.write_tls(&mut records).unwrap() > 0); }
+    if !records.is_empty() {
+        let mut records = io::Cursor::new(records);
+        while records.position() < records.get_ref().len() as u64 {
+            assert!(server.read_tls(&mut records).unwrap() > 0);
+            server.process_new_packets().unwrap();
+        }
+    }
+}
+
+fn imported_transport(plaintext: &[u8], close_notify: bool)
+    -> (RetainedProxyIngressTls, ClientConnection, TcpStream) {
+    let (mut client, mut outer, configuration) = tls_pair();
+    deliver_plaintext(&mut client, &mut outer, plaintext, close_notify);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let peer = TcpStream::connect_timeout(&listener.local_addr().unwrap(), Duration::from_secs(1)).unwrap();
     let (socket, _) = listener.accept().unwrap();
-    drop(peer); // Socket is only a typed owner here; handshake used memory above.
+    peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+    peer.set_write_timeout(Some(Duration::from_secs(1))).unwrap();
     let outer = RetainedProxyIngressTls {
-        stream: StreamOwned::new(outer, DeadlineIo::new(GateSocket::Tcp(socket),
-            Duration::from_secs(1), Duration::from_secs(1))),
-        configuration: Arc::clone(&configuration),
+        connection: RetainedProxyIngressConnection::Imported(outer),
+        sock: DeadlineIo::new(GateSocket::Tcp(socket),
+            Duration::from_secs(1), Duration::from_secs(1)),
+        configuration,
     };
-    let inner = ServerConnection::new(server_config).unwrap();
+    (outer, client, peer)
+}
+
+fn transport() -> (StreamOwned<ServerConnection, DirectProxyStream>, Arc<ProxyIngressTlsConfig>) {
+    let (outer, _, peer) = imported_transport(b"", false);
+    drop(peer); // Original projection fixtures do no socket I/O.
+    let configuration = Arc::clone(&outer.configuration);
+    let inner = ServerConnection::new(Arc::clone(&configuration.server_config)).unwrap();
     (StreamOwned::new(inner, DirectProxyStream::MutualTls(outer)), configuration)
 }
 
 fn authentication(snapshot: &Snapshot, tls: &RetainedProxyIngressTls) -> ConnectAuthentication {
-    let evidence = trusted_mtls_evidence_from_verified_peer(tls.stream.conn.peer_certificates().unwrap(),
+    let evidence = trusted_mtls_evidence_from_verified_peer(tls.connection().peer_certificates().unwrap(),
         &tls.configuration.client_trust_certificates).unwrap();
     ConnectAuthentication::capture_with_mtls(snapshot, "agent:test", None, &BTreeMap::new(), Some(&evidence)).unwrap()
 }
@@ -87,9 +118,10 @@ fn retains_actual_outer_tls_and_ends_borrow_before_writer_reuse() {
         let ingress = Ingress::FromWriter(&context);
         let (held_context, outer) = ingress.originals(Some(&writer));
         let outer = outer.unwrap();
-        assert_ne!(&outer.stream.conn as *const ServerConnection, inner);
+        assert_ne!(outer.connection() as *const ServerConnection, inner);
         assert!(Arc::ptr_eq(&outer.configuration, &configuration));
-        assert_eq!(outer.stream.conn.protocol_version(), Some(rustls::ProtocolVersion::TLSv1_3));
+        assert_eq!(outer.connection().protocol_version(), Some(rustls::ProtocolVersion::TLSv1_3));
+        assert!(outer.native_connection().is_none());
         let original = BorrowedRequest::retain(held_context, outer, &request, &snapshot, None);
         assert!(std::ptr::eq(original.request, &request));
         assert!(std::ptr::eq(original.context.authentication, &auth));
@@ -99,7 +131,7 @@ fn retains_actual_outer_tls_and_ends_borrow_before_writer_reuse() {
         assert!(std::ptr::eq(proof_ingress.originals(None).1.unwrap(), outer));
     }
     writer.set_terminal_write_deadline(Some(Instant::now() + Duration::from_secs(1)));
-    assert!(writer.retained_proxy_ingress().unwrap().stream.sock.operation_deadline.is_none());
+    assert!(writer.retained_proxy_ingress().unwrap().sock.operation_deadline.is_none());
     let plain = DeadlineIo::new(io::Cursor::new(Vec::<u8>::new()), Duration::from_secs(1), Duration::from_secs(1));
     assert!(plain.retained_proxy_ingress().is_none());
 }
@@ -223,7 +255,7 @@ fn request_clock_clips_original_caps_without_shortening_later_keepalive_requests
     tls.sock.reset_read_deadline(Duration::from_secs(90));
     tls.sock.reset_write_deadline(Duration::from_secs(90));
     let DirectProxyStream::MutualTls(outer) = &tls.sock else { panic!("outer TLS absent"); };
-    assert_eq!(outer.stream.sock.operation_deadline, Some(connection));
+    assert_eq!(outer.sock.operation_deadline, Some(connection));
     assert_eq!(first, opening + Duration::from_secs(30));
 }
 
@@ -264,4 +296,116 @@ fn actual_connect_entry_and_release_io_keep_originals_and_account_attempts() {
     let final_check = reserve.rfind("native_buffered_request::check_release(").unwrap();
     assert!(send < accounted && accounted < final_check);
     assert!(reserve.contains("original.deadline().min(fallback)"));
+}
+
+#[test]
+fn imported_tls_preserves_buffered_http_flush_and_authenticated_close() {
+    let wire = b"POST /resource HTTP/1.1\r\nHost: example.test\r\nContent-Length: 2\r\n\r\n{}";
+    let (mut outer, client, peer) = imported_transport(wire, false);
+    assert!(outer.native_connection().is_none());
+    let head = read_request_head_from(&mut outer, None).unwrap();
+    assert_eq!(head.prefetched_body, b"{}");
+    let request = read_request_body_from_head(&mut outer, head, 2).unwrap();
+    assert_eq!(request.method, "POST");
+    assert_eq!(request.target, "/resource");
+    assert_eq!(request.body, b"{}");
+    // Decrypted data and the nonblocking prefetch check do not read the socket.
+    assert!(outer.sock.read_started.is_none());
+    assert_eq!(outer.read_plaintext(&mut [0; 1]).unwrap_err().kind(), io::ErrorKind::WouldBlock);
+    assert!(outer.sock.read_started.is_none());
+    let reply = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}";
+    for fragment in reply.chunks(3) { outer.write_all(fragment).unwrap(); }
+    outer.flush().unwrap();
+    outer.send_close_notify().unwrap();
+    outer.flush().unwrap();
+    let mut remote = StreamOwned::new(client, peer);
+    let mut received = Vec::new();
+    remote.read_to_end(&mut received).unwrap();
+    assert_eq!(received, reply);
+    // Authenticated TLS EOF, not a raw socket drop, terminated read_to_end.
+    assert_eq!(remote.read(&mut [0; 1]).unwrap(), 0);
+}
+
+#[test]
+fn original_deadline_blocks_outer_and_inner_buffered_plaintext_without_consuming_it() {
+    let elapsed = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+    let later = Instant::now() + Duration::from_secs(30);
+    let (outer, _, _peer) = imported_transport(b"outer retained", false);
+    let mut direct = DirectProxyStream::MutualTls(outer);
+    direct.restrict_operation_deadline(elapsed);
+    direct.restrict_operation_deadline(later);
+    direct.reset_read_deadline(Duration::from_secs(90));
+    direct.reset_write_deadline(Duration::from_secs(90));
+    direct.set_terminal_write_deadline(None);
+    let mut buffer = [0xa5; 32];
+    assert_eq!(direct.read(&mut buffer).unwrap_err().kind(), io::ErrorKind::TimedOut);
+    assert_eq!(direct.write(b"not sent").unwrap_err().kind(), io::ErrorKind::TimedOut);
+    assert_eq!(direct.flush().unwrap_err().kind(), io::ErrorKind::TimedOut);
+    assert_eq!(buffer, [0xa5; 32]);
+    let DirectProxyStream::MutualTls(outer) = &mut direct else { panic!("outer TLS absent"); };
+    assert_eq!(outer.sock.operation_deadline, Some(elapsed));
+    assert!(outer.sock.read_started.is_none() && outer.sock.write_started.is_none());
+    // Inspect the test's IMPORTED connection only: the real guard above must
+    // leave already decrypted data untouched, not manufacture an EOF.
+    let RetainedProxyIngressConnection::Imported(connection) = &mut outer.connection
+        else { panic!("synthetic fixture acquired a native owner"); };
+    let read = connection.reader().read(&mut buffer).unwrap();
+    assert_eq!(&buffer[..read], b"outer retained");
+
+    let (mut client, mut inner, _) = tls_pair();
+    deliver_plaintext(&mut client, &mut inner, b"inner retained", false);
+    let (outer, _, _peer) = imported_transport(b"", false);
+    let mut nested = StreamOwned::new(inner, DirectProxyStream::MutualTls(outer));
+    nested.sock.restrict_operation_deadline(elapsed);
+    nested.sock.reset_read_deadline(Duration::from_secs(90));
+    nested.sock.reset_write_deadline(Duration::from_secs(90));
+    let mut writer = ConnectOperationIo(&mut nested);
+    writer.set_terminal_write_deadline(None);
+    assert_eq!(writer.read(&mut buffer).unwrap_err().kind(), io::ErrorKind::TimedOut);
+    assert_eq!(writer.write(b"not sent").unwrap_err().kind(), io::ErrorKind::TimedOut);
+    assert_eq!(writer.flush().unwrap_err().kind(), io::ErrorKind::TimedOut);
+    let read = nested.conn.reader().read(&mut buffer).unwrap();
+    assert_eq!(&buffer[..read], b"inner retained");
+}
+
+#[test]
+fn continuation_checks_actual_prefetch_and_authenticated_eof_without_native_admission() {
+    fn head(extra: &[u8]) -> RequestHead {
+        let mut wire = b"CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\n".to_vec();
+        wire.extend_from_slice(extra);
+        wire.extend_from_slice(b"\r\n");
+        read_request_head_from(&mut io::Cursor::new(wire), None).unwrap()
+    }
+    let (outer, _, _peer) = imported_transport(b"", false);
+    let mut stream = DirectProxyStream::MutualTls(outer);
+    // This is only the existing parsed-head/prefetch check. No quote, native
+    // configuration or successful attestation/continuation is constructed.
+    assert!(native_ingress_attestation::continuation_head_valid(&head(b""), &mut stream));
+    for extra in [
+        b"x-serverware-ingress-continuation: connect-v1\r\n".as_slice(),
+        b"x-serverware-ingress-challenge: unwanted\r\n".as_slice(),
+        b"x-serverware-ingress-evidence: client-trust-v2\r\n".as_slice(),
+        b"Content-Length: 1\r\n".as_slice(),
+    ] {
+        assert!(!native_ingress_attestation::continuation_head_valid(&head(extra), &mut stream));
+    }
+    let wire = b"CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\n\r\nprefetched";
+    let prefetched = read_request_head_from(&mut io::Cursor::new(wire), None).unwrap();
+    assert_eq!(prefetched.prefetched_body, b"prefetched");
+    assert!(!native_ingress_attestation::continuation_head_valid(&prefetched, &mut stream));
+    let DirectProxyStream::MutualTls(outer) = &stream else { panic!("outer TLS absent"); };
+    assert!(outer.sock.read_started.is_none());
+
+    let (outer, _, _peer) = imported_transport(b"prefetched", false);
+    let mut stream = DirectProxyStream::MutualTls(outer);
+    assert!(!native_ingress_attestation::continuation_head_valid(&head(b""), &mut stream));
+    let DirectProxyStream::MutualTls(outer) = &mut stream else { panic!("outer TLS absent"); };
+    let mut remaining = [0; 16];
+    let count = outer.read_plaintext(&mut remaining).unwrap();
+    assert_eq!(&remaining[..count], b"refetched");
+    assert!(outer.sock.read_started.is_none());
+
+    let (outer, _, _peer) = imported_transport(b"", true);
+    let mut stream = DirectProxyStream::MutualTls(outer);
+    assert!(!native_ingress_attestation::continuation_head_valid(&head(b""), &mut stream));
 }

@@ -279,7 +279,7 @@ use serverware_decision_gate::{
 };
 use serverware_decision_gate::enclave_runtime_identity_v1::{
     CredentialRecipientV1, EnclaveRuntimeIdentityV1, PendingCredentialRecipientV1,
-    QuotedCredentialRecipientV1, QuotedMutualTlsIngressV1, TlsAuthorityV1,
+    QuotedCredentialRecipientV1, QuotedMutualTlsIngressV1, NativeIngressConnectionV1, TlsAuthorityV1,
 };
 use serverware_decision_gate::enclave_vsock_v1::{VsockListenerV1, VsockShutdownV1, VsockStreamV1};
 use serverware_decision_gate::enclave_bootstrap_v1::EnclaveBootstrapV1;
@@ -4496,35 +4496,117 @@ impl<T: ConfigureIoTimeout + Write> Write for DeadlineIo<T> {
     }
 }
 
-/// Constructed only with the configuration actually used for this handshake.
-/// Keeping it beside the connection avoids treating a later configuration
-/// argument as evidence of which trust store created that connection.
+// Only the library-owned variant can supply native connection provenance.
+// Imported TLS remains usable on its existing paths, never as a native owner.
+enum RetainedProxyIngressConnection {
+    Imported(ServerConnection),
+    Native(NativeIngressConnectionV1),
+}
+
 struct RetainedProxyIngressTls {
-    stream: StreamOwned<ServerConnection, DeadlineIo<GateSocket>>,
+    connection: RetainedProxyIngressConnection,
+    sock: DeadlineIo<GateSocket>,
     configuration: Arc<ProxyIngressTlsConfig>,
 }
 
-impl std::ops::Deref for RetainedProxyIngressTls {
-    type Target = StreamOwned<ServerConnection, DeadlineIo<GateSocket>>;
-    fn deref(&self) -> &Self::Target { &self.stream }
-}
+impl RetainedProxyIngressTls {
+    fn new(sock: DeadlineIo<GateSocket>, configuration: Arc<ProxyIngressTlsConfig>)
+        -> Result<Self, String> {
+        let connection = if let Some(ingress) = configuration.native_owner.as_ref() {
+            let generated = ingress.tls();
+            if !Arc::ptr_eq(&configuration.server_config, &generated.server_config())
+                || configuration.client_trust_bundle_original.is_some()
+                || configuration.workload_identity_trust.is_some()
+                || configuration.client_trust_certificates.len() != generated.client_trust_certificates().len()
+                || configuration.client_trust_certificates.iter().zip(generated.client_trust_certificates())
+                    .any(|(actual, original)| actual.as_ref() != original.as_slice()) {
+                return Err("native proxy TLS configuration differs from its original owner".to_owned());
+            }
+            // Failure is terminal. Never construct an imported connection from
+            // a native configuration or replace the library-owned connection.
+            RetainedProxyIngressConnection::Native(ingress.open_connection()?)
+        } else {
+            RetainedProxyIngressConnection::Imported(ServerConnection::new(
+                Arc::clone(&configuration.server_config))
+                .map_err(|_| "initialize outer proxy TLS connection".to_owned())?)
+        };
+        Ok(Self { connection, sock, configuration })
+    }
 
-impl std::ops::DerefMut for RetainedProxyIngressTls {
-    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.stream }
+    fn connection(&self) -> &ServerConnection {
+        match &self.connection {
+            RetainedProxyIngressConnection::Imported(connection) => connection,
+            RetainedProxyIngressConnection::Native(owner) => owner.connection(),
+        }
+    }
+
+    fn native_connection(&self) -> Option<&NativeIngressConnectionV1> {
+        match &self.connection {
+            RetainedProxyIngressConnection::Native(owner)
+                if self.configuration.native_owner.as_ref()
+                    .is_some_and(|ingress| Arc::ptr_eq(ingress, owner.ingress())) => Some(owner),
+            _ => None,
+        }
+    }
+
+    fn complete_guarded_handshake_io(&mut self, state: &GateState, ingress: &ProxyIngressConfig)
+        -> io::Result<(usize, usize)> {
+        let mut guarded = WorkloadTrustHandshakeIo { inner: &mut self.sock, state, ingress };
+        match &mut self.connection {
+            RetainedProxyIngressConnection::Imported(connection) => connection.complete_io(&mut guarded),
+            RetainedProxyIngressConnection::Native(owner) => owner.complete_io(&mut guarded),
+        }
+    }
+
+    // Buffered-only inspection deliberately performs no socket read.
+    fn read_plaintext(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.sock.check_operation_deadline()?;
+        let result = match &mut self.connection {
+            RetainedProxyIngressConnection::Imported(connection) => connection.reader().read(buffer),
+            RetainedProxyIngressConnection::Native(owner) => owner.read_plaintext(buffer),
+        };
+        self.sock.check_operation_deadline()?;
+        result
+    }
+
+    fn send_close_notify(&mut self) -> io::Result<()> {
+        self.sock.check_operation_deadline()?;
+        let result = match &mut self.connection {
+            RetainedProxyIngressConnection::Imported(connection) => { connection.send_close_notify(); Ok(()) },
+            RetainedProxyIngressConnection::Native(owner) => owner.send_close_notify(),
+        };
+        self.sock.check_operation_deadline()?;
+        result
+    }
 }
 
 impl Read for RetainedProxyIngressTls {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> { self.stream.read(buffer) }
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        match &mut self.connection {
+            RetainedProxyIngressConnection::Imported(connection) => rustls::Stream::new(connection, &mut self.sock).read(buffer),
+            RetainedProxyIngressConnection::Native(owner) => owner.read(&mut self.sock, buffer),
+        }
+    }
 }
 
 impl Write for RetainedProxyIngressTls {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> { self.stream.write(buffer) }
-    fn flush(&mut self) -> io::Result<()> { self.stream.flush() }
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        match &mut self.connection {
+            RetainedProxyIngressConnection::Imported(connection) => rustls::Stream::new(connection, &mut self.sock).write(buffer),
+            RetainedProxyIngressConnection::Native(owner) => owner.write(&mut self.sock, buffer),
+        }
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        match &mut self.connection {
+            RetainedProxyIngressConnection::Imported(connection) => rustls::Stream::new(connection, &mut self.sock).flush(),
+            RetainedProxyIngressConnection::Native(owner) => owner.flush(&mut self.sock),
+        }
+    }
 }
 
 impl TerminalDeadlineWrite for RetainedProxyIngressTls {
     fn set_terminal_write_deadline(&mut self, deadline: Option<Instant>) {
-        self.stream.set_terminal_write_deadline(deadline);
+        self.sock.set_terminal_write_deadline(deadline);
     }
 }
 
@@ -51788,23 +51870,19 @@ fn establish_gate_listener_stream(
     let ProxyIngressConfig::MutualTls(config) = proxy_ingress else {
         return Err("proxy ingress configuration is internally inconsistent".to_string());
     };
-    let connection = ServerConnection::new(Arc::clone(&config.server_config))
-        .map_err(|_| "initialize outer proxy TLS connection".to_string())?;
-    let mut tls = StreamOwned::new(connection, deadline_stream);
-    while tls.conn.is_handshaking() {
+    let mut tls = RetainedProxyIngressTls::new(deadline_stream, Arc::clone(config))?;
+    while tls.connection().is_handshaking() {
         require_workload_ingress_trust(state, proxy_ingress)?;
-        let mut guarded = WorkloadTrustHandshakeIo { inner: &mut tls.sock, state, ingress: proxy_ingress };
-        tls.conn
-            .complete_io(&mut guarded)
+        tls.complete_guarded_handshake_io(state, proxy_ingress)
             .map_err(|_| "complete outer proxy TLS handshake".to_string())?;
         require_workload_ingress_trust(state, proxy_ingress)?;
     }
     require_workload_ingress_trust(state, proxy_ingress)?;
-    if tls.conn.protocol_version() != Some(rustls::ProtocolVersion::TLSv1_3) {
+    if tls.connection().protocol_version() != Some(rustls::ProtocolVersion::TLSv1_3) {
         return Err("outer proxy TLS did not negotiate TLS 1.3".to_string());
     }
     let peer_certificates = tls
-        .conn
+        .connection()
         .peer_certificates()
         .ok_or("outer proxy TLS peer did not present a client certificate")?;
     let evidence = trusted_mtls_evidence_from_verified_peer(
@@ -51814,9 +51892,7 @@ fn establish_gate_listener_stream(
     require_workload_ingress_trust(state, proxy_ingress)?;
     tls.sock.reset_read_deadline(state.request_head_deadline);
     tls.sock.reset_write_deadline(state.response_write_deadline);
-    Ok((DirectProxyStream::MutualTls(RetainedProxyIngressTls {
-        stream: tls, configuration: Arc::clone(config),
-    }), Some(evidence)))
+    Ok((DirectProxyStream::MutualTls(tls), Some(evidence)))
 }
 
 fn handle_connection(

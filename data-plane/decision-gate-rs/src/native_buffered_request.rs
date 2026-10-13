@@ -31,7 +31,7 @@ impl<'a> Context<'a> {
             .ok_or("native buffered request cohort is absent")?;
         let connection = match stream {
             DirectProxyStream::DevelopmentRaw(io) => io.operation_deadline,
-            DirectProxyStream::MutualTls(tls) => tls.stream.sock.operation_deadline,
+            DirectProxyStream::MutualTls(tls) => tls.sock.operation_deadline,
         };
         let context = Self { authentication,
             deadline: request_deadline(opening, remaining, connection)? };
@@ -83,11 +83,13 @@ impl<'a> BorrowedRequest<'a> {
         require(state.response_proof_signer.release_profile().is_native()
             && Arc::ptr_eq(snapshot, self.snapshot) && snapshot_is_active(state, self.snapshot))?;
         native_service_remaining(state)?.ok_or("native buffered request cohort is absent")?;
-        self.tls.stream.sock.check_operation_deadline()
+        self.tls.sock.check_operation_deadline()
             .map_err(|_| "native buffered request connection expired")?;
         let configuration = &self.tls.configuration;
-        let ingress = configuration.native_owner.as_ref()
-            .ok_or("native buffered request has no generated ingress owner")?;
+        let owner = self.tls.native_connection()
+            .ok_or("native buffered request has no library-owned connection")?;
+        owner.verify_live()?;
+        let ingress = owner.ingress();
         let generated = ingress.tls();
         require(Arc::ptr_eq(&configuration.server_config, &generated.server_config())
             && configuration.client_trust_bundle_original.is_none()
@@ -95,11 +97,11 @@ impl<'a> BorrowedRequest<'a> {
             && configuration.client_trust_certificates.len() == generated.client_trust_certificates().len()
             && configuration.client_trust_certificates.iter().zip(generated.client_trust_certificates())
                 .all(|(actual, original)| actual.as_ref() == original.as_slice())
-            && !self.tls.stream.conn.is_handshaking()
-            && self.tls.stream.conn.protocol_version() == Some(rustls::ProtocolVersion::TLSv1_3))?;
+            && !owner.connection().is_handshaking()
+            && owner.connection().protocol_version() == Some(rustls::ProtocolVersion::TLSv1_3))?;
         let original = self.context.authentication.trusted_mtls_evidence.as_ref()
             .ok_or("native buffered request original peer is absent")?;
-        let chain = self.tls.stream.conn.peer_certificates()
+        let chain = owner.connection().peer_certificates()
             .ok_or("native buffered request actual peer is absent")?;
         let repeated = trusted_mtls_evidence_from_verified_peer(chain,
             &configuration.client_trust_certificates)?;
@@ -110,6 +112,7 @@ impl<'a> BorrowedRequest<'a> {
         require(principal.id == principal_id
             && self.request.client_ip == self.context.authentication.client_ip)?;
         require(snapshot_is_active(state, self.snapshot))?;
+        owner.verify_live()?;
         custody_deadline_remaining(self.deadline(), "native buffered request checked")?;
         Ok(())
     }

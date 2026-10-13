@@ -144,7 +144,7 @@ pub(super) fn handle(state: &GateState, head: &RequestHead,
         return Outcome::Closed;
     }
     if let DirectProxyStream::MutualTls(tls) = stream {
-        tls.conn.send_close_notify();
+        if tls.send_close_notify().is_err() { return Outcome::Closed; }
     }
     if stream.flush().is_err() { return Outcome::Closed; }
     if principal.as_mut().is_some_and(|owner| owner.check(stream).is_err()) {
@@ -190,7 +190,7 @@ fn reject_buffered_plaintext(stream: &mut DirectProxyStream) -> Result<(), Failu
     // Inspect only already decrypted bytes: this never waits for the next
     // request. Unread network bytes do not prove when a peer sent them or that
     // the peer verified the evidence. Any observed prefetch denies the path.
-    match tls.conn.reader().read(&mut [0u8; 1]) {
+    match tls.read_plaintext(&mut [0u8; 1]) {
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(()),
         _ => Err(Failure::BadRequest),
     }
@@ -231,16 +231,22 @@ fn original<'a>(state: &'a GateState, head: &'a RequestHead, stream: &DirectProx
     let DirectProxyStream::MutualTls(tls) = stream else {
         return Err(Failure::Unavailable);
     };
-    if tls.conn.is_handshaking()
-        || tls.conn.protocol_version() != Some(rustls::ProtocolVersion::TLSv1_3)
-        || tls.conn.peer_certificates().is_none_or(|certificates| certificates.is_empty())
+    if tls.connection().is_handshaking()
+        || tls.connection().protocol_version() != Some(rustls::ProtocolVersion::TLSv1_3)
+        || tls.connection().peer_certificates().is_none_or(|certificates| certificates.is_empty())
     {
         return Err(Failure::Unavailable);
     }
     let ProxyIngressConfig::MutualTls(config) = proxy_ingress else {
         return Err(Failure::Unavailable);
     };
-    let ingress = config.native_owner.as_ref().ok_or(Failure::Unavailable)?;
+    let owner = tls.native_connection().ok_or(Failure::Unavailable)?;
+    owner.verify_live().map_err(|_| Failure::Unavailable)?;
+    let ingress = owner.ingress();
+    if !Arc::ptr_eq(&tls.configuration, config)
+        || !config.native_owner.as_ref().is_some_and(|configured| Arc::ptr_eq(configured, ingress)) {
+        return Err(Failure::Unavailable);
+    }
     let lifetime = state.native_runtime_lifetime.as_ref().ok_or(Failure::Unavailable)?;
     lifetime.check().map_err(|_| Failure::Unavailable)?;
     let deadline = lifetime.deadline();
@@ -257,7 +263,7 @@ fn original<'a>(state: &'a GateState, head: &'a RequestHead, stream: &DirectProx
         return Err(Failure::Unavailable);
     }
     let challenge = challenge(head)?;
-    let exporter = tls.conn.export_keying_material([0u8; 32], EXPORTER_LABEL, Some(&challenge))
+    let exporter = owner.connection().export_keying_material([0u8; 32], EXPORTER_LABEL, Some(&challenge))
         .map_err(|_| Failure::Unavailable)?;
     let mut principal = if profile == EvidenceProfile::PrincipalV3 {
         Some(native_target_principal_preflight::admit(state, head, stream,

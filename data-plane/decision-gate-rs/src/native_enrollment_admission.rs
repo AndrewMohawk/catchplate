@@ -290,9 +290,9 @@ pub(super) fn tls_originals(state: &GateState, head: &RequestHead, stream: &Dire
         return Err("native enrollment requires the actual mutual TLS stream".to_owned());
     };
     require(stream.native_enrollment_tls_config().is_some_and(|held|
-        Arc::ptr_eq(held, configuration)) && !tls.conn.is_handshaking()
-        && tls.conn.protocol_version() == Some(rustls::ProtocolVersion::TLSv1_3)
-        && matches!(tls.conn.handshake_kind(), Some(rustls::HandshakeKind::Full
+        Arc::ptr_eq(held, configuration)) && !tls.connection().is_handshaking()
+        && tls.connection().protocol_version() == Some(rustls::ProtocolVersion::TLSv1_3)
+        && matches!(tls.connection().handshake_kind(), Some(rustls::HandshakeKind::Full
             | rustls::HandshakeKind::FullWithHelloRetryRequest)),
         "native enrollment lost its actual full TLS/configuration owner")?;
     stream.check_operation_deadline()
@@ -304,8 +304,10 @@ pub(super) fn tls_originals(state: &GateState, head: &RequestHead, stream: &Dire
         .map_err(|_| "native enrollment accepted listener binding differs")?;
     require(head.client_ip.is_none() && tls.sock.inner.client_ip().is_none(),
         "native enrollment cannot manufacture a client IP from a vsock peer")?;
-    let ingress = configuration.native_owner.as_ref()
-        .ok_or("native enrollment actual generated ingress owner is absent")?;
+    let owner = tls.native_connection()
+        .ok_or("native enrollment actual library-owned connection is absent")?;
+    owner.verify_live()?;
+    let ingress = owner.ingress();
     ingress.verify_live(deadline)?;
     let generated = ingress.tls();
     let mut valid_until_ms = trusted_mtls.leaf_not_after_epoch_ms;
@@ -324,8 +326,8 @@ pub(super) fn tls_originals(state: &GateState, head: &RequestHead, stream: &Dire
     require(state.server_instance_id.as_deref() == Some(p.server_instance_id)
         && p.proxy_endpoint == authorizer.proxy_endpoint() && p.client_challenge == challenge,
         "native enrollment assignment differs from cold endpoint or actual instance/challenge")?;
-    server_identity(ingress, &tls.conn, p.ingress_host, p.server_instance_id)?;
-    let chain = tls.conn.peer_certificates().ok_or("native enrollment actual client chain is absent")?;
+    server_identity(ingress, owner.connection(), p.ingress_host, p.server_instance_id)?;
+    let chain = owner.connection().peer_certificates().ok_or("native enrollment actual client chain is absent")?;
     require(!chain.is_empty() && chain.len() <= MAX_CHAIN_CERTIFICATES,
         "native enrollment client chain count exceeds its bound")?;
     let mut chain_bytes = 0usize;
@@ -370,7 +372,7 @@ pub(super) fn tls_originals(state: &GateState, head: &RequestHead, stream: &Dire
     same_peer_identity(trusted_mtls, &repeated)?;
     // Keep the original evidence/deadline; the fresh parse only rechecks its
     // actual public fields and is not returned or retained as renewed custody.
-    let exporter = tls.conn.export_keying_material([0u8; 32], EXPORTER_LABEL, Some(&challenge))
+    let exporter = owner.connection().export_keying_material([0u8; 32], EXPORTER_LABEL, Some(&challenge))
         .map_err(|_| "native enrollment actual TLS exporter is unavailable")?;
     let nonce = derive_nonce(challenge, exporter)?;
     socket.verify_accepted_local_port(authorizer.listener_port(), deadline)

@@ -84,11 +84,13 @@ fn observe_tls(stream: &DirectProxyStream, configuration: &Arc<ProxyIngressTlsCo
         return Err("native principal requires actual mutual TLS".to_owned());
     };
     require(stream.native_enrollment_tls_config().is_some_and(|held| Arc::ptr_eq(held, configuration))
-        && !tls.conn.is_handshaking() && tls.conn.protocol_version() == Some(rustls::ProtocolVersion::TLSv1_3)
-        && matches!(tls.conn.handshake_kind(), Some(rustls::HandshakeKind::Full
+        && !tls.connection().is_handshaking() && tls.connection().protocol_version() == Some(rustls::ProtocolVersion::TLSv1_3)
+        && matches!(tls.connection().handshake_kind(), Some(rustls::HandshakeKind::Full
             | rustls::HandshakeKind::FullWithHelloRetryRequest)) && trusted.is_live_at(wall))?;
     stream.check_operation_deadline().map_err(|_| "native principal stream expired")?;
-    let ingress = configuration.native_owner.as_ref().ok_or("native principal ingress absent")?;
+    let owner = tls.native_connection().ok_or("native principal library connection absent")?;
+    owner.verify_live()?;
+    let ingress = owner.ingress();
     ingress.verify_live(deadline)?;
     let generated = ingress.tls();
     require(configuration.client_trust_bundle_original.is_none()
@@ -97,7 +99,7 @@ fn observe_tls(stream: &DirectProxyStream, configuration: &Arc<ProxyIngressTlsCo
         && configuration.client_trust_certificates.len() == generated.client_trust_certificates().len()
         && configuration.client_trust_certificates.iter().zip(generated.client_trust_certificates())
             .all(|(actual, original)| actual.as_ref() == original.as_slice()))?;
-    let chain = tls.conn.peer_certificates().ok_or("native principal actual peer absent")?;
+    let chain = owner.connection().peer_certificates().ok_or("native principal actual peer absent")?;
     require(!chain.is_empty() && chain.len() <= 8
         && chain.iter().all(|cert| !cert.as_ref().is_empty() && cert.as_ref().len() <= 16 * 1024)
         && chain.iter().try_fold(0usize, |total, cert| total.checked_add(cert.as_ref().len()))
@@ -122,7 +124,7 @@ fn observe_tls(stream: &DirectProxyStream, configuration: &Arc<ProxyIngressTlsCo
         }
     }
     require(selected)?;
-    let exporter = tls.conn.export_keying_material([0u8; 32], EXPORTER_LABEL, Some(&challenge))
+    let exporter = owner.connection().export_keying_material([0u8; 32], EXPORTER_LABEL, Some(&challenge))
         .map_err(|_| "native principal session exporter unavailable")?;
     Ok((exporter, until))
 }
@@ -133,7 +135,9 @@ fn request_binding(head: &RequestHead, stream: &DirectProxyStream, challenge: [u
     let DirectProxyStream::MutualTls(tls) = stream else {
         return Err("native principal request requires actual TLS".to_owned());
     };
-    let secret = Zeroizing::new(tls.conn.export_keying_material([0u8; 32],
+    let owner = tls.native_connection().ok_or("native principal request lost its library connection")?;
+    owner.verify_live()?;
+    let secret = Zeroizing::new(owner.connection().export_keying_material([0u8; 32],
         wire::REQUEST_EXPORTER_LABEL, Some(&challenge))
         .map_err(|_| "native principal request exporter unavailable")?);
     let original = Zeroizing::new(wire::request_original(&head.method, &head.target,
@@ -207,7 +211,7 @@ pub(super) fn admit<'a>(state: &'a GateState, head: &'a RequestHead,
     let nonce = wire::derive_nonce(challenge, exporter, &statement)?;
     let policy = native_lease_digest_bytes(&snapshot.hash)?;
     let mut owner = PrincipalPreflight { state, head, trusted, configuration, lifetime, snapshot,
-        snapshot_guard, authentication, source, socket, connection_identity: &tls.conn as *const ServerConnection as usize,
+        snapshot_guard, authentication, source, socket, connection_identity: tls.connection() as *const ServerConnection as usize,
         challenge, exporter, request_binding, statement, nonce, policy, clock, stopped: false };
     owner.check(stream)?;
     Ok(owner)
@@ -231,7 +235,7 @@ impl PrincipalPreflight<'_> {
         let DirectProxyStream::MutualTls(tls) = stream else {
             return Err("native principal retained TLS changed".to_owned());
         };
-        require(&tls.conn as *const ServerConnection as usize == self.connection_identity
+        require(tls.connection() as *const ServerConnection as usize == self.connection_identity
             && self.head.client_ip == self.source)?;
         self.socket.check(&tls.sock.inner, self.clock.deadline)?;
         require(self.socket.source()? == self.source)?;

@@ -47172,7 +47172,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
     let shadow_response_hook = shadow_finalization
         .as_ref()
         .map(|handle| handle.response_hook());
-    let (decision, mut release_authorization) = decide_internal_for_forward_with_shadow(
+    let (mut decision, mut release_authorization) = decide_internal_for_forward_with_shadow(
         state,
         snapshot,
         decision_request,
@@ -47394,10 +47394,10 @@ fn forward_absolute_request_inner_with_prepared<'a>(
     let injection_plan = decision
         .get("injection")
         .and_then(|value| value.get("plan"))
-        .unwrap_or(&Value::Null);
+        .cloned().unwrap_or(Value::Null);
     let headers = match filtered_reviewed_forward_headers(
         &request.headers,
-        injection_plan,
+        &injection_plan,
         &discard_headers,
         reviewed_audit_body.as_ref(),
     ) {
@@ -47422,7 +47422,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
                 &request,
                 &upstream_url,
                 &headers,
-                injection_plan,
+                &injection_plan,
                 &mut release_authorization,
                 execution,
                 shadow_finalization.as_ref(),
@@ -47507,7 +47507,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
     let mut response_secret_guard = ResponseSecretGuard::default();
     let mut credential_release_binding = None;
     let mut operator_release_audited = false;
-    if let Some(credential_ref) = decision.get("credential_ref").and_then(Value::as_str) {
+    if let Some(credential_ref) = decision.get("credential_ref").and_then(Value::as_str).map(str::to_owned) {
         let credential_version = decision
             .get("credential_version")
             .and_then(Value::as_u64)
@@ -47543,7 +47543,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
             ) {
                 Ok(Some(lease)) => { operator_release_audited = true; Ok(lease) }
                 Ok(None) => credential_lease_for_release(
-                    state, snapshot, &decision, credential_ref, credential_version,
+                    state, snapshot, &decision, &credential_ref, credential_version,
                 ),
                 Err(_) => Err("operator_google_release_unavailable"),
             },
@@ -47578,6 +47578,11 @@ fn forward_absolute_request_inner_with_prepared<'a>(
                 ));
             }
         };
+        if quota_preparation.selected() && quota_preparation.record_acquired_secret(
+            state, snapshot, &mut decision, &lease,
+        ).is_err() {
+            buffered!(quota_preparation.failure_response());
+        }
         if let Some(observation) = response_observation.as_deref_mut() {
             observation.credential_state = "lease-acquired";
             observation.credential_binding_digest = Some(digest_json(&json!({
@@ -47594,7 +47599,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
             provider_headers,
             &upstream_url,
             provider_url,
-            injection_plan,
+            &injection_plan,
             &lease,
             shadow_finalization.as_ref(),
         ) {

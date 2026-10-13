@@ -232,5 +232,12 @@ pub(crate) fn test_load(path: &Path, permit: &operator_audit_publication::Permit
 }
 
 #[cfg(test)]
+pub(crate) fn test_load_with_quota(path: &Path, permit: &operator_audit_publication::Permit<'_>) -> Result<Configuration, String> {
+    let mut configuration = load_at(path, permit)?;
+    Arc::get_mut(configuration.state.profile.as_mut().ok_or_else(refused)?).ok_or_else(refused)?.quota_enabled = true;
+    Ok(configuration)
+}
+
+#[cfg(test)]
 #[path = "operator_x_profile_tests.rs"]
 pub(crate) mod tests;

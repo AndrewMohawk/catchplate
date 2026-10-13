@@ -17,6 +17,8 @@ const WAIT: Duration = Duration::from_secs(3);
 
 #[path = "operator_x_release_tests.rs"]
 mod x_release;
+#[path = "operator_x_quota_release_tests.rs"]
+mod quota_release;
 
 fn google() -> GoogleProfile {
     GoogleProfile::parse(Some("operator-google-v1"), true, Some(CLIENT), Some(CALLBACK))
@@ -70,6 +72,11 @@ impl Authority {
     }
 
     fn for_provider(app_ttl: u64, x: bool) -> Self {
+        Self::for_provider_with_quota(app_ttl, x, false)
+    }
+
+    fn for_provider_with_quota(app_ttl: u64, x: bool, quota: bool) -> Self {
+        assert!(!quota || x);
         let (key, pem, key_id) = response_proof_signing_material().unwrap();
         let mut raw = signed_policy(&key, &key_id, 1, false);
         raw["principals"][0]["proxyAuthorization"]["expiresAtEpochMs"] = json!(now_epoch_ms() + u128::from(app_ttl));
@@ -97,6 +104,7 @@ impl Authority {
                     "provider":"x","subjects":[SUBJECT],"clientIds":[CLIENT],"requiredScopes":x_post::SCOPES},
                     "request":x_post::request_config(),"response":x_post::response_profile(false)}},
                 "constraints":[x_post::envelope("x-envelope")]});
+            if quota { raw["routes"][0]["constraints"].as_array_mut().unwrap().push(x_post::quota(4)); }
         }
         let signature = key.sign(canonical_json(&signature_payload(&raw)).as_bytes());
         raw["metadata"]["signature"] = json!(format!("ed25519:{}", URL_SAFE_NO_PAD.encode(signature.to_bytes())));
@@ -168,8 +176,12 @@ impl Fixture {
     }
 
     fn for_provider(app_ttl: u64, x: bool) -> Self {
+        Self::for_provider_with_quota(app_ttl, x, false)
+    }
+
+    fn for_provider_with_quota(app_ttl: u64, x: bool, quota: bool) -> Self {
         let scratch = Scratch::new();
-        let authority = Arc::new(Authority::for_provider(app_ttl, x));
+        let authority = Arc::new(Authority::for_provider_with_quota(app_ttl, x, quota));
         let path = scratch.0.join("policy-bundle.json");
         fs::write(&path, serde_json::to_vec(&authority.raw).unwrap()).unwrap();
         fs::write(scratch.0.join(LOCK_NAME), []).unwrap();
@@ -178,18 +190,27 @@ impl Fixture {
         listener.set_nonblocking(true).unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let snapshot = Arc::clone(&authority.snapshot);
-        let mut admitted = profile(&snapshot, Deployment::parse(
-            if x {r#"["https://api.x.com"]"#} else {r#"["https://gmail.googleapis.com"]"#}, None).unwrap());
+        let deployment = Deployment::parse(
+            if x {r#"["https://api.x.com"]"#} else {r#"["https://gmail.googleapis.com"]"#}, None).unwrap();
+        let mut admitted = if quota {
+            // Install the separately admitted X profile before validation: a
+            // limited policy must not pass the default quota-free profile.
+            Profile { deployment: Arc::new(deployment), google: None, managed_google: None, managed_x: None,
+                active: Arc::new(RwLock::new(ApprovedPolicy {
+                    high_water: policy_high_water_for(&snapshot), targets: BTreeSet::new() })) }
+        } else { profile(&snapshot, deployment) };
         if x {
             let manifest_path=scratch.0.join("operator-x-configuration.json");
             fs::write(&manifest_path,crate::operator_x_profile::tests::manifest(true).to_string()).unwrap();
             fs::set_permissions(&manifest_path,fs::Permissions::from_mode(0o600)).unwrap();
             let owner=Owner::open(&path).unwrap();
             let permit=owner.acquire(Instant::now()+WAIT).unwrap();
-            let configuration=crate::operator_x_profile::test_load(&manifest_path,&permit).unwrap();
+            let configuration=if quota { crate::operator_x_profile::test_load_with_quota(&manifest_path,&permit) }
+                else { crate::operator_x_profile::test_load(&manifest_path,&permit) }.unwrap();
             admitted.managed_x=Some(Arc::new(RwLock::new(configuration.state)));
         } else { admitted.google = Some(google()); }
-        admitted.validate_snapshot(&snapshot).unwrap();
+        let approved = admitted.validate_snapshot(&snapshot).unwrap();
+        if quota { *admitted.active.write().unwrap() = approved; }
         let mut state = test_gate_state(Arc::clone(&snapshot));
         state.policy_path = path.to_string_lossy().into_owned();
         state.binary_digest = authority.binary.clone();
@@ -205,10 +226,11 @@ impl Fixture {
         state.audit_url = Some(format!("{endpoint}/api/data-plane/audit"));
         state.audit_token = Some("synthetic-google-audit-service".into());
         state.server_instance_id = Some("test-instance".into());
+        state.operator_x_quota_enabled = quota;
         let fixture = Self { state: Arc::new(state), snapshot,
             scope: CredentialLeaseScope::new("agent:test", "route:test", if x {"x-account"} else {"google-account"}),
             authority, listener, _scratch: scratch };
-        seed(&fixture, 60_000);
+        if !quota { seed(&fixture, 60_000); }
         fixture
     }
 
@@ -241,11 +263,22 @@ impl Fixture {
 // Actual X25519/HKDF/AES-GCM v2 envelope and signed v3 material; explicit
 // short TTL and changed metadata are negative material, not verifier stubs.
 fn material(authority: &Authority, incoming: &IncomingRequest, mode: &str) -> Vec<u8> {
-    let request: CredentialLeaseRequest = strict_json_from_slice(&incoming.body).unwrap();
+    let original: Value = strict_json_from_slice(&incoming.body).unwrap();
+    let quota = original["apiVersion"] == "serverware.operatorXQuotaCredentialLeaseRequest/v1";
+    let request: CredentialLeaseRequest = if quota {
+        assert!(authority.x);
+        let mut ordinary = original.clone();
+        ordinary.as_object_mut().unwrap().remove("operatorXQuota");
+        ordinary["apiVersion"] = json!("serverware.credentialLeaseRequest/v3");
+        serde_json::from_value(ordinary).unwrap()
+    } else { strict_json_from_slice(&incoming.body).unwrap() };
     let now = now_epoch_ms() as u64;
     let ttl = if mode == "short-secret" { 100 }
         else if request.purpose == CredentialLeasePurpose::GenerationMetadata { 5_000 }
         else { 4_000 };
+    let expires = if quota { original["operatorXQuota"]["expiresAtEpochMs"].as_u64().unwrap() } else { now + ttl };
+    let request_binding = if quota { digest_json_ensure_ascii(&original) }
+        else { credential_lease_request_binding_sha256(&request) };
     let version = if matches!(mode,"wrong-version"|"predecision-advance") { 8 } else { 7 };
     let mut values = authority.metadata();
     if mode == "wrong-metadata" { values.insert("synthetic_drift".into(), json!(true)); }
@@ -253,16 +286,16 @@ fn material(authority: &Authority, incoming: &IncomingRequest, mode: &str) -> Ve
         "recipientKeyId":request.recipient_key_id, "recipientNonce":request.recipient_nonce,
         "policyHash":request.policy_hash, "dataPlaneBinaryDigest":request.data_plane_binary_digest,
         "principalId":request.principal_id,"routeId":request.route_id,"credentialId":request.credential_id,
-        "issuedAtEpochMs":now,"expiresAtEpochMs":now+ttl});
+        "issuedAtEpochMs":now,"expiresAtEpochMs":expires});
     let mut credential = json!({"credentialId":request.credential_id,"credentialVersion":version,
         "metadataSha256":credential_lease_metadata_sha256(&values),"metadata":values});
     if request.purpose == CredentialLeasePurpose::DispatchSecret { credential["secret"] = json!(SECRET); }
     let plaintext = json!({"apiVersion":"serverware.credentialLeaseSet/v3","purpose":request.purpose,
-        "requestBindingSha256":credential_lease_request_binding_sha256(&request),"releaseAuthorization":null,
+        "requestBindingSha256":request_binding,"releaseAuthorization":null,
         "recipientKeyId":request.recipient_key_id,"recipientNonce":request.recipient_nonce,
         "policyHash":request.policy_hash,"dataPlaneBinaryDigest":request.data_plane_binary_digest,
         "principalId":request.principal_id,"routeId":request.route_id,"credentialId":request.credential_id,
-        "issuedAtEpochMs":now,"expiresAtEpochMs":now+ttl,"credentials":[credential]});
+        "issuedAtEpochMs":now,"expiresAtEpochMs":expires,"credentials":[credential]});
     let recipient: [u8;32] = URL_SAFE_NO_PAD.decode(&request.recipient_public_key).unwrap().try_into().unwrap();
     let nonce = URL_SAFE_NO_PAD.decode(&request.recipient_nonce).unwrap();
     let secret = X25519StaticSecret::from([109u8;32]);
@@ -282,6 +315,24 @@ fn material(authority: &Authority, incoming: &IncomingRequest, mode: &str) -> Ve
     envelope["aeadNonce"] = json!(URL_SAFE_NO_PAD.encode([110u8;12]));
     envelope["ciphertext"] = json!(URL_SAFE_NO_PAD.encode(&ciphertext));
     envelope["ciphertextSha256"] = json!(sha256_prefixed(&ciphertext));
+    if quota {
+        // Independent literal API/store contract. The real owner must verify
+        // this signed wrapper and decrypt the inner full-request-bound lease.
+        let binding = json!({"principal_id":original["principalId"],"route_id":original["routeId"],
+            "credential_id":original["credentialId"],"credential_version":original["expectedCredentialVersion"],
+            "credential_metadata_digest":original["expectedMetadataSha256"],"policy_hash":original["policyHash"],
+            "request_digest":original["operatorXQuota"]["requestDigest"],
+            "operation_digest":original["operatorXQuota"]["operationDigest"],
+            "attempt_nonce":original["operatorXQuota"]["attemptNonce"],
+            "recipient_digest":digest_json_ensure_ascii(&json!({"recipientKeyId":original["recipientKeyId"],"recipientNonce":original["recipientNonce"]})),
+            "request_binding_digest":request_binding,"expires_at_epoch_ms":expires});
+        envelope = json!({"apiVersion":"serverware.operatorXQuotaCredentialLeaseResponse/v1",
+            "requestBindingSha256":request_binding,"credentialLease":envelope,
+            "reservation":{"schema":"serverware.operatorXPostingQuotaReservation/v1",
+                "reservation_id":"11111111-1111-4111-8111-111111111111",
+                "bucket_key":sha256_prefixed(b"synthetic-x-account-day"),"utc_day":now/86_400_000,
+                "expires_at_epoch_ms":expires,"binding_digest":digest_json_ensure_ascii(&binding)}});
+    }
     signed_control_plane_test_response(&authority.key, &authority.snapshot, incoming,
         &request.recipient_nonce, now, StatusCode::OK, envelope)
 }

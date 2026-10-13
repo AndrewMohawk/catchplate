@@ -360,7 +360,10 @@ impl Request {
             || generation.version != info.version
             || generation.metadata_sha256 != info.metadata_sha256
             || generation.metadata != info.metadata
-            || !info.secret_available
+            // This owner acquires metadata, not a reusable dispatch secret.
+            // Availability stays false until the signed quota wrapper is
+            // decrypted and the exact private lease is selected below.
+            || info.secret_available
             || !credential_generation_valid_after(
                 &generation,
                 snapshot,
@@ -452,6 +455,34 @@ impl Request {
         binding: &CredentialLeaseReleaseBinding,
     ) -> bool {
         snapshot_is_active(state, snapshot) && self.check(state, snapshot, Some(binding)).is_ok()
+    }
+
+    pub(super) fn record_acquired_secret(
+        &self, state: &GateState, snapshot: &Arc<Snapshot>, decision: &mut Value,
+        lease: &SecretLease,
+    ) -> Result<(), String> {
+        if !self.selected || !self.spent || self.claim_started || !snapshot_is_active(state, snapshot) {
+            return Err(refused());
+        }
+        self.check(state, snapshot, Some(&credential_lease_release_binding(lease)))?;
+        let reserved = self.reserved.as_ref().ok_or_else(refused)?;
+        let original = &reserved.wire["operatorXQuota"];
+        if decision["canonical_request"] != original["canonicalRequest"]
+            || decision["request_digest"] != original["requestDigest"]
+            || decision["operation_digest"] != original["operationDigest"]
+            || decision["attempt_id"] != original["attemptNonce"]
+            || decision.pointer("/injection/secret_available") != Some(&Value::Bool(false))
+            || decision.pointer("/policy_effect_results/credential_secret_available") != Some(&Value::Bool(false))
+        { return Err(refused()); }
+        let mut acquired = decision.clone();
+        acquired["injection"]["secret_available"] = json!(true);
+        acquired["policy_effect_results"]["credential_secret_available"] = json!(true);
+        let plan = acquired.pointer("/injection/plan").ok_or_else(refused)?;
+        // Run the unchanged exact injection guard before publishing either
+        // projection. These fields are observations, never the quota permit.
+        active_credential_injection_binding(snapshot, &acquired, plan, lease)?;
+        *decision = acquired;
+        Ok(())
     }
 
     pub(super) fn prepare_release_if_admitted(

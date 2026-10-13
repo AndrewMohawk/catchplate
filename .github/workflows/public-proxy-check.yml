@@ -1,15 +1,24 @@
-name: Public proxy boundary
+name: Public proxy check
 
-# An explicitly started, credential-free check from outside the homelab.
-# This is not authenticated provider-use or whole-project acceptance.
+# Explicitly started checks from outside the homelab. Authenticated modes use
+# only a temporary, narrowly scoped app token and a synthetic /echo destination.
+# This is not real-provider or whole-project acceptance.
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Boundary only, one authenticated echo, or revoked-token denial
+        type: choice
+        required: true
+        default: boundary
+        options: [boundary, positive, revoked]
 
 permissions:
   contents: read
 
 jobs:
   public-boundary:
+    if: inputs.mode == 'boundary'
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
@@ -47,3 +56,29 @@ jobs:
           test "$destination" = 'https://auth.example.com/?rd=https%3A%2F%2Fserverware.example.com%2F&rm=HEAD'
           test "$tls" = 0
           printf '%s\n' '{"console_tls_verified":true,"console_sign_in_required":true,"sso_completed":false}'
+
+  scoped-client:
+    if: inputs.mode == 'positive' || inputs.mode == 'revoked'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Use only the scoped temporary application identity
+        shell: bash
+        env:
+          CHECK_MODE: ${{ inputs.mode }}
+          SERVERWARE_PUBLIC_PROXY_CHECK_JSON: ${{ secrets.SERVERWARE_PUBLIC_PROXY_CHECK_JSON }}
+        run: |
+          set -euo pipefail
+          python3 -B scripts/check_operator_public_proxy.py "$CHECK_MODE" \
+            | tee "$RUNNER_TEMP/public-proxy-result.json"
+      - name: Retain only the sanitized client receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: public-proxy-result
+          path: ${{ runner.temp }}/public-proxy-result.json
+          if-no-files-found: warn
+          retention-days: 7

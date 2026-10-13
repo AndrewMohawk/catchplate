@@ -1,0 +1,49 @@
+name: Public proxy boundary
+
+# An explicitly started, credential-free check from outside the homelab.
+# This is not authenticated provider-use or whole-project acceptance.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-boundary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Verify public DNS, TLS and unauthenticated CONNECT denial
+        shell: bash
+        run: |
+          set -euo pipefail
+          proxy_exit=0
+          observed="$(curl --disable --silent --show-error \
+            --connect-timeout 10 --max-time 20 --retry 0 \
+            --proxy https://serverware-proxy.example.com:443 \
+            --noproxy '' --output /dev/null \
+            --write-out '%{http_connect} %{http_code} %{proxy_ssl_verify_result} %{remote_ip}' \
+            https://demo-upstream:8443/echo)" || proxy_exit=$?
+          read -r connect_status origin_status proxy_tls peer_ip <<< "$observed"
+          test "$proxy_exit" = 56
+          test "$connect_status" = 403
+          test "$origin_status" = 000
+          test "$proxy_tls" = 0
+          test "$peer_ip" = 203.0.113.10
+          jq -n --arg peer "$peer_ip" \
+            '{public_dns:true,proxy_tls_verified:true,connect_status:403,
+              unauthenticated_denied:true,origin_response:false,peer:$peer,
+              authenticated_use_verified:false}'
+      - name: Verify the console still requires sign-in
+        shell: bash
+        run: |
+          set -euo pipefail
+          observed="$(curl --disable --silent --show-error --head \
+            --connect-timeout 10 --max-time 20 --retry 0 --noproxy '*' \
+            --output /dev/null --write-out '%{http_code} %{redirect_url} %{ssl_verify_result}' \
+            https://serverware.example.com/)"
+          read -r status destination tls <<< "$observed"
+          test "$status" = 302
+          test "$destination" = 'https://auth.example.com/?rd=https%3A%2F%2Fserverware.example.com%2F&rm=HEAD'
+          test "$tls" = 0
+          printf '%s\n' '{"console_tls_verified":true,"console_sign_in_required":true,"sso_completed":false}'

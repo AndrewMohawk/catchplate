@@ -98,6 +98,7 @@ mod native_public_identity_transport;
 mod native_ingress_attestation;
 mod native_target_principal_preflight;
 mod native_enrollment_authorizer;
+mod native_buffered_request;
 mod native_enrollment_admission;
 mod native_workload_bootstrap_request_v1;
 mod native_enrollment_bootstrap_admission;
@@ -4212,6 +4213,8 @@ struct DeadlineIo<T> {
 
 trait TerminalDeadlineWrite: Write {
     fn set_terminal_write_deadline(&mut self, deadline: Option<Instant>);
+    // Only real CONNECT IO lends the retained OUTER TLS/configuration owner.
+    fn retained_proxy_ingress(&self) -> Option<&RetainedProxyIngressTls> { None }
 }
 
 trait ConfigureIoTimeout {
@@ -4667,6 +4670,12 @@ impl Write for ConnectOperationIo<'_> {
 impl TerminalDeadlineWrite for ConnectOperationIo<'_> {
     fn set_terminal_write_deadline(&mut self, deadline: Option<Instant>) {
         self.0.set_terminal_write_deadline(deadline);
+    }
+    fn retained_proxy_ingress(&self) -> Option<&RetainedProxyIngressTls> {
+        match &self.0.sock {
+            DirectProxyStream::MutualTls(tls) => Some(tls),
+            DirectProxyStream::DevelopmentRaw(_) => None,
+        }
     }
 }
 
@@ -28829,16 +28838,42 @@ fn request_release_authorization<'a>(
     ),
     String,
 > {
+    request_release_authorization_with_connect(state, snapshot, attempt_id, principal_id,
+        route, credential_ref, credential_version, policy_hash, request_digest,
+        expected_operation_digest, operation, canonical_request, req, require_jit_grant,
+        shadow_finalization, None)
+}
+
+fn request_release_authorization_with_connect<'a>(
+    state: &'a GateState,
+    snapshot: &Arc<Snapshot>,
+    attempt_id: &str,
+    principal_id: &str,
+    route: &Route,
+    credential_ref: Option<&str>,
+    credential_version: u64,
+    policy_hash: &str,
+    request_digest: &str,
+    expected_operation_digest: &str,
+    operation: &Value,
+    canonical_request: &Value,
+    req: &DecisionRequest,
+    require_jit_grant: bool,
+    shadow_finalization: Option<&policy_core::ShadowRequestHandle>,
+    connect_request: Option<&native_buffered_request::ReleaseOriginals<'_>>,
+) -> Result<(RequestedReleaseAuthorization, ReleaseAuthorizationGuard<'a>), String> {
     let profile = state.response_proof_signer.release_profile();
+    native_buffered_request::check_release(profile, require_jit_grant, connect_request,
+        state, snapshot, principal_id, req, route, canonical_request)?;
     let operation_deadline = if profile.has_approver_policy() {
-        // The service layer has no borrowed ingress stream deadline. This one
-        // pre-preparation bound only clips the original native cohort, and is
-        // never restarted by preparation, reservation or later transitions.
+        // A genuine CONNECT original starts before head intake. The legacy
+        // non-JIT/no-context fallback remains bounded here; it cannot admit JIT.
         let opening = Instant::now();
         let remaining = if profile.is_native() { native_service_remaining(state)?
             .ok_or("native release service lifetime is absent")? } else { Duration::from_secs(30) };
-        Some(opening.checked_add(remaining.min(Duration::from_secs(30)))
-            .ok_or("native release deadline overflow")?)
+        let fallback = opening.checked_add(remaining.min(Duration::from_secs(30)))
+            .ok_or("native release deadline overflow")?;
+        Some(connect_request.map_or(fallback, |original| original.deadline().min(fallback)))
     } else { None };
     if !canonical_request.is_object() {
         return Err("release authorization canonical request must be an object".to_string());
@@ -28877,11 +28912,15 @@ fn request_release_authorization<'a>(
     let preparation = if let Some(deadline) = operation_deadline {
         let durable = expected_durable_policy_binding(state, route, req, canonical_request,
             principal_id, credential_ref, credential_version, policy_hash, operation)?;
+        native_buffered_request::check_release(profile, require_jit_grant, connect_request,
+            state, snapshot, principal_id, req, route, canonical_request)?;
         Some(prepare_release_policy(state, snapshot, &response_authentication,
             attempt_id, principal_id, route, credential_ref, credential_version, policy_hash,
             request_digest, expected_operation_digest, operation, canonical_request,
             durable.as_ref(), require_jit_grant, deadline)?)
     } else { None };
+    native_buffered_request::check_release(profile, require_jit_grant, connect_request,
+        state, snapshot, principal_id, req, route, canonical_request)?;
     let (expected_binding_digest, expected_quotas, expected_durable_policy) =
         expected_release_authorization_binding_with_profile(
         state,
@@ -29026,6 +29065,8 @@ fn request_release_authorization<'a>(
             }),
         )?;
     }
+    native_buffered_request::check_release(profile, require_jit_grant, connect_request,
+        state, snapshot, principal_id, req, route, canonical_request)?;
     let response_result = post_release_authorization_http_on_deadline(
         state,
         &response_authentication,
@@ -29058,6 +29099,10 @@ fn request_release_authorization<'a>(
         "reserve",
         &result_commitment,
     )?;
+    // Account the real reserve attempt before a post-IO currentness refusal.
+    // The existing guard still owns cleanup of its exact outbound binding.
+    native_buffered_request::check_release(profile, require_jit_grant, connect_request,
+        state, snapshot, principal_id, req, route, canonical_request)?;
     let response = response_result?;
     Ok((
         RequestedReleaseAuthorization {
@@ -35865,6 +35910,20 @@ fn decide_internal_for_forward_with_shadow<'a>(
     google_preparation: Option<&mut operator_google_preparation::Request>,
     quota_preparation: Option<&mut operator_x_quota::Request>,
 ) -> (Value, Option<ReleaseAuthorizationGuard<'a>>) {
+    decide_internal_for_forward_with_shadow_and_connect(state, snapshot, req,
+        authenticated_principal_id, shadow_admission, google_preparation, quota_preparation, None)
+}
+
+fn decide_internal_for_forward_with_shadow_and_connect<'a>(
+    state: &'a GateState,
+    snapshot: &Arc<Snapshot>,
+    req: DecisionRequest,
+    authenticated_principal_id: Option<&str>,
+    shadow_admission: Option<ShadowAdmission>,
+    google_preparation: Option<&mut operator_google_preparation::Request>,
+    quota_preparation: Option<&mut operator_x_quota::Request>,
+    connect_request: Option<&native_buffered_request::BorrowedRequest<'_>>,
+) -> (Value, Option<ReleaseAuthorizationGuard<'a>>) {
     let shadow_admission = shadow_admission.unwrap_or_else(|| {
         state.policy_shadow.capture_for_gate(state,
             snapshot,
@@ -35887,6 +35946,7 @@ fn decide_internal_for_forward_with_shadow<'a>(
         Some(shadow_admission),
         google_preparation,
         quota_preparation,
+        connect_request,
         #[cfg(test)]
         None,
     );
@@ -35942,7 +36002,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
 ) -> Value {
     decide_internal_with_mode_and_shadow_and_google(
         state, snapshot, req, authenticated_principal_id, preview,
-        accepted_release_output, precomputed_shadow_admission, None, None,
+        accepted_release_output, precomputed_shadow_admission, None, None, None,
         #[cfg(test)] decision_at_epoch_ms_override,
     )
 }
@@ -35957,9 +36017,20 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
     precomputed_shadow_admission: Option<ShadowAdmission>,
     mut google_preparation: Option<&mut operator_google_preparation::Request>,
     mut quota_preparation: Option<&mut operator_x_quota::Request>,
+    connect_request: Option<&native_buffered_request::BorrowedRequest<'_>>,
     #[cfg(test)] decision_at_epoch_ms_override: Option<u128>,
 ) -> Value {
     let started = Instant::now();
+    let connect_decision = if preview || !state.response_proof_signer.release_profile().is_native() {
+        None
+    } else { match connect_request.map(|original| {
+        original.check(state, snapshot, authenticated_principal_id.unwrap_or_default())?;
+        original.begin(&req)
+    }).transpose() {
+        Ok(original) => original,
+        Err(_) => return deny(503, "native buffered request unavailable",
+            json!({"error":"native_buffered_request_unavailable"}), started),
+    } };
     if let Err(error) = proxy_basic_transport::require_runtime(state, snapshot) {
         return deny(403, "operator Basic transport profile refused", json!({"error":error}), started);
     }
@@ -36736,6 +36807,14 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
     }
 
     if atomic_release {
+        let connect_release = if streaming_response_policy(&response_policy_for_route(route)).is_some() {
+            None
+        } else { match connect_decision.as_ref()
+            .map(|original| original.retain_release(&req, route, &canonical)).transpose() {
+            Ok(original) => original,
+            Err(_) => return deny_for_route(503, "native buffered request projection differs",
+                json!({"error":"native_buffered_request_unavailable"}), route, started),
+        } };
         let attempt_id = match random_request_attempt_id() {
             Ok(attempt_id) => attempt_id,
             Err(_) => {
@@ -36747,7 +36826,7 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
                 )
             }
         };
-        let (raw_release, mut release_authorization) = match request_release_authorization(
+        let (raw_release, mut release_authorization) = match request_release_authorization_with_connect(
             state,
             snapshot,
             &attempt_id,
@@ -36763,6 +36842,7 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
             &req,
             jit_required,
             shadow_finalization.as_ref(),
+            connect_release.as_ref(),
         ) {
             Ok(requested) => requested,
             Err(_) => {
@@ -47098,7 +47178,7 @@ fn record_shadow_dispatch_barrier_with_commitment(
 fn forward_absolute_request_inner_with_prepared<'a>(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
-    mut request: IncomingRequest,
+    request: IncomingRequest,
     prepared_upstream: Option<PreparedUpstream>,
     shadow_admission: Option<ShadowAdmission>,
     precomputed_decision_request: Option<DecisionRequest>,
@@ -47110,8 +47190,33 @@ fn forward_absolute_request_inner_with_prepared<'a>(
     streaming_response_proof_request: Option<StreamingResponseProofRequest<'a>>,
     response_observation_v2:
         Option<&ResponseObservationV2Execution<'_>>,
+    response_observation: Option<&mut ResponseObservationTrace>,
+    keep_alive: bool,
+) -> ForwardResult {
+    forward_absolute_request_inner_with_prepared_and_connect(state, snapshot, request,
+        prepared_upstream, shadow_admission, precomputed_decision_request, authenticated_principal_id,
+        client_request_digest, response_proof_authorization_output, response_proof_upstream_output,
+        stream_writer, streaming_response_proof_request, response_observation_v2,
+        response_observation, keep_alive, None)
+}
+
+fn forward_absolute_request_inner_with_prepared_and_connect<'a>(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    mut request: IncomingRequest,
+    prepared_upstream: Option<PreparedUpstream>,
+    shadow_admission: Option<ShadowAdmission>,
+    precomputed_decision_request: Option<DecisionRequest>,
+    authenticated_principal_id: Option<&str>,
+    client_request_digest: Option<&str>,
+    response_proof_authorization_output: Option<&mut Option<ResponseProofAuthorizationContext>>,
+    response_proof_upstream_output: Option<&mut Option<ResponseProofUpstreamResponse>>,
+    stream_writer: Option<&'a mut dyn TerminalDeadlineWrite>,
+    streaming_response_proof_request: Option<StreamingResponseProofRequest<'a>>,
+    response_observation_v2: Option<&ResponseObservationV2Execution<'_>>,
     mut response_observation: Option<&mut ResponseObservationTrace>,
     keep_alive: bool,
+    connect_ingress: Option<native_buffered_request::Ingress<'_>>,
 ) -> ForwardResult {
     // Starts before the decision's preparation budget, so post-audit static
     // acquisition cannot restart or expand the existing fifteen-second bound.
@@ -47193,7 +47298,15 @@ fn forward_absolute_request_inner_with_prepared<'a>(
     let shadow_response_hook = shadow_finalization
         .as_ref()
         .map(|handle| handle.response_hook());
-    let (mut decision, mut release_authorization) = decide_internal_for_forward_with_shadow(
+    let (mut decision, mut release_authorization) = {
+        // Reborrow actual OUTER ingress only while deciding/preparing/reserving.
+        // It cannot outlive this block or alias the later mutable response writer.
+        let originals = connect_ingress.as_ref().map(|ingress| ingress.originals(
+            stream_writer.as_ref().map(|writer| &**writer as &dyn TerminalDeadlineWrite)));
+        let connect_request = originals.and_then(|(context, tls)| tls.map(|tls|
+            native_buffered_request::BorrowedRequest::retain(context, tls, &request,
+                snapshot, client_request_digest)));
+        decide_internal_for_forward_with_shadow_and_connect(
         state,
         snapshot,
         decision_request,
@@ -47203,7 +47316,8 @@ fn forward_absolute_request_inner_with_prepared<'a>(
             else { Some(&mut google_preparation) },
         if v2_proof_requested || shadow_finalization.is_some() { None }
             else { Some(&mut quota_preparation) },
-    );
+        connect_request.as_ref(),
+    ) };
     if shadow_finalization.is_some() {
         shadow_active_decision = Some(decision.clone());
     }
@@ -49609,6 +49723,21 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
     response_proof: Option<ResponseProofRequestContext<'_>>,
     connection_identity_sha256: Option<&str>,
 ) -> bool {
+    forward_absolute_request_to_with_connect(state, snapshot, request, authenticated_principal_id,
+        keep_alive, writer, response_proof, connection_identity_sha256, None)
+}
+
+fn forward_absolute_request_to_with_connect<W: TerminalDeadlineWrite>(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    request: IncomingRequest,
+    authenticated_principal_id: Option<&str>,
+    keep_alive: bool,
+    writer: &mut W,
+    response_proof: Option<ResponseProofRequestContext<'_>>,
+    connection_identity_sha256: Option<&str>,
+    connect_context: Option<&native_buffered_request::Context<'_>>,
+) -> bool {
     let (_, target_url) = match provider_query::parse_target_for_route(snapshot, &request.method, &request.target,
         request.client_ip.as_deref(), &request.headers, authenticated_principal_id) {
         Ok(validated) => validated,
@@ -49932,7 +50061,7 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
     let mut response_observation_trace = ResponseObservationTrace::new();
     let result = match response_proof.as_ref() {
         Some(ResponseProofRequestContext::Buffered(_)) => {
-            forward_absolute_request_inner_with_prepared(
+            forward_absolute_request_inner_with_prepared_and_connect(
                 state,
                 snapshot,
                 request,
@@ -49948,6 +50077,8 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
                 None,
                 None,
                 keep_alive,
+                connect_context.map(|context| native_buffered_request::Ingress::Borrowed(
+                    context, writer.retained_proxy_ingress())),
             )
         }
         Some(ResponseProofRequestContext::Streaming(context)) => {
@@ -50017,7 +50148,7 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
                 )
             }
         }
-        None => forward_absolute_request_inner_with_prepared(
+        None => forward_absolute_request_inner_with_prepared_and_connect(
             state,
             snapshot,
             request,
@@ -50033,6 +50164,7 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
             None,
             None,
             keep_alive,
+            connect_context.map(native_buffered_request::Ingress::FromWriter),
         ),
     };
     match result {
@@ -51094,6 +51226,16 @@ fn handle_connect_request(
     let mut tls = StreamOwned::new(tls_conn, stream);
     let mut handled_requests = 0u64;
     loop {
+        let native_request_context = match native_buffered_request::Context::open(
+            &state, &tls.sock, &connect_authentication) {
+            Ok(context) => context,
+            Err(_) => {
+                let _ = tls.write_all(&http_response("503 Service Unavailable",
+                    json!({"error":"native_buffered_request_unavailable"})));
+                let _ = tls.flush();
+                break;
+            }
+        };
         tls.sock.reset_read_deadline(state.request_head_deadline);
         tls.sock.reset_write_deadline(state.response_write_deadline);
         // Syntax intake is not authority: genuine CONNECT identity is rechecked
@@ -51388,7 +51530,7 @@ fn handle_connect_request(
                                     .as_ref()
                                     .map(ResponseProofRequestContext::Observation)
                             });
-                        forward_absolute_request_to(
+                        forward_absolute_request_to_with_connect(
                             &state,
                             &request_snapshot,
                             inner,
@@ -51397,6 +51539,7 @@ fn handle_connect_request(
                             &mut ConnectOperationIo(&mut tls),
                             response_proof,
                             connection_identity_sha256.as_deref(),
+                            native_request_context.as_ref(),
                         )
                     }
                 }
@@ -63569,7 +63712,7 @@ mod tests {
             .find("reserve_response_observation_nonce(")
             .expect("response observation nonce authority");
         let forwarding_core = entry
-            .find("forward_absolute_request_inner_with_prepared(")
+            .find("forward_absolute_request_inner_with_prepared_and_connect(")
             .expect("prepared buffered forwarding core");
         assert!(preparation < local_none_denial);
         assert!(local_none_denial < observation_nonce);
@@ -63587,7 +63730,7 @@ mod tests {
             .expect("prepared buffered forwarding core terminator")
             .0;
         let decision = core
-            .find("decide_internal_for_forward_with_shadow(")
+            .find("decide_internal_for_forward_with_shadow_and_connect(")
             .expect("buffered policy decision");
         let prepared_binding = core
             .find("validate_prepared_upstream_binding(")
@@ -63609,7 +63752,7 @@ mod tests {
             .split_once("\nfn health_response(")
             .expect("CONNECT handler terminator")
             .0;
-        assert!(connect.contains("forward_absolute_request_to("));
+        assert!(connect.contains("forward_absolute_request_to_with_connect("));
         assert!(!connect.contains("prepare_upstream_for_buffered_forward("));
     }
 
@@ -66698,7 +66841,11 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing terminator for {name}"))
                 .0;
             let typed_guard = body
-                .find("let (decision, mut release_authorization) = decide_internal_for_forward_with_shadow(")
+                .find(if name == "fn forward_absolute_request_inner_with_prepared<'a>(" {
+                    "let (mut decision, mut release_authorization) = {"
+                } else {
+                    "let (decision, mut release_authorization) = decide_internal_for_forward_with_shadow("
+                })
                 .unwrap_or_else(|| panic!("{name} does not receive the typed reservation guard"));
             let encoding_strip = body
                 .find("strip_identity_request_content_encoding(&request.headers)")
@@ -67101,7 +67248,7 @@ mod tests {
             .expect("decision function terminator")
             .0;
         let reserve = decision
-            .find("request_release_authorization(")
+            .find("request_release_authorization_with_connect(")
             .expect("atomic reserve request");
         let validation = decision[reserve..]
             .find("validate_requested_release_authorization(")
@@ -67126,7 +67273,7 @@ mod tests {
             .find("let mut release_authorization = ReleaseAuthorizationGuard::new_authenticated(")
             .expect("outbound binding guard");
         let send = reserve_transport
-            .find("post_release_authorization_http(")
+            .find("post_release_authorization_http_on_deadline(")
             .expect("reserve transport send");
         assert!(guard < send);
         assert!(reserve < validation);

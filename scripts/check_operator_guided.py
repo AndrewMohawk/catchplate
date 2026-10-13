@@ -171,6 +171,26 @@ def audit_pairs(rows, scope, credential, observation):
     return {key: value for key, value in pairs.items() if set(value) == {START, RELEASE}}
 
 
+def validate_connect(kind, event, scope):
+    require(event.get("method") == "CONNECT" and event.get("target") == AUTHORITY,
+            "guided CONNECT target differs")
+    if kind == CONNECT:
+        require(event.get("policy_hash") == scope[2] and event.get("principal_id") == scope[0]
+            and event.get("outcome") == "established" and event.get("status_code") == 200,
+            "guided established CONNECT scope differs")
+    else:
+        # With the sole rule revoked the compiled policy has no app principal.
+        # Rust denies before authentication and intentionally emits null scope;
+        # the separately checked loaded policy and phase cutoff bind this test.
+        require(kind == CONNECT_DENIED and event.get("outcome") == "denied"
+            and event.get("status_code") == 403 and event.get("action") == "deny"
+            and event.get("reason") == "client principal denied"
+            and all(key in event and event[key] is None for key in
+                ("policy_hash", "principal_id", "route_ids", "authority"))
+            and event.get("payload") == {"authority": AUTHORITY, "client_ip": "127.0.0.1",
+                "error": "client_principal_denied"}, "guided revoked CONNECT denial differs")
+
+
 def validate_reload(event, initial_policy, granted_hash, revoked_hash):
     # The real empty policy retains operator.empty, so both publications have
     # one route. Authority identity, not route count, selects the transition.
@@ -348,11 +368,7 @@ class GuidedCheck(OperatorCatalogCheck):
                     "guided lease escaped authorized scope")
                 leases[event["purpose"]] += 1
             elif kind in {CONNECT, CONNECT_DENIED}:
-                require(event.get("method") == "CONNECT" and event.get("target") == AUTHORITY
-                    and event.get("policy_hash") == (self.scope[2] if kind == CONNECT else self.policy_hash)
-                    and (kind != CONNECT or event.get("principal_id") == self.scope[0])
-                    and event.get("outcome") == ("established" if kind == CONNECT else "denied"),
-                    "guided CONNECT audit differs")
+                validate_connect(kind, event, self.scope)
             elif kind == RELOAD:
                 validate_reload(event, self.initial["policy"], self.scope[2], self.policy_hash)
         require(leases["dispatchSecret"] >= 1 and sum(leases.values()) <= 32, "guided lease bounds differ")

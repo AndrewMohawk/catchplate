@@ -163,6 +163,30 @@ class GuidedProtocolTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(CheckFailure):
                 exercise({**catalog, key: value})
 
+    def test_connect_audit_binds_success_but_preserves_exact_unauthenticated_denial(self):
+        scope = ("agent:operator-demo:" + IDS["application"], "route", DIGESTS[2])
+        positive = {"method": "CONNECT", "target": checker.AUTHORITY, "policy_hash": scope[2],
+            "principal_id": scope[0], "outcome": "established", "status_code": 200}
+        negative = {"method": "CONNECT", "target": checker.AUTHORITY, "policy_hash": None,
+            "principal_id": None, "route_ids": None, "authority": None, "outcome": "denied",
+            "action": "deny", "status_code": 403, "reason": "client principal denied",
+            "payload": {"authority": checker.AUTHORITY, "client_ip": "127.0.0.1", "error": "client_principal_denied"}}
+        checker.validate_connect(checker.CONNECT, positive, scope)
+        checker.validate_connect(checker.CONNECT_DENIED, negative, scope)
+        for kind, original in ((checker.CONNECT, positive), (checker.CONNECT_DENIED, negative)):
+            for key in original:
+                for value in ("unrelated", None):
+                    if value == original[key]:
+                        continue
+                    with self.subTest(kind=kind, key=key), self.assertRaises(CheckFailure):
+                        checker.validate_connect(kind, {**original, key: value}, scope)
+        for key in ("policy_hash", "principal_id", "route_ids", "authority"):
+            changed = dict(negative); changed.pop(key)
+            with self.assertRaises(CheckFailure):
+                checker.validate_connect(checker.CONNECT_DENIED, changed, scope)
+        with self.assertRaises(CheckFailure):
+            checker.validate_connect("unexpected", negative, scope)
+
     def test_reload_joins_exact_hash_chain_and_sequence_with_empty_sentinel(self):
         create = {"routes": 1, "policy_hash": DIGESTS[2], "previous_policy_hash": DIGESTS[1], "policy_sequence": 2}
         revoke = {"routes": 1, "policy_hash": DIGESTS[3], "previous_policy_hash": DIGESTS[2], "policy_sequence": 3}

@@ -85,6 +85,25 @@ fixture controls pass. This needs no Rust rebuild. Full restart/refresh,
 exhaustion/reconnect and separate fault-lane acceptance remain open; these
 three successful requests are partial evidence, not deployment approval.
 
+Candidate `6235402e` then passed the complete A+B run in
+`x-quota-sdk-keyfix.nEItdQ2X` (191.455 seconds including cleanup): seven actual
+SDK phases, four allowed posts, three denied attempts, one expiry-triggered
+refresh, and unchanged quota/key/policy state across the same-ID app/gate
+restart. Two applications share the limit; disconnect/reconnect with a new
+credential ID does not reset it. The audit chain and four reservation/claim
+joins passed. All owned containers were removed. This is isolated TLS-provider
+evidence, not real-X acceptance. CI `38367263218` also passed 51/51 suites.
+
+The separate first dropped-ACK attempt, `x-quota-fault-drop.9aIhKfH0`, stopped
+before gate or SDK execution. Its relay started, but Docker's first health
+probe exceeded its three-second timeout; the next probe was scheduled after
+the runner's six-second startup cutoff. Cleanup succeeded after 37.724 seconds.
+The fixture-only wait is now twelve seconds (fifteen-second outer command
+bound), allowing that next bounded probe. The original 75-second preparation,
+300-second keeper, 240-second relay, 180-second checker, token lifetimes and
+five-second claim deadline remain unchanged. Both actual fault lanes and
+retained-data rollout remain required.
+
 The rendered account/setup suite subsequently passed all ten groups with eight
 masked 1280/390-pixel screenshots and unchanged source. It verified default
 omission, exact limited grants, invalid input and capability withdrawal. The

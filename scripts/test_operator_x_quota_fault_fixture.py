@@ -190,7 +190,13 @@ class FaultFixtureTests(unittest.TestCase):
                 value.start_app_then_gate(["docker", "compose"])
                 self.assertEqual([row[0] for row in calls], ["app-start", "publication", "fault-relay-start", "gate-start"])
                 self.assertEqual(calls[2][1], (["docker", "compose", "up", "-d", "--no-build", "--pull", "never",
-                    "--no-deps", "--wait", "--wait-timeout", "6", "quota-relay"], 9))
+                    "--no-deps", "--wait", "--wait-timeout", "12", "quota-relay"], 15))
+                # Permit one timed-out cold probe and the next bounded probe;
+                # do not reset any relay, keeper, checker or credential clock.
+                self.assertGreater(12, 1 + 3 + 3 + 3)
+                self.assertEqual((recipe.PRECHECK_SECONDS, recipe.KEEPER_SECONDS,
+                    recipe.CHECKER_SECONDS, recipe.FAULT_RELAY_SECONDS,
+                    recipe.INITIAL_TOKEN_SECONDS, runner.WORK_SECONDS), (75, 300, 180, 240, 120, 390))
             else:
                 with self.assertRaises(ValueError): value.start_app_then_gate(["docker", "compose"])
                 self.assertEqual([row[0] for row in calls], ["app-start", "publication"] +

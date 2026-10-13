@@ -210,8 +210,11 @@ class XPostRun(NpmExampleRun):
         require(set(names) == {"network", "provider", "serverware"}, "gate must not exist before app publication")
         self.initial_view = self.public_view(names["serverware"]["Id"], "app", "before-gate", initial=True)
         if getattr(self.args, "quota_fault", None) is not None:
+            # One cold health probe can consume its 3s timeout. The next probe
+            # starts after the 3s interval; the old 6s wait expired before it.
+            # Keep the original keeper/precheck and all claim/token clocks.
             self.command("fault-relay-start", compose + ["up", "-d", "--no-build", "--pull", "never", "--no-deps",
-                "--wait", "--wait-timeout", "6", "quota-relay"], 9)
+                "--wait", "--wait-timeout", "12", "quota-relay"], 15)
         self.command("gate-start", compose + ["up", "-d", "--no-build", "--pull", "never", "--no-deps",
             "--wait", "--wait-timeout", "15", "decision-gate-rs"], 20)
 

@@ -166,7 +166,7 @@ user-agent</textarea><p class="small muted">Provider authentication and JSON Con
       <h1 id="credentials-title">Accounts &amp; keys</h1><p class="intro">Your saved provider accounts and API keys, and the applications permitted to use them. To connect an app and set its permission together, use <a href="#connect">Connect an app</a>. Apps never receive the provider secret.</p>
       <label for="credential-storage-type">What would you like to save?</label>
       <select id="credential-storage-type" disabled><option value="manual">Manual API key</option><option id="credential-storage-aws-option" value="aws" disabled>AWS credentials — storage only</option></select>
-      <p id="aws-storage-availability" class="small muted">AWS credential storage is unavailable until advertised by this deployment.</p>
+      <p id="aws-storage-availability" class="small muted" hidden>AWS credential storage is unavailable until advertised by this deployment.</p>
       <form id="aws-credential-form" class="card" autocomplete="off" hidden><fieldset id="aws-credential-fields" disabled>
         <h2>Save AWS credentials</h2><p class="notice">Stored only — ECR publishing not available yet.</p>
         <label for="aws-credential-name">Credential name</label><input id="aws-credential-name" maxlength="128" required>

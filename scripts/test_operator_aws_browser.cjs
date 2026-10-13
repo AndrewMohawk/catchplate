@@ -182,6 +182,32 @@ async function screenshot(page, name) {
 }
 
 const tests = [
+  ['AWS storage guidance follows the selected credential type on desktop and mobile', async browser => {
+    const initialHtml = await readFile(join(ROOT, 'serverware/operator_demo_web/index.html'), 'utf8');
+    assert.match(initialHtml, /<p\b[^>]*\bid="aws-storage-availability"[^>]*\bhidden(?:\s|>)/,
+      'AWS-only guidance starts hidden for the default manual selection');
+    for (const width of [1280, 390]) await fixture(browser, {credentials: []}, async (page, state, observed) => {
+      await page.setViewportSize({width, height: 960}); await accounts(page);
+      const selector = page.locator('#credential-storage-type');
+      const guidance = page.locator('#aws-storage-availability');
+      assert.equal(await selector.inputValue(), 'manual');
+      assert(!await guidance.isVisible()); assert(await page.locator('#credential-form').isVisible());
+      assert(!await page.locator('#aws-credential-form').isVisible());
+      await screenshot(page, 'manual-guidance-' + width);
+      await selector.selectOption('aws');
+      assert(await guidance.isVisible()); assert(await page.locator('#aws-credential-form').isVisible());
+      assert(!await page.locator('#credential-form').isVisible());
+      assert.equal(await guidance.innerText(), 'Stored only — ECR publishing not available yet. Save or replace credentials only. No AWS validation request, application access or automatic renewal.');
+      await screenshot(page, 'aws-guidance-' + width);
+      await selector.selectOption('manual'); assert(!await guidance.isVisible());
+      await selector.selectOption('aws'); state.awsCapability = null; await refresh(page);
+      assert.equal(await selector.inputValue(), 'aws'); assert(await guidance.isVisible());
+      assert.equal(await guidance.innerText(), 'AWS credential storage is not advertised by this deployment. Manual header credentials are not a substitute.');
+      assert(await page.locator('#aws-credential-save').isDisabled());
+      await selector.selectOption('manual'); assert(!await guidance.isVisible());
+      assert(await page.locator('#credential-form').isVisible()); assert.equal(observed.posts.length, 0);
+    });
+  }],
   ...['long_term', 'session'].map(kind => [kind + ' complete create clears fields before response and grants nothing', browser =>
     fixture(browser, {credentials: [], hold: true}, async (page, state, observed, control) => {
       const before = clone({applications: state.applications, rules: state.rules, policy: catalog(state).policy});

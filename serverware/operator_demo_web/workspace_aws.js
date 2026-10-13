@@ -86,6 +86,7 @@ function createAwsCredentialsView(workspace) {
     const available = awsStorageAvailable(workspace.state.catalog);
     selector.disabled = !writable(); element('credential-storage-aws-option').disabled = !available;
     form.hidden = selector.value !== 'aws'; element('credential-form').hidden = selector.value === 'aws';
+    element('aws-storage-availability').hidden = selector.value !== 'aws';
     element('credential-fields').disabled = selector.value !== 'manual' || !workspace.ready('credentials');
     element('aws-credential-fields').disabled = !available || !workspace.ready('credentials');
     element('aws-storage-availability').textContent = available ? operatorAwsNotice +

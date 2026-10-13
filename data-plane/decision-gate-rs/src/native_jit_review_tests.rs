@@ -4,10 +4,10 @@ use super::*;
 #[test]
 fn request_deadline_is_frozen_conservatively_before_io_and_not_renewed() {
     assert!(freeze_deadline(Instant::now()).is_err());
-    let before = credential_currentness::boottime_ns().unwrap();
+    let before = native_canary_transport::boottime_ns().unwrap();
     let original = Instant::now() + Duration::from_secs(1);
     let frozen = freeze_deadline(original).unwrap();
-    let after = credential_currentness::boottime_ns().unwrap();
+    let after = native_canary_transport::boottime_ns().unwrap();
     assert!(before < frozen && frozen <= after + 1_000_000_000);
     let source = include_str!("native_release_jit_preparation.rs");
     let actual = source.split("pub(super) fn prepare_and_refuse(").nth(1).unwrap();

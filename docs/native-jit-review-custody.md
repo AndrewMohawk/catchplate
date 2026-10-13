@@ -124,5 +124,16 @@ and `521ffbdc9138960aeb756cf0f5cff3b54e402ea3d3bb99a65005e2558a2b31f2`.
 
 The ordinary CI roster now includes both new suites. Its 12 orchestration
 controls also passed; this does not run or verify the full ordinary suite.
-The Rust source has independent review, but compilation and its selected
-30 library / 161 binary / 14 external API controls are still pending.
+At exact source `fb370844`, the Rust library-test build and all 30 selected
+library controls passed. The subsequent binary-test compilation stopped with
+five `E0425` errors: the new binary module and its tests referenced a BOOTTIME
+helper in the wrong module. The correction uses the existing checked
+`native_canary_transport::boottime_ns()` reader, preserving the same deadline
+ordering and error propagation; corrected compilation has not yet run.
+The 161 binary controls and 14 external API controls remain unexecuted.
+
+The retained attempt is `native-jit-purpose-rust.ipFFLqFI`, with source-pins
+SHA-256 `45058f352b6155bb7143b2d7d551c16e439796daead31f6814762ea68208e2d8`.
+It reused an independent warm cache, launched no normal build or deployment,
+and preserved the failed compiler evidence. A passed library test does not
+establish successful binary compilation or native approval execution.

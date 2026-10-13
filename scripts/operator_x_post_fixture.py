@@ -430,7 +430,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = do_HEAD = handle_request
 
 
-def setup():
+def setup(*, fault_gate=False):
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec
@@ -465,7 +465,7 @@ def setup():
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
-    network.prepare_network_files()
+    network.prepare_network_files(fault_gate=fault_gate)
     print('{"ok":true,"syntheticOnly":true,"providerContact":false}', flush=True)
 
 
@@ -479,7 +479,7 @@ def main():
     require(args.lifetime_seconds == network.KEEPER_SECONDS)
     if args.setup:
         signal.alarm(30)
-        setup()
+        setup(fault_gate=args.profile == "fault")
         return
     from scripts.operator_google_fixture import _BoundedServer, _ControlFront
     require(os.geteuid() == os.getegid() == 10001)

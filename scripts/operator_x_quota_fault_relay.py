@@ -20,11 +20,14 @@ import time
 import uuid
 from pathlib import Path
 
-LISTEN, APP = ("127.0.0.1", 3001), ("127.0.0.1", 3000)
+DATA, CONTROL, APP = ("127.0.0.2", 3000), ("127.0.0.1", 3001), ("127.0.0.1", 3000)
 LEASE = "/api/data-plane/credential-leases"
 CLAIM = "/api/data-plane/operator-x-quota/claim"
+AUDIT = "/api/data-plane/audit"
+ATTESTATION = re.compile(r"/attestation\?nonce=decision-gate-policy-trust-[1-9][0-9]{0,9}-[1-9][0-9]{0,19}")
 ARM, STATUS, RELEASE = "/__fault/arm", "/__fault/status", "/__fault/release"
 MAX_HEAD, MAX_REQUEST, MAX_RESPONSE = 16 * 1024, 32 * 1024, 256 * 1024
+MAX_AUDIT_REQUEST, MAX_AUDIT_RESPONSE, MAX_ATTESTATION_RESPONSE = 1536 * 1024, 32 * 1024, 64 * 1024
 REQUEST_HEADERS = {"host", "content-length", "content-type", "accept", "accept-encoding",
     "connection", "user-agent", "x-serverware-data-plane-token", "x-serverware-response-nonce"}
 QUOTA_VERSION = "serverware.operatorXQuotaCredentialLeaseRequest/v1"
@@ -97,6 +100,8 @@ def read_message(stream, deadline, maximum):
         raw += part
     head, body = raw.split(b"\r\n\r\n", 1)
     first, fields, length = headers(head)
+    if callable(maximum):
+        maximum = maximum(first, fields)
     require(length <= maximum and len(body) <= length)
     while len(body) < length:
         remaining = deadline - time.monotonic()
@@ -108,22 +113,43 @@ def read_message(stream, deadline, maximum):
     return head + b"\r\n\r\n" + body, first, fields, body
 
 
-def admit(first, fields, body):
-    require(first in {b"POST " + path.encode() + b" HTTP/1.1" for path in (LEASE, CLAIM, ARM, RELEASE)}
-        | {b"GET " + STATUS.encode() + b" HTTP/1.1"})
-    path = first.split(b" ")[1].decode("ascii")
-    require(set(fields) <= REQUEST_HEADERS and fields.get("host") in {"serverware:3001", "127.0.0.1:3001"})
-    if path == STATUS:
-        require(not body and "x-serverware-data-plane-token" not in fields)
+def request_limit(first, fields, listener):
+    """Admit a fixed listener/route before reading any potentially large body."""
+    require(listener in {DATA, CONTROL} and set(fields) <= REQUEST_HEADERS)
+    parts = first.split(b" ")
+    require(len(parts) == 3 and parts[2] == b"HTTP/1.1")
+    method, path = parts[0], parts[1].decode("ascii")
+    if listener == DATA:
+        require(fields.get("host") == "serverware:3000")
+        empty = method == b"GET" and ATTESTATION.fullmatch(path) is not None
+        require(empty or method == b"POST" and path in {LEASE, CLAIM, AUDIT})
     else:
-        require(fields.get("content-type") == "application/json" and "content-length" in fields
-            and len(body) <= MAX_REQUEST)
-    if path in {LEASE, CLAIM}:
+        require(fields.get("host") == "127.0.0.1:3001")
+        empty = method == b"GET" and path == STATUS
+        require(empty or method == b"POST" and path in {ARM, RELEASE})
+    if empty:
+        require(fields.get("content-length", "0") == "0" and "content-type" not in fields)
+    else:
+        require(fields.get("content-type") == "application/json"
+            and re.fullmatch(r"0|[1-9][0-9]{0,6}", fields.get("content-length", "")) is not None)
+    if listener == DATA and not empty:
         require(0 < len(fields.get("x-serverware-data-plane-token", "")) <= 512
             and re.fullmatch(r"[A-Za-z0-9_-]{43}", fields.get("x-serverware-response-nonce", "")) is not None)
     else:
         require("x-serverware-data-plane-token" not in fields and "x-serverware-response-nonce" not in fields)
+    return 0 if empty else (MAX_AUDIT_REQUEST if path == AUDIT else MAX_REQUEST)
+
+
+def admit(first, fields, body, listener=DATA):
+    maximum = request_limit(first, fields, listener)
+    require(len(body) <= maximum and len(body) == int(fields.get("content-length", "0")))
+    path = first.split(b" ")[1].decode("ascii")
     return path
+
+
+def response_limit(path):
+    return (MAX_AUDIT_RESPONSE if path == AUDIT else
+        MAX_ATTESTATION_RESPONSE if ATTESTATION.fullmatch(path) else MAX_RESPONSE)
 
 
 def signed_ack(fields, body):
@@ -273,8 +299,9 @@ class Handler(socketserver.BaseRequestHandler):
         selected = False
         try:
             deadline = min(self.server.deadline, time.monotonic() + 3)
-            raw, first, fields, body = read_message(self.request, deadline, MAX_REQUEST)
-            path = admit(first, fields, body)
+            raw, first, fields, body = read_message(self.request, deadline,
+                lambda first, fields: request_limit(first, fields, self.server.listener))
+            path = admit(first, fields, body, self.server.listener)
             if path in {ARM, STATUS, RELEASE}:
                 state = self.server.state
                 result = state.status() if path == STATUS else (state.arm if path == ARM else state.release)(json_body(body))
@@ -283,11 +310,11 @@ class Handler(socketserver.BaseRequestHandler):
                 self.request.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
                     + str(len(payload)).encode() + b"\r\nConnection: close\r\n\r\n" + payload)
                 return
-            selected = self.server.state.before(path, body)
+            selected = path in {LEASE, CLAIM} and self.server.state.before(path, body)
             with socket.create_connection(APP, timeout=max(.001, deadline - time.monotonic())) as upstream:
                 upstream.settimeout(max(.001, deadline - time.monotonic()))
                 upstream.sendall(raw)
-                response, first, response_fields, response_body = read_message(upstream, deadline, MAX_RESPONSE)
+                response, first, response_fields, response_body = read_message(upstream, deadline, response_limit(path))
             require(re.fullmatch(rb"HTTP/1\.1 [1-5][0-9]{2} [ -~]*", first) is not None)
             if selected:
                 response = self.server.state.response(path, response, int(first.split()[1]),
@@ -302,31 +329,44 @@ class Handler(socketserver.BaseRequestHandler):
             # No exception/input text, synthetic app response, replay or retry.
 
 
+class Budget:
+    """Both fixed listeners share the original lifetime and admission limits."""
+    def __init__(self, lifetime):
+        require(type(lifetime) is int and 1 <= lifetime <= 300)
+        self.deadline = time.monotonic() + lifetime
+        self.slots, self.accepted, self.lock = threading.BoundedSemaphore(8), 0, threading.Lock()
+
+    def take(self):
+        with self.lock:
+            self.accepted += 1
+            return (self.accepted <= 128 and time.monotonic() < self.deadline
+                and self.slots.acquire(blocking=False))
+
+
 class Server(socketserver.ThreadingMixIn, socketserver.TCPServer):
     daemon_threads, allow_reuse_address, request_queue_size = True, False, 8
 
-    def __init__(self, state, lifetime):
-        require(type(lifetime) is int and 1 <= lifetime <= 300)
-        self.state, self.deadline = state, time.monotonic() + lifetime
-        self.slots, self.accepted = threading.BoundedSemaphore(8), 0
-        super().__init__(LISTEN, Handler)
+    def __init__(self, state, budget, listener):
+        require(type(budget) is Budget and listener in {DATA, CONTROL})
+        self.state, self.budget, self.listener = state, budget, listener
+        self.deadline = budget.deadline
+        super().__init__(listener, Handler)
 
     def process_request(self, request, address):
-        self.accepted += 1
-        if self.accepted > 128 or time.monotonic() >= self.deadline or not self.slots.acquire(blocking=False):
+        if not self.budget.take():
             self.shutdown_request(request)
             return
         try:
             super().process_request(request, address)
         except BaseException:
-            self.slots.release()
+            self.budget.slots.release()
             raise
 
     def process_request_thread(self, request, address):
         try:
             super().process_request_thread(request, address)
         finally:
-            self.slots.release()
+            self.budget.slots.release()
 
     def handle_error(self, *_):
         pass
@@ -345,15 +385,21 @@ def main():
     stopped = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stopped.set())
-    with Server(State(emit=lambda value: print(encoded(value).decode(), flush=True)), args.lifetime_seconds) as server:
-        worker = threading.Thread(target=server.serve_forever, daemon=True)
-        worker.start()
+    state = State(emit=lambda value: print(encoded(value).decode(), flush=True))
+    budget = Budget(args.lifetime_seconds)
+    with Server(state, budget, DATA) as data, Server(state, budget, CONTROL) as control:
+        servers = (data, control)
+        workers = [threading.Thread(target=server.serve_forever, daemon=True) for server in servers]
+        for worker in workers:
+            worker.start()
         try:
             print('{"ready":true,"syntheticOnly":true}', flush=True)
-            stopped.wait(args.lifetime_seconds)
+            stopped.wait(max(0, budget.deadline - time.monotonic()))
         finally:
-            server.shutdown()
-            worker.join(timeout=4)
+            for server in servers:
+                server.shutdown()
+            for worker in workers:
+                worker.join(timeout=4)
 
 
 if __name__ == "__main__":

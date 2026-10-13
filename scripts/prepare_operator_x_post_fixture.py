@@ -199,18 +199,24 @@ def build(source, binary, initializer, root, node, node_modules, python_runtime,
         bind(LIBATOMIC, "/usr/lib/x86_64-linux-gnu/libatomic.so.1"),
         bind(runtime / "upstream-data/x/ca.pem", "/x-public/ca.pem"), bind(root / "dependencies.json", "/client-dependencies.json")]
     if quota or fault_mode is not None:
-        # The one explicit feature flag is the only environment change.
-        # Clocks, mounts, issuer and trust remain unchanged.
+        # The quota profile changes only this flag; fault wiring is below.
+        # Clocks, issuer and trust remain unchanged in both profiles.
         for service in (app, gate):
             service["environment"]["SERVERWARE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED"] = "1"
     if quota:
         provider["command"] += ["--profile", "quota"]
         check["command"][0] = "/app/scripts/check_operator_x_quota.py"
     if fault_mode is not None:
+        from scripts.operator_x_post_fixture_network import FAULT_GATE_HOSTS_NAME
+        services["x-post-pki"]["command"] += ["--profile", "fault"]
         provider["command"] += ["--profile", "fault"]
         check["command"][0] = "/app/scripts/check_operator_x_quota_fault.py"
         check["command"] += ["--fault-mode", fault_mode]
-        gate["environment"]["SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL"] = "http://serverware:3001/api/data-plane/credential-leases"
+        app["environment"]["SERVERWARE_WEB_HOST"] = "127.0.0.1"
+        gate_hosts = [mount for mount in gate["volumes"] if mount["target"] == "/etc/hosts"]
+        require(gate_hosts == [bind(runtime / "upstream-data/x-network/hosts", "/etc/hosts")],
+            "original gate hosts mount differs")
+        gate_hosts[0]["source"] = str(runtime / "upstream-data/x-network" / FAULT_GATE_HOSTS_NAME)
         relay = services["quota-relay"] = deepcopy(provider)
         relay.update(command=["python", "-B", "-m", "scripts.operator_x_quota_fault_relay",
             "--lifetime-seconds", str(FAULT_RELAY_SECONDS)],

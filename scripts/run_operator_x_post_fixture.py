@@ -440,6 +440,9 @@ class XPostRun(NpmExampleRun):
             require(actual == args.expected_binary_sha256)
             self.command("network-proof", ["docker", "exec", identities["provider"], "python", "-B", "-c",
                 "from scripts.operator_x_post_fixture_network import assert_isolated_network; assert_isolated_network()"], 5)
+            if fault_mode is not None:
+                self.command("fault-gate-network-proof", ["docker", "exec", identities["decision-gate-rs"], "python", "-B", "-c",
+                    "from scripts.operator_x_post_fixture_network import assert_isolated_network; assert_isolated_network(view='fault-gate')"], 5)
             # Same original keeper cutoff; no service or token timer is reset.
             self.deadline = self.admit_checker_window(identities["edge"], keeper_anchor=keeper_anchor, work_anchor=begun)
             if fault_mode is not None:

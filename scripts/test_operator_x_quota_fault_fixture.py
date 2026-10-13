@@ -12,10 +12,12 @@ import io
 import json
 import os
 from pathlib import Path
+import stat
 import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 
 def forbid_runtime(event, args):
@@ -26,6 +28,7 @@ def forbid_runtime(event, args):
 
 sys.addaudithook(forbid_runtime)
 from scripts import operator_x_post_fixture as provider
+from scripts import operator_x_post_fixture_network as network
 from scripts import prepare_operator_x_post_fixture as recipe
 from scripts import run_operator_x_post_fixture as runner
 from scripts.test_operator_x_post_fixture import Flow
@@ -79,13 +82,25 @@ class FaultFixtureTests(unittest.TestCase):
             for name in ("serverware", "decision-gate-rs"):
                 services[name]["environment"]["SERVERWARE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED"] = "1"
             services["provider"]["command"] += ["--profile", "fault"]
+            services["x-post-pki"]["command"] += ["--profile", "fault"]
             services["check"]["command"][0] = "/app/scripts/check_operator_x_quota_fault.py"
             services["check"]["command"] += ["--fault-mode", mode]
-            services["decision-gate-rs"]["environment"]["SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL"] = \
-                "http://serverware:3001/api/data-plane/credential-leases"
+            services["serverware"]["environment"]["SERVERWARE_WEB_HOST"] = "127.0.0.1"
+            gate_hosts = next(row for row in services["decision-gate-rs"]["volumes"]
+                if row["target"] == "/etc/hosts")
+            gate_hosts["source"] = str(ARGS[3] / "runtime/upstream-data/x-network/hosts-fault-gate")
             without_relay = deepcopy(config)
             relay = without_relay["services"].pop("quota-relay")
             self.assertEqual(without_relay, expected)
+            self.assertEqual(config["services"]["decision-gate-rs"]["environment"]
+                ["SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL"],
+                "http://serverware:3000/api/data-plane/credential-leases")
+            for name, service in config["services"].items():
+                for mount in service["volumes"]:
+                    if mount["target"] == "/etc/hosts":
+                        leaf = "hosts-fault-gate" if name == "decision-gate-rs" else "hosts"
+                        self.assertEqual(mount, recipe.bind(ARGS[3] / "runtime/upstream-data/x-network" / leaf,
+                            "/etc/hosts"))
             self.assertEqual(set(config["services"]), set(original["services"]) | {"quota-relay"})
             self.assertEqual(relay["command"], ["python", "-B", "-m", "scripts.operator_x_quota_fault_relay",
                 "--lifetime-seconds", "240"])
@@ -115,6 +130,94 @@ class FaultFixtureTests(unittest.TestCase):
         with self.assertRaises(ValueError): recipe.build(*ARGS, **PINS, quota=True, fault_mode="drop-ack")
         self.assertEqual((recipe.INITIAL_TOKEN_SECONDS, recipe.CHECKER_SECONDS, recipe.KEEPER_SECONDS,
             recipe.EDGE_SECONDS, recipe.FAULT_RELAY_SECONDS, runner.WORK_SECONDS), (120, 180, 300, 240, 240, 390))
+
+    def test_fault_gate_hosts_change_only_serverware_and_recipe_refuses_other_wiring(self):
+        def mapping(raw):
+            result = {}
+            for line in raw.decode("ascii").splitlines():
+                address, *names = line.split()
+                for name in names:
+                    self.assertNotIn(name, result)
+                    result[name] = address
+            return result
+        original = mapping(network.HOSTS)
+        self.assertEqual(original["serverware"], "127.0.0.1")
+        self.assertEqual(network.FAULT_GATE_HOSTS_NAME, "hosts-fault-gate")
+        self.assertEqual(network.FAULT_GATE_IP, "127.0.0.2")
+        self.assertEqual(mapping(network.FAULT_GATE_HOSTS), dict(original, serverware="127.0.0.2"))
+        config = recipe.build(*ARGS, **PINS, fault_mode="drop-ack")
+        for target, value in (("source", "/synthetic/wrong-hosts"), ("read_only", False)):
+            changed = deepcopy(config)
+            mount = next(row for row in changed["services"]["decision-gate-rs"]["volumes"]
+                if row["target"] == "/etc/hosts")
+            mount[target] = value
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                recipe.validate(changed, *ARGS, **PINS, fault_mode="drop-ack")
+        for service, field, value in (("serverware", "SERVERWARE_WEB_HOST", "0.0.0.0"),
+                ("decision-gate-rs", "SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL",
+                    "http://serverware:3001/api/data-plane/credential-leases")):
+            changed = deepcopy(config); changed["services"][service]["environment"][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                recipe.validate(changed, *ARGS, **PINS, fault_mode="drop-ack")
+
+    def test_offline_pki_selects_extra_gate_hosts_only_for_fault_profile(self):
+        for profile in ("sdk", "quota", "fault"):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "x-network"
+                with patch.object(network, "Path", side_effect=lambda value:
+                        root if value == "/upstream-data/x-network" else Path(value)), \
+                        patch.object(network.os, "geteuid", return_value=10001), \
+                        patch.object(network, "assert_isolated_network") as isolation:
+                    network.prepare_network_files(fault_gate=profile == "fault")
+                    isolation.assert_called_once_with(attached=False)
+                    expected = {"hosts": network.HOSTS, "resolv.conf": network.RESOLV}
+                    if profile == "fault":
+                        expected["hosts-fault-gate"] = network.FAULT_GATE_HOSTS
+                    self.assertEqual({path.name: path.read_bytes() for path in root.iterdir()}, expected)
+                    self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+                    self.assertTrue(all(stat.S_IMODE(path.stat().st_mode) == 0o444
+                        and path.stat().st_nlink == 1 for path in root.iterdir()))
+                    with self.assertRaises(ValueError):
+                        network.prepare_network_files(fault_gate=profile == "fault")
+                with patch.object(sys, "argv", ["fixture", "--setup", "--profile", profile]), \
+                        patch.object(provider, "setup") as setup, patch.object(provider.os, "umask"), \
+                        patch.object(provider.signal, "alarm"):
+                    provider.main()
+                    setup.assert_called_once_with(fault_gate=profile == "fault")
+        setup = next(node for node in ast.parse(Path(provider.__file__).read_text()).body
+            if isinstance(node, ast.FunctionDef) and node.name == "setup")
+        calls = [node for node in ast.walk(setup) if isinstance(node, ast.Call)
+            and ast.unparse(node.func) == "network.prepare_network_files"]
+        self.assertEqual([ast.unparse(node) for node in calls],
+            ["network.prepare_network_files(fault_gate=fault_gate)"])
+
+    def test_gate_network_proof_is_explicit_and_provider_view_remains_strict(self):
+        def prove(view, hosts, *, wrong_serverware=False):
+            mapping = {name: line.split()[0] for line in hosts.decode("ascii").splitlines()
+                for name in line.split()[1:]}
+            if wrong_serverware:
+                mapping["serverware"] = "127.0.0.1"
+            paths = {"/etc/hosts": hosts, "/etc/resolv.conf": network.RESOLV}
+            with patch.object(network.isolated, "assert_isolated_network") as base, \
+                    patch.object(network, "Path", side_effect=lambda path: Mock(read_bytes=Mock(return_value=paths[path]))), \
+                    patch.object(network.socket, "socket", return_value=MagicMock()) as socket_factory, \
+                    patch.object(network.socket, "getaddrinfo", side_effect=lambda host, *args:
+                        [(network.socket.AF_INET, network.socket.SOCK_STREAM, 6, "", (mapping[host], 443))]):
+                network.assert_isolated_network(view=view)
+                base.assert_called_once_with(attached=False)
+                calls = socket_factory.return_value.__enter__.return_value.bind.call_args_list
+                self.assertEqual([row.args for row in calls], [((network.FIXTURE_IP, 0),)] +
+                    ([(("127.0.0.2", 0),)] if view == "fault-gate" else []))
+        prove("ordinary", network.HOSTS)
+        prove("fault-gate", network.FAULT_GATE_HOSTS)
+        for view, hosts, wrong in (("ordinary", network.FAULT_GATE_HOSTS, False),
+                ("fault-gate", network.HOSTS, False), ("fault-gate", network.FAULT_GATE_HOSTS, True),
+                ("fault-gate", network.FAULT_GATE_HOSTS + b"127.0.0.1 extra\n", False),
+                ("alternate", network.HOSTS, False)):
+            with self.subTest(view=view, wrong=wrong), self.assertRaises(ValueError):
+                prove(view, hosts, wrong_serverware=wrong)
+        with self.assertRaises(ValueError):
+            network.assert_isolated_network(attached=False, view="fault-gate")
 
     def test_provider_one_consent_original_expiry_zero_posts_and_two_revocations(self):
         flow = fault_flow(); token = flow.connect()

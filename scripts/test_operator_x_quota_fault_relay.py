@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts import operator_x_quota_fault_relay as relay
@@ -63,10 +64,10 @@ def reply(value, status=200):
 
 def request(path, value=None):
     body = b"" if value is None else relay.encoded(value)
-    fields = {"host": "serverware:3001"}
+    fields = {"host": "127.0.0.1:3001" if path in {relay.ARM, relay.STATUS, relay.RELEASE} else "serverware:3000"}
     if value is not None:
         fields.update({"content-type": "application/json", "content-length": str(len(body))})
-    if path in {relay.LEASE, relay.CLAIM}:
+    if path in {relay.LEASE, relay.CLAIM, relay.AUDIT}:
         fields.update({"x-serverware-data-plane-token": SECRET, "x-serverware-response-nonce": "n" * 43})
     first = ("GET " if value is None else "POST ") + path + " HTTP/1.1"
     raw = (first + "\r\n" + "".join(f"{k}: {v}\r\n" for k, v in fields.items()) + "\r\n").encode() + body
@@ -117,6 +118,107 @@ class Pure(unittest.TestCase):
         for head in (b'HTTP/1.1 200 OK\r\nContent-Length: 1\r\ncontent-length: 1',
                 b'HTTP/1.1 200 OK\r\nContent-Length: 01', b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked'):
             with self.assertRaises(ValueError): relay.headers(head)
+
+    def test_fixed_data_control_separation_and_attestation_query(self):
+        self.assertEqual((relay.DATA, relay.CONTROL, relay.APP),
+            (("127.0.0.2", 3000), ("127.0.0.1", 3001), ("127.0.0.1", 3000)))
+        for path, value, listener in ((relay.STATUS, None, relay.CONTROL),
+                (relay.ARM, {}, relay.CONTROL), (relay.RELEASE, {}, relay.CONTROL),
+                (relay.LEASE, {}, relay.DATA), (relay.CLAIM, {}, relay.DATA),
+                (relay.AUDIT, {}, relay.DATA),
+                ("/attestation?nonce=decision-gate-policy-trust-1-1234567890123", None, relay.DATA)):
+            _, first, fields, body = request(path, value)
+            self.assertEqual(relay.admit(first, fields, body, listener), path)
+            other = relay.CONTROL if listener == relay.DATA else relay.DATA
+            with self.assertRaises(ValueError): relay.admit(first, fields, body, other)
+            # Correcting Host cannot move a route across the listener boundary.
+            host = "serverware:3000" if other == relay.DATA else "127.0.0.1:3001"
+            with self.assertRaises(ValueError): relay.admit(first, {**fields, "host": host}, body, other)
+        for path in ("/attestation", "/attestation?nonce=x", "/attestation?nonce=decision-gate-policy-trust-01-1",
+                "/attestation?nonce=decision-gate-policy-trust-1-1&extra=1", "/healthz", "/api/operator-demo"):
+            _, first, fields, body = request(path)
+            with self.assertRaises(ValueError): relay.admit(first, fields, body)
+        _, first, fields, body = request("/attestation?nonce=decision-gate-policy-trust-1-1")
+        for change in ({"content-length": "1"}, {"content-length": "00"}, {"content-type": "application/json"},
+                {"x-serverware-data-plane-token": SECRET}, {"x-serverware-response-nonce": "n" * 43}):
+            with self.assertRaises(ValueError): relay.admit(first, {**fields, **change}, body)
+        for path in (relay.AUDIT, relay.LEASE, relay.CLAIM):
+            _, first, fields, body = request(path, {})
+            for key in ("x-serverware-data-plane-token", "x-serverware-response-nonce"):
+                missing = dict(fields); del missing[key]
+                with self.assertRaises(ValueError): relay.admit(first, missing, body)
+
+    def test_route_specific_head_first_bounds_preserve_ack_limits(self):
+        class HeadSocket:
+            def __init__(self, raw): self.raw, self.calls = raw, 0
+            def settimeout(self, _): pass
+            def recv(self, _):
+                self.calls += 1
+                if self.calls > 1: raise AssertionError("oversized body must not be read")
+                return self.raw
+        for path, maximum in ((relay.LEASE, 32768), (relay.CLAIM, 32768), (relay.AUDIT, 1572864)):
+            _, first, fields, _ = request(path, {})
+            self.assertEqual(relay.request_limit(first, fields, relay.DATA), maximum)
+            fields["content-length"] = str(maximum + 1)
+            head = first + b"\r\n" + "".join(f"{k}: {v}\r\n" for k, v in fields.items()).encode() + b"\r\n"
+            stream = HeadSocket(head)
+            with self.assertRaises(ValueError):
+                relay.read_message(stream, time.monotonic() + 1,
+                    lambda first, fields: relay.request_limit(first, fields, relay.DATA))
+            self.assertEqual(stream.calls, 1)
+        self.assertEqual(relay.response_limit(relay.LEASE), 262144)
+        self.assertEqual(relay.response_limit(relay.CLAIM), 262144)
+        self.assertEqual(relay.response_limit(relay.AUDIT), 32768)
+        self.assertEqual(relay.response_limit("/attestation?nonce=decision-gate-policy-trust-1-1"), 65536)
+
+    def test_actual_handler_transparently_forwards_only_fixed_auxiliary_routes(self):
+        class MemorySocket:
+            def __init__(self, raw): self.raw, self.sent = raw, b""
+            def settimeout(self, _): pass
+            def recv(self, maximum):
+                raw, self.raw = self.raw[:maximum], self.raw[maximum:]
+                return raw
+            def sendall(self, raw): self.sent += raw
+            def __enter__(self): return self
+            def __exit__(self, *_): pass
+        state = relay.State()
+        original = state.status()
+        for path, value in ((relay.AUDIT, {"events": [], "inert_padding": "x" * 32768}),
+                ("/attestation?nonce=decision-gate-policy-trust-1-1234567890123", None)):
+            raw = request(path, value)[0]
+            response = reply({"actual_synthetic_body": path})[0]
+            downstream, upstream = MemorySocket(raw), MemorySocket(response)
+            server = type("Server", (), {"state": state, "listener": relay.DATA,
+                "deadline": time.monotonic() + 3})()
+            with mock.patch.object(relay.socket, "create_connection", return_value=upstream) as connect:
+                relay.Handler(downstream, ("127.0.0.1", 10000), server)
+            self.assertEqual(connect.call_count, 1)
+            self.assertEqual(connect.call_args.args, (relay.APP,))
+            self.assertEqual(upstream.sent, raw)
+            self.assertEqual(downstream.sent, response)
+            self.assertEqual(state.status(), original)
+        for path, value in ((relay.STATUS, None), ("/not-admitted", {})):
+            downstream = MemorySocket(request(path, value)[0])
+            with mock.patch.object(relay.socket, "create_connection") as connect:
+                relay.Handler(downstream, ("127.0.0.1", 10000), server)
+            connect.assert_not_called()
+            self.assertEqual(downstream.sent, b"")
+
+    def test_shared_budget_has_eight_slots_128_requests_and_one_deadline(self):
+        with mock.patch.object(relay.time, "monotonic", return_value=100):
+            budget = relay.Budget(240)
+            self.assertEqual(budget.deadline, 340)
+            # Both listeners receive this same budget; neither owns a fresh cap.
+            for _ in range(8): self.assertTrue(budget.take())
+            self.assertFalse(budget.take())
+            for _ in range(8): budget.slots.release()
+            for _ in range(119):
+                self.assertTrue(budget.take()); budget.slots.release()
+            self.assertEqual(budget.accepted, 128)
+            self.assertFalse(budget.take())
+        with mock.patch.object(relay.time, "monotonic", return_value=340):
+            self.assertFalse(budget.take())
+            self.assertEqual(budget.deadline, 340)
 
     def test_one_arm_exact_scope_and_deadline(self):
         state, data = relay.State(), fixture()
@@ -213,16 +315,22 @@ class Loopback(unittest.TestCase):
         from scripts.operator_github_fixture_network import assert_isolated_network
         assert_isolated_network(attached=False)
         data, seen = fixture(), []
+        attestation = "/attestation?nonce=decision-gate-policy-trust-1-1234567890123"
+        replies = {relay.LEASE: data[2], relay.CLAIM: data[4],
+            relay.AUDIT: {"synthetic_audit_ack": True}, attestation: {"synthetic_attestation": True}}
         class App(socketserver.BaseRequestHandler):
             def handle(self):
                 raw, first, fields, body = relay.read_message(self.request, time.monotonic() + 2, relay.MAX_REQUEST)
                 seen.append(raw)
-                self.request.sendall(reply(data[2] if relay.LEASE.encode() in first else data[4])[0])
-        with socketserver.TCPServer(relay.APP, App) as app, relay.Server(relay.State(), 15) as server:
-            workers = [threading.Thread(target=item.serve_forever, daemon=True) for item in (app, server)]
+                self.request.sendall(reply(replies[first.split(b" ")[1].decode("ascii")])[0])
+        state, budget = relay.State(), relay.Budget(15)
+        with socketserver.TCPServer(relay.APP, App) as app, relay.Server(state, budget, relay.DATA) as data_server, \
+                relay.Server(state, budget, relay.CONTROL) as control_server:
+            servers = (app, data_server, control_server)
+            workers = [threading.Thread(target=item.serve_forever, daemon=True) for item in servers]
             for worker in workers: worker.start()
-            def send(raw):
-                with socket.create_connection(relay.LISTEN, timeout=2) as stream:
+            def send(raw, address=relay.DATA):
+                with socket.create_connection(address, timeout=2) as stream:
                     stream.settimeout(2); stream.sendall(raw)
                     result = b""
                     while True:
@@ -230,15 +338,23 @@ class Loopback(unittest.TestCase):
                         if not part: return result
                         result += part
             try:
-                self.assertTrue(send(request(relay.ARM, data[0])[0]).startswith(b"HTTP/1.1 200"))
+                auxiliary = []
+                for path, value in ((attestation, None), (relay.AUDIT, {"events": []})):
+                    raw = request(path, value)[0]
+                    self.assertEqual(send(raw), reply(replies[path])[0]); auxiliary.append(raw)
+                self.assertEqual(state.status()["status"], "idle")
+                self.assertEqual(send(request(relay.STATUS)[0]), b"")
+                self.assertTrue(send(request(relay.ARM, data[0])[0], relay.CONTROL).startswith(b"HTTP/1.1 200"))
                 lease = request(relay.LEASE, data[1])[0]
                 self.assertEqual(send(lease), reply(data[2])[0])
                 claim = request(relay.CLAIM, data[3])[0]
                 self.assertEqual(send(claim), b""); self.assertEqual(send(claim), b"")
-                self.assertEqual(seen, [lease, claim])
-                self.assertEqual(server.state.status()["status"], "dropped")
+                self.assertEqual(seen, [*auxiliary, lease, claim])
+                self.assertEqual(state.status()["status"], "dropped")
+                self.assertIs(data_server.budget, control_server.budget)
+                self.assertEqual(data_server.deadline, control_server.deadline)
             finally:
-                for item in (server, app): item.shutdown()
+                for item in reversed(servers): item.shutdown()
                 for worker in workers: worker.join(timeout=3)
 
 

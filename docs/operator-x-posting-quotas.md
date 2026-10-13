@@ -104,6 +104,27 @@ bound), allowing that next bounded probe. The original 75-second preparation,
 five-second claim deadline remain unchanged. Both actual fault lanes and
 retained-data rollout remain required.
 
+The next fault attempt, `x-quota-fault-drop-healthfix.qxqHLbQD`, admitted the
+relay but the normal proxy refused startup: its fixed ordinary lease URL is
+`http://serverware:3000/api/data-plane/credential-leases`, while the fixture
+had substituted port 3001. No SDK ran; cleanup succeeded after 48.426 seconds.
+The proxy's admission guard is unchanged. The repaired fault-only fixture
+instead gives the gate a fixed loopback hosts mapping: `serverware` resolves
+to the raw relay at `127.0.0.2:3000`, which forwards to the app bound at
+`127.0.0.1:3000`. Control stays separate at `127.0.0.1:3001`. All required
+control-plane URLs and raw Host, request and response bytes stay unchanged.
+Only the fixed attestation, audit, lease and claim routes are forwarded, with
+their route-specific bounds. Both listeners share the original lifetime,
+eight active slots and 128-request cap; no general proxy or retry was added.
+
+The wiring passed 55 focused fixture controls and 13 pure relay controls.
+An actual network-none loopback run then passed all 14 relay controls,
+including raw attestation/audit forwarding and a dropped claim response with
+no repeated upstream call. Its first container never started because Docker
+refused a one-file compressed log setting; the corrected two-file setting
+was used in a fresh container. Both owned check containers were removed.
+These checks still do not replace either joined app/proxy/provider fault lane.
+
 The rendered account/setup suite subsequently passed all ten groups with eight
 masked 1280/390-pixel screenshots and unchanged source. It verified default
 omission, exact limited grants, invalid input and capability withdrawal. The

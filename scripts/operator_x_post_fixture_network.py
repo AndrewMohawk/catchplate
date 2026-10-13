@@ -33,6 +33,10 @@ KEEPER_SECONDS, EDGE_SECONDS = 300, 240
 ROOT, NETWORK_ROOT = Path("/fixture-runtime"), Path("/fixture-network")
 HOSTS = ("127.0.0.1 localhost serverware decision-gate-rs " + PROXY_HOST + " " + CONTROL_HOST
     + "\n" + FIXTURE_IP + " " + " ".join(PROVIDER_HOSTS) + "\n").encode("ascii")
+FAULT_GATE_IP, FAULT_GATE_HOSTS_NAME = "127.0.0.2", "hosts-fault-gate"
+FAULT_GATE_HOSTS = ("127.0.0.1 localhost decision-gate-rs " + PROXY_HOST + " " + CONTROL_HOST
+    + "\n" + FIXTURE_IP + " " + " ".join(PROVIDER_HOSTS)
+    + "\n" + FAULT_GATE_IP + " serverware\n").encode("ascii")
 RESOLV = isolated.RESOLV
 QUOTA_REQUEST = "x-quota-restart.request.json"
 QUOTA_ACK = "x-quota-restart.ack.json"
@@ -47,14 +51,22 @@ def require(condition):
         raise ValueError("isolated managed X namespace refused")
 
 
-def assert_isolated_network(*, attached=True):
+def assert_isolated_network(*, attached=True, view="ordinary"):
+    require(view in ("ordinary", "fault-gate") and (attached or view == "ordinary"))
     isolated.assert_isolated_network(attached=False)
     if attached:
-        require(Path("/etc/hosts").read_bytes() == HOSTS and Path("/etc/resolv.conf").read_bytes() == RESOLV)
+        gate = view == "fault-gate"
+        require(Path("/etc/hosts").read_bytes() == (FAULT_GATE_HOSTS if gate else HOSTS)
+            and Path("/etc/resolv.conf").read_bytes() == RESOLV)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             probe.bind((FIXTURE_IP, 0))
+            if gate:
+                # The relay uses an existing loopback address, not a new route.
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as relay_probe:
+                    relay_probe.bind((FAULT_GATE_IP, 0))
         for host, address in [(host, FIXTURE_IP) for host in PROVIDER_HOSTS] + [
-                (host, LOOPBACK) for host in (CONTROL_HOST, PROXY_HOST, "serverware", "decision-gate-rs")]:
+                (host, LOOPBACK) for host in (CONTROL_HOST, PROXY_HOST, "decision-gate-rs")] + [
+                ("serverware", FAULT_GATE_IP if gate else LOOPBACK)]:
             require({item[4][0] for item in socket.getaddrinfo(host, 443, socket.AF_INET,
                 socket.SOCK_STREAM)} == {address})
 
@@ -210,12 +222,14 @@ def quota_preservation_snapshot():
         os.close(descriptor)
 
 
-def prepare_network_files():
+def prepare_network_files(*, fault_gate=False):
     root = Path("/upstream-data/x-network")
-    require(os.geteuid() == 10001 and not root.exists() and not root.is_symlink())
+    require(type(fault_gate) is bool and os.geteuid() == 10001
+        and not root.exists() and not root.is_symlink())
     assert_isolated_network(attached=False)
     root.mkdir(mode=0o700)
-    for name, raw in (("hosts", HOSTS), ("resolv.conf", RESOLV)):
+    for name, raw in (("hosts", HOSTS), ("resolv.conf", RESOLV)) + (
+            ((FAULT_GATE_HOSTS_NAME, FAULT_GATE_HOSTS),) if fault_gate else ()):
         _write(root / name, raw, 0o444)
     descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:

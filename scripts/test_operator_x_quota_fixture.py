@@ -5,6 +5,7 @@ SDK, subprocess, Docker, provider or real application state is accessed.
 """
 from __future__ import annotations
 
+import ast
 from copy import deepcopy
 import hashlib
 import json
@@ -54,6 +55,31 @@ def acknowledgement(value):
 
 
 class ProfileTests(unittest.TestCase):
+    def test_preservation_key_roster_matches_actual_provider_key_owner_without_importing_app(self):
+        # Read only the maintained owner's literal filename. Importing the app
+        # or provider-key runtime into the snapshot helper is not necessary.
+        source = Path(__file__).resolve().parents[1] / "serverware/operator_provider_key.py"
+        owner = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+        names = [node.value for node in owner.body if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "FILENAME" for target in node.targets)]
+        self.assertEqual(len(names), 1)
+        filename = ast.literal_eval(names[0])
+        self.assertEqual(filename, "provider-key.json")
+        self.assertEqual(network.QUOTA_KEY_FILES, ("/data/master.key", "/data/policy-signing-ed25519.pem",
+            "/data/response-signing-ed25519.pem", "/x-custody/" + filename))
+        # All four hashes remain mandatory: the real snapshot's comprehension
+        # has no existence filter, fallback key name or ignored missing leaf.
+        module = ast.parse(Path(network.__file__).read_text(encoding="utf-8"))
+        snapshot = next(node for node in module.body if isinstance(node, ast.FunctionDef)
+            and node.name == "quota_preservation_snapshot")
+        keys = next(node.value for node in ast.walk(snapshot) if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "keys" for target in node.targets))
+        self.assertIsInstance(keys, ast.DictComp)
+        self.assertEqual(len(keys.generators), 1)
+        self.assertEqual(ast.unparse(keys.generators[0].iter), "QUOTA_KEY_FILES")
+        self.assertEqual(keys.generators[0].ifs, [])
+        self.assertEqual(ast.unparse(keys.value), "file_hash(Path(name))")
+
     def test_default_recipe_unchanged_and_only_explicit_quota_changes(self):
         original = recipe.build(*ARGS, **PINS)
         self.assertEqual(recipe.build(*ARGS, **PINS, quota=False), original)

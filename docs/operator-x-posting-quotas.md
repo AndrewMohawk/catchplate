@@ -56,6 +56,35 @@ changed. The failed test output and successful container cleanup are retained
 in `serverware-x-quota-rust.btsZVUPw`; fixture repair and a fresh test run are
 required before continuing.
 
+At `06ffbeb7`, the test-only selection survives the real profile reload without
+changing production reload or signed-audit checks. All 122 focused Rust tests
+passed across 16 disjoint filters. Normal executable
+`682d66d8fe97d3022513b79292bfe6710c60bfb6f54342f910da94df2db39d80`
+was built separately; `x-quota-release-source.bhLjGrAF` independently joined
+its 516 compiler inputs and 1,176 selected source files to the immutable
+candidate. [CI run 38363191655](https://github.com/example/private-deployment)
+also passed all 51 offline suites with no skips.
+
+The first R4 joined attempt, `x-quota-sdk-r4.rrYx6uJe`, stopped at the original
+app-startup deadline with no gate or SDK execution. A separate startup-only
+stack diagnostic reached health in 22.36 seconds within the unchanged bound;
+its observed source compilation/import work does not establish the earlier
+timeout's cause. Both attempts cleaned up their owned containers and retained
+their evidence; the diagnostic did not run the normal proxy or any SDK.
+
+The next uninstrumented attempt, `x-quota-sdk-r4-after-trace.7sY8prb9`, ran
+normal `682d66d8…` and completed the first Node, Python and Go posts, each
+returning 201 from the isolated TLS provider. Exactly three posts carried the
+correct provider credential and no proxy authorization header. The restart
+snapshot then failed before restarting the app: the fixture incorrectly
+looked for `/x-custody/master.key`, while the actual owner uses
+`/x-custody/provider-key.json`. Cleanup succeeded after 69.008 seconds.
+The narrow fixture correction preserves all four mandatory key hashes and
+adds a regression against the actual owner's filename; all ten focused
+fixture controls pass. This needs no Rust rebuild. Full restart/refresh,
+exhaustion/reconnect and separate fault-lane acceptance remain open; these
+three successful requests are partial evidence, not deployment approval.
+
 The rendered account/setup suite subsequently passed all ten groups with eight
 masked 1280/390-pixel screenshots and unchanged source. It verified default
 omission, exact limited grants, invalid input and capability withdrawal. The

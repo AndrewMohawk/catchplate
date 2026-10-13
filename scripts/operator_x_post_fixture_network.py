@@ -38,6 +38,8 @@ QUOTA_REQUEST = "x-quota-restart.request.json"
 QUOTA_ACK = "x-quota-restart.ack.json"
 QUOTA_TABLES = ("operator_x_quota_state", "operator_x_quota_accounts",
     "operator_x_quota_buckets", "operator_x_quota_attempts")
+QUOTA_KEY_FILES = ("/data/master.key", "/data/policy-signing-ed25519.pem",
+    "/data/response-signing-ed25519.pem", "/x-custody/provider-key.json")
 
 
 def require(condition):
@@ -198,9 +200,7 @@ def quota_preservation_snapshot():
                 and len(applications) == 2 and all(json.loads(row[1])["status"] == "active" for row in applications))
         finally:
             conn.close()
-        keys = {str(path): file_hash(path) for path in (Path("/data/master.key"),
-            Path("/data/policy-signing-ed25519.pem"), Path("/data/response-signing-ed25519.pem"),
-            Path("/x-custody/master.key"))}
+        keys = {name: file_hash(Path(name)) for name in QUOTA_KEY_FILES}
         require(identity(lock) == before_lock and identity(Path("/data/serverware.sqlite3")) == database)
         return {"schema": "serverware.privateXQuotaPreservation/v1", "database": database,
             "lock": before_lock, "tables": projected, "keys": keys, "claimed": 3, "outstanding": 0,

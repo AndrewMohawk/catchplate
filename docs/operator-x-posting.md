@@ -2,16 +2,20 @@
 
 # X account posting: implementation boundary
 
-Status on 2026-10-12: the typed posting contract, ordinary SDK examples and
-feature-gated account/permission console flow are implemented in source,
-including connected consent, refresh and protective disconnect at `c207ac75`.
-**Isolated synthetic-provider TLS/Rust/SDK-through-proxy acceptance passed at
-`1e891965`. The matching managed-X release is deployed at `2f4c4ed4` with normal
-Rust `811082ac`, explicitly unconfigured; real-X acceptance remains unverified.**
-The retained X custody is empty, and `https://api.x.com` is not an approved live
-destination. The separate username-read preset does not authorize posting. See
-[project completion](project-completion.md) for the full checkpoint. No pilot is
-required to finish or verify this ordinary workflow.
+Status on 2026-10-13: the typed posting contract, ordinary SDK examples,
+connected consent, refresh, protective disconnect and optional shared daily
+posting-attempt limits are implemented. **Isolated synthetic-provider
+TLS/Rust/SDK-through-proxy acceptance passed, including separate shared-limit,
+restart/refresh/reconnect and claim-failure controls. Real-X acceptance remains
+unverified.** The recorded `35817cf5` / normal Rust `09087323` deployment retains
+managed X and the quota feature, but X remains unconfigured, usage is empty and
+the provider-dependent capability is null. Deployment does not approve
+`https://api.x.com`, connect an account or create a posting permission.
+The separate username-read preset does not authorize posting. See
+[project completion](project-completion.md) and the
+[shared-limit verification record](operator-x-posting-quotas.md) for the separate
+deployment and acceptance checkpoints. No native pilot is required for this
+ordinary workflow.
 
 ## Fixed permission
 
@@ -41,11 +45,20 @@ The optional UTC-day quota is keyed by the verified provider account, not by
 application, route, OAuth client, credential ID or credential version. All typed
 posting routes for that account must agree on whether a quota exists and its
 maximum. When selected, same-account legacy X writes and generic routes matching
-the posting endpoint are rejected. This is a policy consistency guarantee, not
-proof of a functioning quota backend. The connected console/API offers only a
-quota-free typed grant and explicitly refuses requested daily-quota fields.
-The required shared quota execution path remains unsupported; no local-counter
-fallback or native-authority bypass was added.
+the posting endpoint are rejected. The connected console/API accepts optional
+`daily_post_attempt_limit` values from 1 to 1,000,000,000 only when the matching
+gate capability and durable ordinary store are ready. Omission leaves the grant
+unbounded; explicit null is invalid.
+
+The central store reserves capacity and durably claims each request-bound
+attempt once before dispatch. A claimed attempt remains charged when a claim
+acknowledgment is lost, the provider fails or the outcome is unknown; it is not
+a successful-post count, a refund promise or permission to retry. Sharing the
+account across clients, refreshing tokens, restarting, or disconnecting and
+reconnecting does not reset its counter. Unbounded intervals are not counted
+retroactively. This is the explicit trusted-host ordinary SQLite profile, not a
+per-gate fallback or native rollback-resistant authority. See
+[limit semantics and acceptance](operator-x-posting-quotas.md#limit-semantics).
 
 ## Ordinary client examples
 
@@ -144,17 +157,20 @@ The intended story is: connect an X account in the console, give an application
 a posting permission, send its ordinary SDK request through the proxy, and
 inspect the durable audit result. The source now joins application configuration,
 the separate `x_oauth` account type, PKCE callback, encrypted custody, refresh,
-protective disconnect and capability-gated quota-free posting UI. Deployment of
-that capability does not configure an X application, connect an account, approve
+protective disconnect and capability-gated posting with optional shared attempt
+limits. Deployment of that capability does not configure an X application,
+connect an account, approve
 the provider destination or create a posting permission.
 
 1. Keep the deployed app/proxy pair and retained-state evidence current. The
    matching release is deployed, but the isolated connected SDK run does not
    establish configured live-provider use.
-2. Add durable shared-account quota execution before offering that restriction;
-   the current account/grant flow must continue to refuse it.
+2. Require the actual matching gate and durable quota-store capability before
+   offering a daily limit. An unavailable capability must not silently downgrade
+   a limited grant to unrestricted access.
 3. With operator-supplied provider configuration and consent, verify the real X
-   journey separately. Public proxy DNS repair remains a separate approval.
+   journey separately. The completed [public proxy verification](operator-public-proxy-verification.md)
+   proves a synthetic route, not X account access or posting entitlement.
 
 ### Connected lifecycle checkpoint
 
@@ -300,8 +316,10 @@ original-client account and cleanup obligations.
 Neither X consent nor posting capability should appear ready merely because a
 profile parses or the app is healthy. Posting additionally requires the actual
 matching proxy binary, loaded policy and selected configuration. Account-wide
-quota remains unavailable until its real shared backend is connected; a local
-counter or relaxed PostgreSQL authority check is not a substitute.
+limits additionally require the explicit ordinary quota profile, matching gate
+descriptor and ready durable store. Merely parsing a quota constraint does not
+establish enforcement. The native PostgreSQL authority checks remain unchanged;
+ordinary quota acceptance is not native-authority acceptance.
 
 Provider references: [Create Post](https://docs.x.com/x-api/posts/create-post)
 and [OAuth authorization code flow](https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code).

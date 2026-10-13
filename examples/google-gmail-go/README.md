@@ -16,9 +16,10 @@ delete, modification, attachment, history, profile or Calendar calls.
 1. Configure Google in the operator workspace and connect the intended account
    with the advertised Gmail read-only profile. Complete real consent separately;
    this example does not initiate or repair OAuth configuration.
-2. In **Connect a real service**, select that saved Google account, then select or
-   create an application whose proxy authentication supports **Basic**. Save its
-   one-time application token privately.
+2. In **Set up access**, select that saved Google credential, then select or
+   create a client. New guided clients receive standard proxy login; for an
+   existing Bearer-only client, use **Clients → Enable standard client login**
+   so this SDK can use HTTP Basic on CONNECT. Save its one-time token privately.
 3. Choose the named **Read Gmail** permission (`gmail_read_v1`). It must advertise
    `orderedFormV1`, which admits the SDK's repeated `metadataHeaders` parameters.
    Leave **Gmail client** set to **Official Gmail SDK**, the default for a new
@@ -37,11 +38,12 @@ delete, modification, attachment, history, profile or Calendar calls.
    compatible with this example**. On older deployments without the Gmail client
    choice, explicitly choose **Replace a dummy header value** and enter the
    exact value above. Never enter a real Google token or application token.
-   Existing permissions and application login modes are not silently upgraded;
-   enable Basic in Applications if needed, select/create the intended replacement
-   permission, and resolve any overlapping permission explicitly.
+   Existing permissions and client login modes are not silently upgraded;
+   enable standard client login in Clients if needed, select/create the intended
+   replacement permission, and resolve any overlapping permission explicitly.
 4. After the exact saved permission is loaded, use **Proxy setup** (also shown
-   at the end of Connect). Download the interception CA, enter its local path,
+   at the end of Set up access). Choose **Go** under **Gmail SDK language**.
+   Download the interception CA, enter its local path,
    and set the optional separate proxy CA path only if your proxy uses a private
    certificate authority. **Copy connection template** supplies the Go SDK job
    recipe for this exact application and permission, not a manual Gmail cURL
@@ -166,8 +168,18 @@ On 2026-10-12, the upgraded graph passed all eight offline test groups and an
 ordinary binary build using verified official Go 1.26.9. Tests and build ran in a
 network-disabled container with read-only source and module cache. The application
 code is unchanged; the stock `X-Goog-Api-Client` header is now
-`gl-go/1.26.9 gdcl/0.264.0`. Fresh SDK-through-proxy acceptance remains required
-for this binary and dependency graph.
+`gl-go/1.26.9 gdcl/0.264.0`.
+
+The subsequent [updated-Go joined acceptance](../../docs/operator-gmail-job-verification.md#current-node-python-and-go-sdk-acceptance--isolated-jobs-passed)
+passed at source `330d9e9f` in 152.318 seconds using Go 1.26.9, Google API
+0.264.0 and example binary `936cc4f0…`. Through the app and normal Rust proxy
+with verified TLS, six phases produced eight synthetic-provider reads, one
+automatic refresh from generation 1 to 2 and four denial controls with no
+additional provider arrivals. Catalog preservation, durable audit verification,
+cleanup and independent receipt rechecking passed. This is fresh evidence for
+the upgraded job, not a transfer of the older results below.
+
+### Historical Go SDK evidence
 
 The historical results below used Go 1.23.12 with Google API `v0.230.0` and
 OAuth2 `v0.30.0`, not the upgraded graph. They are not renewed through-proxy
@@ -191,9 +203,13 @@ denial controls. See the
 [fresh joined result](../../docs/operator-gmail-job-verification.md#fresh-joined-result-passed).
 The browser made real app API calls; synthetic OAuth consent was programmatic.
 
-Both runs used a local synthetic provider with no external network or real
-Google credentials. They do **not** prove real Google consent, a live Google
-request, public Internet proxy routing or external SSO. Python's generated Gmail client
-was not substituted: its reviewed default `httplib2` transport does
-not provide the required TLS-to-HTTPS-proxy hop, so this example deliberately uses
-the official Go SDK instead.
+Both historical runs used a local synthetic provider with no external network
+or real Google credentials. They did not exercise the Python client. The later
+Node/Python pair has its own joined evidence in the record linked above;
+Python uses the generated Google SDK with a Requests adapter, not unchanged
+`httplib2`, whose default transport lacks the required HTTPS-proxy trust path.
+
+None of these isolated SDK runs establishes real Google consent, provider
+entitlement, a live-account job or external SSO. Deployed UI/repair checks and
+the separately recorded [public synthetic-route verification](../../docs/operator-public-proxy-verification.md)
+have their own scope; neither establishes real Google access.

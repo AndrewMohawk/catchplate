@@ -23,6 +23,11 @@ compile the proxy or require a verification ceremony. Use the **Set up access**
 action to choose a credential, select a client and review its permission.
 Opening client setup does not execute a request or renew a token.
 
+The [operator wiki](https://github.com/AndrewMohawk/serverware/wiki) covers
+first-time setup, provider credentials, client/SDK examples, permissions, proxy
+configuration, notifications and maintenance. Its [versioned source pages](docs/wiki/Home.md)
+are kept with the application so the guide can be reviewed alongside changes.
+
 The canonical entrypoint serves this persistent instance directly. The old
 demo hostname is authenticated navigation compatibility, not another app.
 The UI has one connection workflow, with synthetic checks only under optional
@@ -44,7 +49,7 @@ Add credential** uses the same provider editor in save-only mode: it creates no
 client, proxy token or permission. On a saved credential, **Use with a client**
 continues setup with that exact credential selected, without asking for its
 secret again. A GitHub App is a provider credential, not a Serverware client.
-This flow is deployed in `6bf463c5` and passed the actual read-only desktop/mobile
+This flow is deployed in `35817cf5` and passed the actual read-only desktop/mobile
 check; the separate isolated journey verified saving, reuse, proxy access and
 revocation. See the [walkthrough checkpoint](docs/operator-demo.md#navigation-update--deployed-october-13).
 **Proxy setup** provides
@@ -81,14 +86,15 @@ depends on the deployment's advertised capabilities and approved destinations.
 | Job | Current operator-workspace boundary |
 | --- | --- |
 | Read or create GitHub issues and comments | Deployed PAT and GitHub App connections, exact repository/Issues permissions and automatic App installation-token renewal. Isolated Node/Python/Go App-through-Rust reads passed across token renewal, scope denials and revocation. Real GitHub acceptance remains open. [Contract](docs/operator-github-client-compatibility.md). |
-| Read Gmail for a connected account | Requires operator Google configuration and account consent; offered only when enabled. Historical Go proxy acceptance does not cover the upgraded Go graph or new Node/Python examples, whose joined acceptance remains pending. |
+| Read Gmail for a connected account | Configured Google OAuth and the Gmail read-only permission. Actual Node/Python and updated-Go jobs passed isolated proxy verification across expiry, automatic refresh and denials. Real Google consent and the deployed inbox job remain unverified. [Verification](docs/operator-gmail-job-verification.md#current-node-python-and-go-sdk-acceptance--isolated-jobs-passed). |
 | Call a custom JSON API | Static Bearer/custom-header key, approved HTTPS destination and exact path; bounded request/response modes, not arbitrary API compatibility. |
+| Read npm package metadata | Exact named-package metadata permission only; it does not grant tarball downloads, installation, audit or publication. [Contract](docs/operator-npm-metadata.md). |
 | Publish an npm package | Named-package publishing preset and downloadable stock npm example; historical isolated cases passed. The upgraded npm 11.20.0 graph still needs joined proxy verification. Real registry credentials and publication are separate. [Contract](docs/operator-npm-client-compatibility.md). |
-| Install npm dependencies or run a cold `npm ci` | Separate, exact-package permission including transitive dependencies. The historical paired app/proxy is deployed; npm 11.20.0 passes stock CLI protocol controls but needs its own joined proxy run. Internet CONNECT and real registry access remain unverified. [Verification](docs/operator-npm-install.md). |
+| Install npm dependencies or run a cold `npm ci` | Separate metadata/tarball/bulk-audit permission with every dependency explicitly listed. Stock npm 11.8.0 passed isolated install, cold `ci` and default-audit checks; npm 11.20.0 has separate CLI/component checks but still needs its own joined proxy run. Public proxy reachability is verified separately; real registry access is not. [Verification](docs/operator-npm-install.md). |
 | Look up an X username | App-bearer preset for one exact username; Node/Python/Go examples passed against an isolated provider. This is not account-authorized posting. [Verification](docs/operator-x-username-verification.md). |
-| Post text to X using a connected account | Typed OAuth posting contract and Node/Python/Go examples implemented in source; account connection, quota execution and end-to-end integration remain unfinished. Not available in the console. [Boundary](docs/operator-x-posting.md). |
-| Read an Ethereum chain through Alchemy | Key-based, selected-chain RPC preset with Node/Python/Go examples. Historical isolated proxy acceptance does not establish acceptance for the newly patched Python/Go graphs; real-provider entitlement and blockchain writes remain unverified. [Verification](docs/operator-alchemy-verification.md). |
-| Publish an image to AWS ECR | [Planned operator/client workflow](docs/operator-aws-client-compatibility.md), not an available AWS preset. |
+| Post text to X using a connected account | Managed OAuth, automatic refresh, protective disconnect and optional shared account-wide UTC-day posting-attempt limits are implemented and deployed. Actual SDK/shared-limit/fault controls passed against an isolated TLS provider. Posting requires configured app/gate readiness; limits also require the durable store. X remains unconfigured in the deployment record, and real-X acceptance is open. [Posting](docs/operator-x-posting.md), [limits](docs/operator-x-posting-quotas.md). |
+| Read an Ethereum chain through Alchemy | Only `eth_chainId` and `eth_blockNumber` on selected mainnet/Sepolia, with Node/Python/Go examples. Historical isolated proxy acceptance does not cover later dependency repairs; real-provider entitlement remains unverified. Blockchain writes are outside this preset. [Verification](docs/operator-alchemy-verification.md). |
+| Store AWS keys or publish an image to ECR | Long-term/session credentials can be stored, replaced and revoked locally. AWS signing, automatic renewal and ECR publication are not available operator permissions. [Boundary](docs/operator-aws-client-compatibility.md). |
 | Send a Slack message or arbitrary webhook | Illustrative use case, not a verified provider preset. A custom-header JSON API is not support for every webhook authentication or response format. |
 
 The files under `policies/` are policy examples and engineering fixtures. They

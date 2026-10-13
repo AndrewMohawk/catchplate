@@ -355,6 +355,13 @@ This covers synthetic commitment, isolation, bounds and existing private-review
 components; it does not establish native custody, broker admission, live database
 behavior, protected approval or deployment acceptance.
 
+The exact committed successor `4d1c1dd4` also passed
+[CI 38434660608](https://github.com/example/private-deployment):
+60 suites, 547 Python tests and 162 Node groups, zero skips, in 370.786 seconds.
+All individual receipts and committed suite-source pins were checked. This is
+ordinary offline component coverage, not native execution or the separately
+deployed `35817cf5` source.
+
 Still required are purpose-specific compound native admission and sealing,
 exact parent-reserve/child-JIT bindings, atomic custody/evidence/pending-row
 retention, authenticated private-review opening, and a preservation migration

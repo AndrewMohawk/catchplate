@@ -19,8 +19,10 @@ In the ordinary Serverware workspace:
 
 1. Configure Google and connect the intended account with the Gmail read-only
    preset. Real account consent is a separate operator action.
-2. Save an application with **Basic proxy authentication** and a finite token.
-3. Grant that application **Read Gmail → Official Gmail SDK** for the connected
+2. Select or create a client with a finite token. New guided clients receive
+   standard proxy login. For an existing Bearer-only client, use
+   **Clients → Enable standard client login** to enable HTTP Basic on CONNECT.
+3. Grant that client **Read Gmail → Official Gmail SDK** for the connected
    account. The grant must be `gmail_read_v1`, `orderedFormV1`, with exact dummy
    replacement `serverware-gmail-placeholder-v1`, and its policy must be loaded.
    Existing curl/insertion-only permissions are not automatically upgraded.
@@ -30,8 +32,8 @@ In the ordinary Serverware workspace:
    install dependencies. See the [deployment record](../../docker/serverware-operator-demo/README.md)
    for the live release.
 5. Copy the application ID, proxy URL and downloaded interception CA from the workspace.
-   Your client must be able to reach the HTTPS proxy. A public DNS/routing block
-   still prevents a real client job; this example does not bypass it.
+   Your client must be able to reach the HTTPS proxy; this example does not
+   bypass network policy or supply real Google consent.
 
 No pilot or native commissioning is required for this ordinary workflow. The
 proxy owns account-token refresh; this SDK process cannot refresh Google tokens.
@@ -111,8 +113,17 @@ check SDK pagination/query bytes, request limits, no retry/redirect, secret-free
 output, clean child configuration, Basic CONNECT separation, and separate CA
 roles using real certificates and in-memory TLS handshakes.
 
-This is not yet a Python-through-Serverware end-to-end acceptance result. The
-existing Go SDK's joined fixture receipt does not prove this Python transport.
-A separate isolated run through the actual app and Rust proxy, then any
-authorized real-account job, remains distinct evidence. No provider account,
-Google request, proxy deployment or live configuration was changed here.
+Those are component checks, separate from the later
+[joined Node/Python acceptance](../../docs/operator-gmail-job-verification.md#current-node-python-and-go-sdk-acceptance--isolated-jobs-passed)
+at source `330d9e9f`. The pair passed in 178.576 seconds using both actual
+entrypoints through the app and normal Rust proxy with verified TLS against a
+synthetic Google service. Sixteen provider reads spanned the original token
+expiry, one automatic refresh advanced generation 1 to 2, and eight
+TLS/application/revocation denial controls added no provider arrivals. Durable
+audit verification and cleanup passed. This includes the generated Python SDK
+and its Requests adapter, not unchanged `httplib2` or an inferred Go result.
+
+The isolated run did not establish real Google consent, provider entitlement or
+a live-account job. Deployed UI/repair checks and the separately recorded
+[public synthetic-route verification](../../docs/operator-public-proxy-verification.md)
+have their own scope; neither establishes real Google access.

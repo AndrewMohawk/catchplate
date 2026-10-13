@@ -16,8 +16,10 @@ attachment, history, profile or Calendar calls.
 1. In the operator workspace, configure Google and connect the intended Google
    account through real consent. This example does not initiate OAuth or discover
    application-default Google credentials.
-2. Select that saved credential in **Set up access**, choose a client
-   with **Basic** proxy authentication, and keep its one-time token private.
+2. Select that saved credential in **Set up access** and choose a client.
+   New guided clients receive compatible standard proxy login. For an existing
+   Bearer-only client, use **Clients → Enable standard client login** so this
+   SDK can use HTTP Basic on CONNECT. Keep its one-time token private.
 3. Choose **Read Gmail** (`gmail_read_v1`) and **Official Gmail SDK**. The permission
    must advertise `orderedFormV1` and replace this exact full header value:
 
@@ -122,7 +124,16 @@ are blocked. The tests cover real query encoding/repeated metadata headers,
 pagination, exact placeholder authentication, configured trust separation,
 response limits, fixed errors and one-attempt failures (including 401/403).
 
-These are component tests: they do **not** prove the Node entrypoint against the
-Rust proxy, actual TLS handshakes, automatic server-side token refresh, a Google
-account or provider entitlement. The Go example has separate joined acceptance;
-Node needs its own isolated SDK-through-proxy run before claiming that result.
+These component tests do not themselves prove proxy/TLS or provider success.
+The separate [joined Node/Python acceptance](../../docs/operator-gmail-job-verification.md#current-node-python-and-go-sdk-acceptance--isolated-jobs-passed)
+passed at source `330d9e9f` in 178.576 seconds. Both actual entrypoints ran through
+the normal Rust proxy with verified TLS against a synthetic Google service:
+sixteen provider reads across the original token expiry, one automatic refresh
+from generation 1 to 2, and eight TLS/application/revocation denial controls
+without additional provider arrivals. Durable audit verification and cleanup
+passed. This is Node's own joined evidence, not an inference from the Go job.
+
+That isolated result does not establish real Google consent, provider entitlement
+or a live-account job. Deployed UI/repair checks and the separately recorded
+[public synthetic-route verification](../../docs/operator-public-proxy-verification.md)
+have their own scope; neither establishes real Google access.

@@ -149,6 +149,9 @@ fn private_owner_and_signing_path_remain_request_bound_and_terminal() {
     assert!(source.contains("owner.verify_identity(identity, original)"));
     assert!(!source.contains("owner.verify_identity(identity, deadline)"));
     let consumer = include_str!("native_release_jit_preparation.rs");
-    let actual = consumer.split("pub(super) fn prepare_and_refuse(").nth(1).unwrap();
-    assert!(actual.contains("let _retained = (retained, evidence);\n    Err(UNAVAILABLE.to_owned())"));
+    let actual = consumer.split("pub(super) fn prepare_and_submit").nth(1).unwrap();
+    assert!(actual.find("native_jit_review::prepare(").unwrap()
+        < actual.find("submission::submit(retained, evidence, original_boottime_deadline, shadow)").unwrap());
+    let submission = include_str!("native_release_jit_submission.rs");
+    assert!(submission.contains("guard.stage = ReleaseAuthorizationStage::PendingOnly;"));
 }

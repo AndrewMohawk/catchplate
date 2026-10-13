@@ -4,16 +4,17 @@
 //! bytes and the real buffered CONNECT/request owner, repeat pure derivation,
 //! and compare the claims with this request's current policy. Only the explicit
 //! v26 owner can admit its independent pins, prepare the actual broker pair,
-//! and obtain its purpose signature/fresh quote. Atomic pending retention is
-//! still absent; even valid custody evidence ends in UNAVAILABLE.
+//! and obtain its purpose signature/fresh quote. The separate submission owner
+//! can return only an authenticated pending denial, never a release permit.
 use super::*;
 use serde_json::value::RawValue;
 use std::collections::BTreeMap;
 
 pub(super) const PATH: &str = "/api/data-plane/release-authorizations/native-jit-prepare";
 pub(super) const MAX_RESPONSE_BYTES: u64 = 512 * 1024;
-pub(super) const UNAVAILABLE: &str = "native compound JIT atomic retention is unavailable";
 const SCHEMA: &str = "serverware.nativeReleaseJitPreparation/v1";
+#[path = "native_release_jit_submission.rs"]
+pub(super) mod submission;
 
 fn require(ok: bool) -> Result<(), String> {
     if ok { Ok(()) } else { Err("native compound preparation originals differ".to_owned()) }
@@ -21,8 +22,8 @@ fn require(ok: bool) -> Result<(), String> {
 
 // No caller-supplied authorization boolean. The borrowed original was created
 // only by the actual buffered pipeline, and check_release repeats its checks.
-pub(super) struct Request<'a> {
-    pub(super) state: &'a GateState,
+pub(super) struct Request<'state, 'a> {
+    pub(super) state: &'state GateState,
     pub(super) snapshot: &'a Arc<Snapshot>,
     pub(super) authentication: &'a AttestedResponseAuthenticationContext,
     pub(super) original: &'a native_buffered_request::ReleaseOriginals<'a>,
@@ -41,7 +42,7 @@ pub(super) struct Request<'a> {
     pub(super) deadline: Instant,
 }
 
-impl Request<'_> {
+impl Request<'_, '_> {
     fn check(&self) -> Result<(), String> {
         require(self.state.response_proof_signer.release_profile().is_native()
             && self.route.jit.get("required") == Some(&Value::Bool(true))
@@ -112,8 +113,8 @@ struct Wire {
 
 // Deliberately private, non-Clone and without getters or a signing conversion.
 // Retaining a signed claim is not admitting its independent source/config pins.
-struct UnadmittedPreparation<'a> {
-    request: Request<'a>,
+struct UnadmittedPreparation<'state, 'a> {
+    request: Request<'state, 'a>,
     response: VerifiedReleaseAuthorizationHttpResponse,
     wire: Wire,
 }
@@ -283,7 +284,7 @@ fn validate_claims(wire: &Wire, claims: &Claims<'_>) -> Result<(), String> {
     validate_originals(wire, claims)
 }
 
-impl UnadmittedPreparation<'_> {
+impl UnadmittedPreparation<'_, '_> {
     fn check(&self) -> Result<(), String> {
         self.request.check()?;
         let response_original = Zeroizing::new(native_response_profile::canonical_ascii_bytes(&self.wire)?);
@@ -302,11 +303,13 @@ impl UnadmittedPreparation<'_> {
     }
 }
 
-/// Actual signed HTTP preparation and selected v26 custody, followed by
-/// unconditional terminal refusal before reserve/atomic pending retention.
+/// Actual signed HTTP preparation and selected v26 custody, followed by one
+/// pending-only submission. No success here can authorize provider dispatch.
 /// The original request deadline is never restarted or installed on a shared
 /// key/identity. No locks are acquired here across control-plane HTTP.
-pub(super) fn prepare_and_refuse(request: Request<'_>) -> Result<(), String> {
+pub(super) fn prepare_and_submit<'state>(request: Request<'state, '_>,
+    shadow: Option<&policy_core::ShadowRequestHandle>)
+    -> Result<(RequestedReleaseAuthorization, ReleaseAuthorizationGuard<'state>), String> {
     request.check()?;
     let original_boottime_deadline = native_jit_review::freeze_deadline(request.deadline)?;
     let response = post_release_authorization_http_on_deadline(request.state, request.authentication,
@@ -320,10 +323,9 @@ pub(super) fn prepare_and_refuse(request: Request<'_>) -> Result<(), String> {
         retained.wire.parent_request.as_bytes(), retained.wire.child_request.as_bytes(),
         retained.request.deadline, original_boottime_deadline)?;
     retained.check()?;
-    // Keep both actual owners/originals and evidence until the terminal refusal.
-    // This is not a proof-carrying permit or a legacy reserve fallback.
-    let _retained = (retained, evidence);
-    Err(UNAVAILABLE.to_owned())
+    // Submission consumes neither an invented pair nor cloned/resealed proof.
+    // Both retained owners stay live through the one POST and final checks.
+    submission::submit(retained, evidence, original_boottime_deadline, shadow)
 }
 
 #[cfg(test)]

@@ -23,6 +23,8 @@ from serverware.authority_audit_trace import (
 )
 from serverware import authority_contract
 from serverware import authority_release_private_input
+from serverware import authority_native_jit_submission as native_jit
+from serverware import authority_native_jit_review_custody as native_jit_custody
 from serverware import authority_credential_currentness as credential_currentness
 from serverware import authority_publication_approval as publication_approval
 from serverware import authority_public_revocation_approval as public_revocation_approval
@@ -416,7 +418,13 @@ def reject_authoritative_input(value: Any, *, path: str = "input") -> None:
 
 
 def reject_typed_authoritative_input(operation: str, value: Mapping[str, Any]) -> None:
-    if operation in {credential_currentness.OP_REGISTER, credential_currentness.OP_ACK}:
+    if operation == "release.reserve" and native_jit.selected(value):
+        try:
+            projected = native_jit.name_guard_arguments(value["arguments"], typed=True)
+        except native_jit.SubmissionError:
+            raise AuthorityPlannerError(native_jit.ERROR) from None
+        reject_authoritative_input({**value, "arguments": projected})
+    elif operation in {credential_currentness.OP_REGISTER, credential_currentness.OP_ACK}:
         credential_currentness.arguments(operation, value, typed=True)
         _business_intent({"arguments": value}, operation=operation)
         request = dict(value["request"])
@@ -488,6 +496,7 @@ class PlanningState:
     static_credential_rotation_policy: Mapping[str, Any] | None = None
     verified_static_credential_rotation_evidence: Mapping[str, Any] | None = None
     setup_rotated_static_policy: Mapping[str, Any] | None = None
+    native_jit_pending: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1242,6 +1251,7 @@ class TypedTransitionPlanningProgram:
                 static_credential_rotation_policy=state.static_credential_rotation_policy,
                 verified_static_credential_rotation_evidence=state.verified_static_credential_rotation_evidence,
                 setup_rotated_static_policy=state.setup_rotated_static_policy,
+                native_jit_pending=state.native_jit_pending,
             )
             transition = self.kernel.transition(context)
         except authority_transition_core.TransitionKernelError as exc:
@@ -3343,6 +3353,16 @@ def validate_planner_request(request: Mapping[str, Any]) -> None:
     }
     typed_request = request.get("typedRequest")
     verifier_identity = request.get("verifierIdentity")
+    if native_jit.selected(typed_request):
+        required.add(native_jit.PLANNER_FIELD)
+        try:
+            submission = native_jit.parse_submission(request.get(native_jit.PLANNER_FIELD))
+            native_jit.validate_retained(native_jit.retained_from_submission(submission),
+                typed_request=typed_request, deadline_epoch_ns=request.get("deadlineEpochNs"))
+            if len(canonical_bytes(dict(request))) > authority_contract.MAX_REQUEST_BYTES:
+                raise native_jit.SubmissionError()
+        except native_jit.SubmissionError:
+            raise AuthorityPlannerError(native_jit.ERROR) from None
     if request.get("operation") == static_create.OPERATION:
         required.add("staticCredentialCustodyEvidence")
         static_custody.authority_evidence(request.get("staticCredentialCustodyEvidence"))
@@ -3491,6 +3511,15 @@ def validate_measured_plan_payload(
             expected_identity.attestation_receipt_digest,
     }
     measured_plan = payload.get("measuredPlan")
+    if native_jit.selected(payload.get("typedRequest")):
+        required.add(native_jit.RETAINED_FIELD)
+        try:
+            native_jit.validate_retained(payload.get(native_jit.RETAINED_FIELD),
+                typed_request=payload["typedRequest"],
+                deadline_epoch_ns=measured_plan.get("deadlineEpochNs")
+                    if isinstance(measured_plan, Mapping) else None)
+        except native_jit.SubmissionError:
+            raise AuthorityPlannerError(native_jit.ERROR) from None
     if isinstance(measured_plan, Mapping) and measured_plan.get("operation") == static_create.OPERATION:
         required.add("staticCredentialCustodyEvidence")
         static_custody.authority_evidence(payload.get("staticCredentialCustodyEvidence"))
@@ -3833,6 +3862,8 @@ class MeasuredPlanner:
         static_credential_configuration=None,
         static_credential_root_key=None,
         setup_rotated_static_policy=None,
+        native_jit_configuration=None,
+        native_jit_root_key=None,
     ) -> None:
         if (
             not read_dsn
@@ -3941,6 +3972,34 @@ class MeasuredPlanner:
             self.static_credential_configuration_digest = full_configuration_digest(owned_configuration)
         elif static_credential_configuration is not None or static_credential_root_key is not None:
             raise AuthorityPlannerError("Static creation configuration cannot select another planner")
+        self.native_jit_configuration = None
+        self.native_jit_root_key = None
+        if native_jit_configuration is not None or native_jit_root_key is not None:
+            if ("release.reserve" not in self.enabled_operations
+                    or not isinstance(native_jit_root_key, Ed25519PublicKey)):
+                raise AuthorityPlannerError("Native JIT planner lacks its admitted configuration root")
+            owned_configuration = json.loads(canonical_bytes(native_jit_configuration))
+            selected_policy = native_jit_custody.validate_policy(
+                owned_configuration.get(native_jit_custody.FIELD),
+                payload=owned_configuration, root_key=native_jit_root_key)
+            if selected_policy is None:
+                raise AuthorityPlannerError("Native JIT planner lacks its independent purpose policy")
+            self.native_jit_configuration = owned_configuration
+            self.native_jit_root_key = native_jit_root_key
+
+    def verify_native_jit_evidence(self, request):
+        """Verify the original private channel before any persisted lookup/SQL."""
+        if not native_jit.selected(request.get("typedRequest")):
+            return
+        try:
+            native_jit.verify_submission(request[native_jit.PLANNER_FIELD],
+                typed_request=request["typedRequest"],
+                configuration_payload=self.native_jit_configuration,
+                root_key=self.native_jit_root_key, now_epoch_ns=time.time_ns(),
+                deadline_monotonic_ns=request["deadlineMonotonicNs"],
+                deadline_epoch_ns=request["deadlineEpochNs"])
+        except native_jit.SubmissionError:
+            raise AuthorityPlannerError(native_jit.ERROR) from None
 
     def verify_static_evidence(self, request):
         operation = request["operation"]
@@ -4014,6 +4073,7 @@ class MeasuredPlanner:
             )
         verified_webauthn_evidence = self.verify_assertion_evidence(request)
         verified_static_evidence = self.verify_static_evidence(request)
+        self.verify_native_jit_evidence(request)
         import psycopg
         from psycopg.rows import dict_row
 
@@ -4099,6 +4159,9 @@ class MeasuredPlanner:
                         query_work=query_work,
                         verified_webauthn_evidence=verified_webauthn_evidence,
                     )
+                    if native_jit.selected(request["typedRequest"]):
+                        planning_state = replace(planning_state, native_jit_pending=
+                            native_jit.retained_from_submission(request[native_jit.PLANNER_FIELD]))
                     try:
                         unproved_selected = (
                             selected if query_sources is None
@@ -4437,6 +4500,9 @@ class MeasuredPlanner:
             payload["staticCredentialCustodyEvidence"] = verified_static_evidence
         if operation == static_rotate.OPERATION:
             payload["staticCredentialRotationEvidence"] = verified_static_evidence
+        if native_jit.selected(request["typedRequest"]):
+            payload[native_jit.RETAINED_FIELD] = native_jit.retained_from_submission(
+                request[native_jit.PLANNER_FIELD])
         if time.monotonic_ns() >= request["deadlineMonotonicNs"]:
             raise AuthorityPlannerError(
                 "measured planner crossed its absolute deadline"
@@ -4493,10 +4559,14 @@ class PlannerPersistence:
         )
         measured_plan = payload["measuredPlan"]
         try:
-            authority_release_private_input.require_public_request(
-                payload["typedRequest"], operation=measured_plan["operation"]
-            )
-        except authority_release_private_input.PrivateReleaseInputError:
+            if native_jit.RETAINED_FIELD in payload:
+                native_jit.require_retained_request(payload["typedRequest"],
+                    retained=payload[native_jit.RETAINED_FIELD], operation=measured_plan["operation"],
+                    deadline_epoch_ns=measured_plan["deadlineEpochNs"])
+            else:
+                authority_release_private_input.require_public_request(
+                    payload["typedRequest"], operation=measured_plan["operation"])
+        except (authority_release_private_input.PrivateReleaseInputError, native_jit.SubmissionError):
             raise AuthorityPlannerError(authority_release_private_input.ERROR) from None
         import psycopg
         from psycopg.rows import dict_row
@@ -4666,6 +4736,10 @@ class ExecutionEnvelopePersistence:
             "fence",
             "reservedAtEpochNs",
         }
+        if native_jit.RETAINED_FIELD in request:
+            required.add(native_jit.RETAINED_FIELD)
+            if type(request[native_jit.RETAINED_FIELD]) is not dict:
+                raise AuthorityPlannerError(native_jit.ERROR)
         if (
             set(request) != required
             or request.get("operation")
@@ -4722,6 +4796,13 @@ class ExecutionEnvelopePersistence:
             raise AuthorityPlannerError(
                 "exact execution request binding changed"
             )
+        if native_jit.RETAINED_FIELD in request:
+            try:
+                native_jit.require_retained_request(typed_request,
+                    retained=request[native_jit.RETAINED_FIELD], operation=request["operation"],
+                    deadline_epoch_ns=request["deadlineEpochNs"])
+            except native_jit.SubmissionError:
+                raise AuthorityPlannerError(native_jit.ERROR) from None
         import psycopg
         from psycopg.rows import dict_row
         from serverware import db
@@ -4760,6 +4841,8 @@ class ExecutionEnvelopePersistence:
                     reserved_at_epoch_ns=request[
                         "reservedAtEpochNs"
                     ],
+                    **({"native_jit_pending": request[native_jit.RETAINED_FIELD]}
+                        if native_jit.RETAINED_FIELD in request else {}),
                     connection=facade,
                 )
         if row.get("status") != "reserved":

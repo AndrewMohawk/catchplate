@@ -12,6 +12,8 @@ import json
 import textwrap
 
 from serverware import authority_contract, authority_transition_registry
+from serverware import authority_native_jit_retention_contract as native_jit_retention
+from serverware import authority_release_private_request as native_jit_request
 from serverware.authority_radix_proof import empty_digest
 from serverware.authority_root_transition import (
     ROOT_FIELDS as _ROOT_FIELDS,
@@ -56,15 +58,63 @@ def _exact_keys(expression: str, fields: tuple[str, ...] | frozenset[str]) -> st
         IS NOT DISTINCT FROM ARRAY[{expected}]::text[] END)"""
 
 
+def _native_jit_payload_keys(expression: str) -> str:
+    """Closed retained-original roster, not fresh custody or release authority.
+
+    The exact persisted plan remains signed, capability/snapshot-bound and
+    independently checked by the native submission owners. SQL admits only
+    their public native profile and four bounded literal originals here; it
+    neither interprets the sealed plaintext nor replaces those admission joins.
+    Keep json until every record's key inventory has checked duplicate members.
+    """
+    typed = f"{expression}->'typedRequest'"
+    arguments = f"{typed}->'arguments'"
+    retained = f"{expression}->'nativeJitPending'"
+    original_columns = {
+        "parentOriginal": "parent_request_original", "childOriginal": "child_request_original",
+        "pairOriginal": "pair_original", "evidenceOriginal": "proof_original",
+    }
+    bounded = "\n AND ".join(
+        f"pg_catalog.json_typeof({retained}->{_literal(field)}) IS NOT DISTINCT FROM 'string'"
+        f" AND pg_catalog.octet_length({retained}->>{_literal(field)})"
+        f" BETWEEN 1 AND {native_jit_retention.ORIGINAL_LIMITS[column]}"
+        f" AND pg_catalog.octet_length({retained}->>{_literal(field)})"
+        f" = pg_catalog.length({retained}->>{_literal(field)})"
+        for field, column in original_columns.items()
+    )
+    return f"""({_exact_keys(expression, _PAYLOAD_FIELDS + ('nativeJitPending',))}
+        AND {_exact_keys(typed, ('schema', 'operation', 'operationId', 'requestDigest', 'handler', 'operationManifestDigest', 'arguments'))}
+        AND {typed}->>'schema' IS NOT DISTINCT FROM 'serverware.policyAuthorityV9Request/v1'
+        AND {typed}->>'operation' IS NOT DISTINCT FROM 'release.reserve'
+        AND {typed}->>'handler' IS NOT DISTINCT FROM {_literal(native_jit_request.HANDLER)}
+        AND {typed}->>'operationManifestDigest' IS NOT DISTINCT FROM {_literal(authority_contract.OPERATION_MANIFEST_DIGEST)}
+        AND {_exact_keys(arguments, native_jit_request.PUBLIC_FIELDS | {'businessIntent'})}
+        AND pg_catalog.json_typeof({arguments}->'native_profile') IS NOT DISTINCT FROM 'boolean'
+        AND {arguments}->>'native_profile' IS NOT DISTINCT FROM 'true'
+        AND pg_catalog.json_typeof({arguments}->'policy_aware_profile') IS NOT DISTINCT FROM 'boolean'
+        AND {arguments}->>'policy_aware_profile' IS NOT DISTINCT FROM 'false'
+        AND pg_catalog.json_typeof({arguments}->'require_jit_grant') IS NOT DISTINCT FROM 'boolean'
+        AND {arguments}->>'require_jit_grant' IS NOT DISTINCT FROM 'true'
+        AND pg_catalog.json_typeof({arguments}->'now_epoch_ms') IS NOT DISTINCT FROM 'null'
+        AND {_exact_keys(retained, frozenset(original_columns))}
+        AND {bounded})"""
+
+
 def _exact_payload_keys(expression: str) -> str:
-    # Match the independently validated full original. Only these two fixed
-    # operations carry native evidence; neither field is optional or accepted
-    # on approvals or any legacy operation. json preserves duplicate members.
+    # Match the independently validated full original. Native evidence is
+    # required only for its exact source-selected operation/profile; neither
+    # static nor JIT extensions are admitted onto ordinary legacy requests.
+    # json preserves duplicate members through these closed record checks.
     return f"""(CASE {expression}->'measuredPlan'->>'operation'
         WHEN 'credential.static.create' THEN
             {_exact_keys(expression, _PAYLOAD_FIELDS + ('staticCredentialCustodyEvidence',))}
         WHEN 'credential.static.rotate' THEN
             {_exact_keys(expression, _PAYLOAD_FIELDS + ('staticCredentialRotationEvidence',))}
+        WHEN 'release.reserve' THEN
+            (CASE WHEN {expression}->'typedRequest'->'arguments'->>'schema'
+                    IS NOT DISTINCT FROM {_literal(native_jit_request.PUBLIC_SCHEMA)}
+                THEN {_native_jit_payload_keys(expression)}
+                ELSE {_exact_keys(expression, _PAYLOAD_FIELDS)} END)
         ELSE {_exact_keys(expression, _PAYLOAD_FIELDS)} END)"""
 
 

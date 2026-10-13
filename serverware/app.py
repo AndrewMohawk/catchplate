@@ -578,12 +578,13 @@ async def csrf_middleware(request: Request, call_next):
             headers=exc.headers,
         )
     response = await call_next(request)
-    # This new preparation POST is a read-only original producer. Its entire
-    # ASGI path must not opportunistically drain unrelated durable audit work,
-    # including after an authenticated or malformed request is refused.
+    # Native JIT preparation is read-only; submission owns one exact atomic
+    # transition. Neither path drains unrelated durable audit work, including
+    # after an authenticated or malformed request is refused.
     if (request.method not in {"GET", "HEAD", "OPTIONS"}
-            and request.scope.get("path")
-                != "/api/data-plane/release-authorizations/native-jit-prepare"):
+            and request.scope.get("path") not in {
+                "/api/data-plane/release-authorizations/native-jit-prepare",
+                "/api/data-plane/release-authorizations/native-jit-submit"}):
         try:
             await _run_bounded_blocking(
                 _METADATA_AUDIT_OUTBOX_DRAIN_SLOTS,
@@ -616,9 +617,10 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     if operator_active and not operator_demo.request_allowed(request.method, request.url.path):
         return JSONResponse(status_code=403, content={"detail":
             "This operator demo allows only scoped local connections; production and native authority mutations are unavailable."})
-    if (request.method == "POST" and request.scope.get("path")
-            == "/api/data-plane/release-authorizations/native-jit-prepare"):
-        # The authenticated 512 KiB dependency owns this exact body's parsing.
+    if (request.method == "POST" and request.scope.get("path") in {
+            "/api/data-plane/release-authorizations/native-jit-prepare",
+            "/api/data-plane/release-authorizations/native-jit-submit"}):
+        # Each authenticated dependency owns its exact body's bounded parsing.
         # Never prebuffer before service-token authentication. The outer ASGI
         # signer still supplies the common response security headers.
         return await call_next(request)
@@ -1452,9 +1454,10 @@ def _signed_control_plane_response_headers(
     representation_body: bytes | None = None,
     audit_timing: _audit_timing.AuditTiming | None = None,
 ) -> dict[str, str]:
-    read_only_preparation = (
-        request_path == "/api/data-plane/release-authorizations/native-jit-prepare"
-    )
+    read_only_preparation = request_path in {
+        "/api/data-plane/release-authorizations/native-jit-prepare",
+        "/api/data-plane/release-authorizations/native-jit-submit",
+    }
     context_fields = (
         "runtime_manifest_digest",
         "policy_bundle_digest",
@@ -5505,6 +5508,24 @@ async def _bounded_policy_aware_release_authorization_prepare_request(
         maximum_bytes=_RELEASE_AUTHORIZATION_REQUEST_MAX_BYTES,
         label="policy-aware release authorization preparation request",
     )
+
+
+async def _bounded_native_release_jit_submission(request: Request) -> dict[str, str]:
+    from serverware import native_release_jit_submission as submission
+
+    deadline_ns = time.monotonic_ns() + submission.REQUEST_TIMEOUT_NS
+    _require_data_plane_token(request.headers.get("X-Serverware-Data-Plane-Token"),
+        DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN)
+    method, path, query, nonce, _https, invalid_nonce = _request_signature_inputs(request.scope)
+    if method != "POST" or path != submission.PATH or query or nonce is None or invalid_nonce:
+        raise HTTPException(status_code=400, detail=submission.ERROR)
+    try:
+        db._require_postgres_jit_authority("native JIT pending submission")
+    except (db.MetadataStoreError, db.grants.GrantStoreError):
+        raise HTTPException(status_code=503, detail=submission.ERROR) from None
+    original = await submission.read_body(request, deadline_ns=deadline_ns)
+    request.scope[submission.DEADLINE_SCOPE_KEY] = (original, deadline_ns)
+    return original
 
 
 async def _bounded_release_authorization_reserve_request(
@@ -23272,6 +23293,53 @@ def data_plane_release_jit_preparation(
     # Sign the actual canonical response bytes through the existing ASGI owner.
     # No maintenance, reserve, audit mutation, broker or custody call occurs.
     return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/data-plane/release-authorizations/native-jit-submit")
+def data_plane_release_jit_submission(
+    request: Request,
+    original: dict[str, str] = Depends(_bounded_native_release_jit_submission),
+    x_serverware_data_plane_token: str | None = Header(
+        default=None, alias="X-Serverware-Data-Plane-Token"),
+) -> dict[str, Any]:
+    from serverware import native_release_jit_preparation as preparation
+    from serverware import native_release_jit_submission as submission
+
+    try:
+        retained = request.scope.pop(submission.DEADLINE_SCOPE_KEY, None)
+        if type(retained) is not tuple or len(retained) != 2 or retained[0] is not original:
+            raise ValueError("native JIT HTTP owner is unavailable")
+        deadline_ns = submission.clipped_deadline(original, deadline_ns=retained[1])
+        payload = DataPlaneReleaseAuthorizationReserve.model_validate(submission.reserve_request(original))
+        (actor, _snapshot, route, quotas, require_jit, review, durable) = (
+            _release_authorization_inputs(payload, x_serverware_data_plane_token))
+        if not require_jit or durable is None:
+            raise ValueError("native JIT route changed")
+        policy, approvers = db.release_approver_policy_for_route(route.jit or {}, require_jit_grant=True)
+        release_profiles.require_versioned_approver_policy(policy)
+        digest = release_profiles.approver_policy_sha256(policy)
+        if not hmac.compare_digest(payload.approver_policy_sha256 or "", digest):
+            raise ValueError("native JIT approver policy changed")
+        arguments = _release_authorization_reserve_arguments(payload,
+            authenticated_actor_id=actor, route=route, shared_quotas=quotas,
+            require_jit_grant=True, approval_review=review, durable_policy=durable,
+            approver_arguments=approvers, native=True, policy_aware=False,
+            expected_approver_policy_sha256=digest)
+        submission.require_prepared(original, preparation.prepare(arguments))
+        submission.require_live(deadline_ns)
+    except HTTPException as exc:
+        raise HTTPException(status_code=exc.status_code, detail=submission.ERROR) from None
+    except Exception:
+        raise HTTPException(status_code=409, detail=submission.ERROR) from None
+    try:
+        result = submission.submit(original, deadline_ns=deadline_ns)
+        _assert_release_authorization_v2_reserve_result(result)
+        return _release_authorization_api_response(result,
+            api_version="serverware.nativeReleaseAuthorizationResponse/v2")
+    except Exception:
+        # A lost/uncertain committed response is never retried or converted to
+        # a fresh reserve. Only the existing definite runtime receipt is usable.
+        raise HTTPException(status_code=503, detail=submission.ERROR) from None
 
 
 @app.post("/api/data-plane/release-authorizations/reserve")

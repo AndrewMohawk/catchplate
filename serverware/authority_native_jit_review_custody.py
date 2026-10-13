@@ -1,11 +1,11 @@
 """Purpose-specific native compound JIT sealing proof admission.
 
-Future verifier and planner integration must each call verify_original with
-their own admitted configuration and retained original deadline. This module
-is not yet invoked by that write path. It checks real assignment/signature/
-Nitro evidence, not a supplied success carrier, and grants neither an execution
-capability nor pending-row, review-open or release rights. The compound writer
-remains separately gated; no service is enabled here.
+The verifier and planner each call verify_original with their own admitted
+configuration and retained original deadline before native pending retention.
+It checks real assignment/signature/Nitro evidence, not a supplied success
+carrier, and grants neither an execution capability nor pending-row,
+review-open or release rights. The compound writer remains separately gated;
+no service is enabled here.
 """
 from __future__ import annotations
 

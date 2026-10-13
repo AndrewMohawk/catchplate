@@ -313,6 +313,8 @@ def _encrypt_approval_json(payload_json: str) -> str:
 
 
 def _decrypt_approval_json(stored: str) -> str:
+    if stored.startswith("native-jit:"):
+        raise ValueError("approval review payload is unavailable")
     if stored.startswith("v2:"):
         try:
             _, expected_digest, encrypted = stored.split(":", 2)

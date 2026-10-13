@@ -9752,7 +9752,9 @@ def metadata_initialization_index_source() -> str:
 
 def metadata_schema_source(*, include_initialization_indexes: bool = True) -> str:
     from serverware import authority_native_activation_schema
-    source = metadata_base_schema_source() + authority_native_activation_schema.source() + authority_v9_schema_source()
+    from serverware import authority_native_jit_retention_schema
+    source = (metadata_base_schema_source() + authority_native_activation_schema.source()
+        + authority_native_jit_retention_schema.source() + authority_v9_schema_source())
     if include_initialization_indexes:
         source += metadata_initialization_index_source()
     return source

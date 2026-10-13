@@ -98,6 +98,7 @@ from serverware import authority_static_credential_rotate as static_rotate
 from serverware import authority_static_credential_rotation_approval as static_rotation_approval
 from serverware import authority_static_credential_custody as static_custody
 from serverware import authority_native_jit_review_custody as jit_review_custody
+from serverware import authority_native_jit_submission as native_jit
 from serverware import authority_static_credential_rotation_custody as static_rotation_custody
 from serverware import authority_setup_policy_admission as setup_policy_admission
 from serverware import authority_setup_native_enrollment as setup_native_enrollment
@@ -3355,6 +3356,13 @@ class AuthorityRuntimeClient:
             measured_originals=True)
 
     def _request_result(self, *, operation, input_value, deadline_ns, measured_originals):
+        if isinstance(input_value, Mapping) and input_value.get("schema") == native_jit.SCHEMA:
+            if operation != "release.reserve" or type(deadline_ns) is not int:
+                raise AuthorityServiceError(native_jit.ERROR)
+            try:
+                input_value = native_jit.parse_submission(input_value)
+            except native_jit.SubmissionError:
+                raise AuthorityServiceError(native_jit.ERROR) from None
         delivery = operation in canary_delivery.OPERATIONS
         activation = operation == native_activation.PREFIX + "consume"
         measured = operation in oauth_measured_refresh.OPERATIONS | oauth_measured_exchange.OPERATIONS | oauth_measured_setup.OPERATIONS | oauth_reconnect.OPERATIONS | oauth_measured_cleanup.OPERATIONS | oauth_pending_retirement.OPERATIONS | oauth_capture_retirement.OPERATIONS | oauth_succession.OPERATIONS
@@ -3402,6 +3410,8 @@ class AuthorityRuntimeClient:
         }
         if operation in oauth_succession.OPERATIONS and len(_canonical(request)) > oauth_succession.MAX_HTTP_REQUEST:
             raise AuthorityServiceError("complete succession request original exceeds its handoff bound")
+        if input_value.get("schema") == native_jit.SCHEMA and len(_canonical(request)) > authority_contract.MAX_REQUEST_BYTES:
+            raise AuthorityServiceError(native_jit.ERROR)
         received = _socket_request(
             self.socket_path,
             request,
@@ -6697,6 +6707,9 @@ class AuthorityProcess:
             authority_contract.operation_spec(operation)["handler"]
         )
         runtime_input = dict(request["input"])
+        if runtime_input.get("schema") == native_jit.SCHEMA:
+            if operation != "release.reserve" or len(_canonical(dict(request))) > authority_contract.MAX_REQUEST_BYTES:
+                raise AuthorityServiceError(native_jit.ERROR)
         authority_planner.reject_authoritative_input(runtime_input)
         if operation == "webauthn.challenge.create":
             if set(runtime_input) == {"operation", "input", "userId", "credentialId"}:
@@ -8878,6 +8891,20 @@ class AuthorityProcess:
             raise AuthorityServiceError(
                 "typed authority handler binding changed"
             )
+        native_jit_submission = None
+        if runtime_input.get("schema") == native_jit.SCHEMA:
+            if operation != "release.reserve":
+                raise AuthorityServiceError(native_jit.ERROR)
+            try:
+                native_jit_submission = native_jit.parse_submission(runtime_input)
+                native_parent = native_jit.public_request_from_submission(native_jit_submission)
+                native_jit.verify_submission(native_jit_submission, typed_request=native_parent,
+                    configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
+                    now_epoch_ns=time.time_ns(), deadline_monotonic_ns=deadline_monotonic_ns)
+                runtime_input = jit_review_custody.assignment.document(
+                    native_jit_submission["runtimeOriginal"], jit_review_custody.MAX_ORIGINAL_BYTES)
+            except native_jit.SubmissionError:
+                raise AuthorityServiceError(native_jit.ERROR) from None
         native_evidence = None
         if operation in {static_create.OPERATION, static_rotate.OPERATION}:
             if (set(runtime_input) != {"input", "webauthnAuthorization", "nativeEvidence"}
@@ -8893,22 +8920,22 @@ class AuthorityProcess:
         arguments, explicit_webauthn, jit_private_documents = _extract_v9_runtime_input(
             operation, handler_name, runtime_input,
         )
-        if operation == "release.reserve" and jit_private_documents is not None:
-            # The explicit compound profile is now a connected, private ingress,
-            # not a legacy release receipt. Do not silently discard its originals
-            # or send commitments to a planner lacking atomic pending-child
-            # semantics. Genuine native custody and the compound writer must own
-            # this branch before any public request, signature or SQL is created.
+        if (operation == "release.reserve" and jit_private_documents is not None
+                and native_jit_submission is None):
+            # Only the separate native submission owns genuine custody. The
+            # older private profile may not silently enter compound retention.
             raise AuthorityServiceError(
                 "Private JIT release custody and atomic retention are unavailable"
             )
-        # No native original producer consumes these transient documents yet.
-        # Keep them local, never in arguments, typedRequest or planner_request.
+        # Never copy these plaintexts into arguments, typedRequest or a plan.
+        # The verifier-to-planner submission holds their original transient
+        # byte string separately for the planner's independent admission.
         if "businessIntent" in arguments:
             raise AuthorityServiceError(
                 "caller-supplied authority businessIntent is forbidden"
             )
-        authority_planner.reject_authoritative_input(arguments)
+        authority_planner.reject_authoritative_input(
+            native_jit.name_guard_arguments(arguments) if native_jit_submission is not None else arguments)
         typed_arguments = _synthesize_business_arguments(
             operation,
             arguments,
@@ -9124,7 +9151,22 @@ class AuthorityProcess:
                 authority_contract.OPERATION_MANIFEST_DIGEST,
             "arguments": typed_arguments,
         }
-        if operation in {credential_currentness.OP_REGISTER, credential_currentness.OP_ACK}:
+        if native_jit_submission is not None:
+            try:
+                native_jit.validate_retained(native_jit.retained_from_submission(native_jit_submission),
+                    typed_request=typed_request)
+                # Reserve bounded framing/identity overhead before witness
+                # reservation. The exact planner envelope is checked again
+                # after its witness fence is known; no size failure can start
+                # a witness for an already oversized private/public channel.
+                if len(_canonical({"submission": native_jit_submission,
+                        "typedRequest": typed_request})) > authority_contract.MAX_REQUEST_BYTES - 16 * 1024:
+                    raise native_jit.SubmissionError()
+            except native_jit.SubmissionError:
+                raise AuthorityServiceError(native_jit.ERROR) from None
+        if native_jit_submission is not None:
+            authority_planner.reject_typed_authoritative_input(operation, typed_request)
+        elif operation in {credential_currentness.OP_REGISTER, credential_currentness.OP_ACK}:
             authority_planner.reject_authoritative_input({name: value for name, value in typed_request.items()
                 if name != "arguments"})
             authority_planner.reject_typed_authoritative_input(operation, typed_arguments)
@@ -9133,6 +9175,12 @@ class AuthorityProcess:
         issued_monotonic_ns = time.monotonic_ns()
         issued_at_epoch_ns = time.time_ns()
         remaining_ns = deadline_monotonic_ns - issued_monotonic_ns
+        if native_jit_submission is not None:
+            native_proof = jit_review_custody.authority_evidence(native_jit_submission["evidenceOriginal"])
+            if issued_at_epoch_ns < native_proof["statement"]["issuedAtEpochNs"]:
+                raise AuthorityServiceError(native_jit.ERROR)
+            remaining_ns = min(remaining_ns, native_proof["statement"]["expiresAtEpochNs"] - issued_at_epoch_ns)
+            deadline_monotonic_ns = min(deadline_monotonic_ns, issued_monotonic_ns + remaining_ns)
         if operation in credential_currentness.ASSIGNMENT_OPERATIONS and "assignment_original" in arguments:
             from serverware import authority_credential_currentness_assignment as currentness_assignment
 
@@ -9291,6 +9339,10 @@ class AuthorityProcess:
             planner_request["staticCredentialCustodyEvidence"] = native_evidence
         if operation == static_rotate.OPERATION:
             planner_request["staticCredentialRotationEvidence"] = native_evidence
+        if native_jit_submission is not None:
+            planner_request[native_jit.PLANNER_FIELD] = native_jit_submission
+            if len(_canonical(planner_request)) > authority_contract.MAX_REQUEST_BYTES:
+                raise AuthorityServiceError(native_jit.ERROR)
         planner_config = self.configuration.role("planner")
         planned = _socket_request(
             str(planner_config["socketPath"]),
@@ -9364,6 +9416,11 @@ class AuthorityProcess:
                 "signed measured plan is not an exact typed plan"
             ) from exc
         plan_payload = signed_plan["payload"]
+        if native_jit_submission is not None and (
+                _canonical(plan_payload.get(native_jit.RETAINED_FIELD))
+                    != _canonical(native_jit.retained_from_submission(native_jit_submission))
+                or _canonical(plan_payload.get("typedRequest")) != _canonical(typed_request)):
+            raise AuthorityServiceError("Native JIT plan changed its original custody")
         measured_plan = plan_payload.get("measuredPlan")
         persistence_receipt = planned["persistenceReceipt"]
         if (
@@ -9646,6 +9703,8 @@ class AuthorityProcess:
                     "deadlineEpochNs": deadline_epoch_ns,
                     "fence": reservation["fence"],
                     "reservedAtEpochNs": issued_at_epoch_ns,
+                    **({native_jit.RETAINED_FIELD: plan_payload[native_jit.RETAINED_FIELD]}
+                        if native_jit_submission is not None else {}),
                 },
                 deadline_monotonic_ns=deadline_monotonic_ns,
                 fence=reservation["fence"],
@@ -9988,11 +10047,18 @@ class AuthorityProcess:
             setup_rotated_static_policy=(setup_policy.rotated_selection(self.configuration.payload, self.configuration.root_key)
                 if set(self.role_config["enabledOperations"]) & setup_policy.OPERATIONS
                 and self.configuration.payload.get(static_rotate.FIELD) is not None else None),
+            native_jit_configuration=(self.configuration.payload
+                if "release.reserve" in self.role_config["enabledOperations"]
+                and self.configuration.payload.get(jit_review_custody.FIELD) is not None else None),
+            native_jit_root_key=(self.configuration.root_key
+                if "release.reserve" in self.role_config["enabledOperations"]
+                and self.configuration.payload.get(jit_review_custody.FIELD) is not None else None),
         )
         # Check the pinned embedded receipt even on a durable-plan replay, and
         # before asking another process for stored planning data.
         planner.verify_assertion_evidence(planner_request)
         planner.verify_static_evidence(planner_request)
+        planner.verify_native_jit_evidence(planner_request)
         writer = self.configuration.role("planner-writer")
         replay = _socket_request(
             str(writer["socketPath"]),
@@ -10088,6 +10154,9 @@ class AuthorityProcess:
                 or planner_request["operation"] == static_rotate.OPERATION
                 and _canonical(derived["staticCredentialRotationEvidence"])
                     != _canonical(planner_request["staticCredentialRotationEvidence"])
+                or native_jit.selected(planner_request["typedRequest"])
+                and _canonical(derived.get(native_jit.RETAINED_FIELD))
+                    != _canonical(native_jit.retained_from_submission(planner_request[native_jit.PLANNER_FIELD]))
             ):
                 raise AuthorityServiceError(
                     "durable planner payload identity changed"

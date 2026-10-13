@@ -10,7 +10,7 @@ fn request_deadline_is_frozen_conservatively_before_io_and_not_renewed() {
     let after = native_canary_transport::boottime_ns().unwrap();
     assert!(before < frozen && frozen <= after + 1_000_000_000);
     let source = include_str!("native_release_jit_preparation.rs");
-    let actual = source.split("pub(super) fn prepare_and_refuse(").nth(1).unwrap();
+    let actual = source.split("pub(super) fn prepare_and_submit").nth(1).unwrap();
     assert_eq!(actual.matches("freeze_deadline(").count(), 1);
     assert!(actual.find("freeze_deadline(").unwrap() < actual.find("post_release_authorization_http_on_deadline(").unwrap());
     assert!(actual.contains("retained.request.deadline, original_boottime_deadline"));

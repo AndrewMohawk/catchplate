@@ -1910,10 +1910,27 @@ def install_authority_v9_executor(
                 -- key requires its parent first; canonical plan ordering is
                 -- still preserved for hashing, retention and every other
                 -- operation. No constraint or mutation guard is bypassed.
+                -- The exact native-JIT pending branch similarly creates a
+                -- route before an approval's immediate route FK. Its sealed
+                -- pair INSERT is the closed branch marker; ordinary release
+                -- plans keep their existing application order.
                 ORDER BY CASE
                     WHEN capability.operation IN ('setup.session.create', 'oauth.setup.create')
                         AND planned.value->>'table' = 'setup_sessions'
                         AND planned.value->>'operation' = 'INSERT'
+                    THEN 0
+                    WHEN capability.operation = 'release.reserve'
+                        AND planned.value->>'table' = 'routes'
+                        AND planned.value->>'operation' = 'INSERT'
+                        AND EXISTS (
+                            SELECT 1
+                            FROM pg_catalog.jsonb_array_elements(
+                                planner.mutation_plan_json::pg_catalog.jsonb
+                            ) AS native_pending_marker(value)
+                            WHERE native_pending_marker.value->>'table' =
+                                'policy_authority_native_jit_review_pairs'
+                              AND native_pending_marker.value->>'operation' = 'INSERT'
+                        )
                     THEN 0 ELSE 1 END,
                     planned.value->>'table' COLLATE "C",
                     planned.value->>'keyDigest' COLLATE "C",
@@ -2393,6 +2410,7 @@ def reserve_authority_execution_envelope(
     fence: int,
     reserved_at_epoch_ns: int,
     connection: Any,
+    native_jit_pending: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if operation not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS:
         raise ValueError(
@@ -2432,9 +2450,15 @@ def reserve_authority_execution_envelope(
         raise ValueError("authority v9 request binding is not exact")
     if operation == "jit.request":
         _require_public_jit_retention_request(exact_request)
-    authority_release_private_input.require_public_request(
-        exact_request, operation=operation
-    )
+    if native_jit_pending is None:
+        authority_release_private_input.require_public_request(
+            exact_request, operation=operation
+        )
+    else:
+        from serverware import authority_native_jit_submission as native_jit
+
+        native_jit.require_retained_request(exact_request, retained=native_jit_pending,
+            operation=operation, deadline_epoch_ns=deadline_epoch_ns)
     raw = _require_planner_writer(connection)
     request_base64url = _b64url(exact_request_bytes)
     request_bytes_digest = "sha256:" + hashlib.sha256(
@@ -2459,6 +2483,13 @@ def reserve_authority_execution_envelope(
             raise _db_value("MetadataStoreError")(
                 "authority v9 execution envelope parent binding changed"
             )
+        if native_jit_pending is not None:
+            from serverware.authority_store import native_jit_retention
+
+            native_jit_retention.require_locked_plan(planner, typed_request=exact_request,
+                retained=native_jit_pending, deadline_epoch_ns=deadline_epoch_ns)
+            _require_fresh_deadline(deadline_monotonic_ns=deadline_monotonic_ns,
+                deadline_epoch_ns=deadline_epoch_ns, reserved_at_epoch_ns=reserved_at_epoch_ns)
         cursor.execute(
             "INSERT INTO serverware_metadata."
             "policy_authority_execution_envelopes ("
@@ -3341,10 +3372,20 @@ def complete_authority_planner_transaction(
     if isinstance(planner_payload, dict):
         measured = planner_payload.get("measuredPlan")
         typed = planner_payload.get("typedRequest")
-        authority_release_private_input.require_public_request(
-            typed,
-            operation=measured.get("operation") if isinstance(measured, dict) else None,
-        )
+        if "nativeJitPending" in planner_payload:
+            from serverware import authority_native_jit_submission as native_jit
+
+            if (type(planner_payload["nativeJitPending"]) is not dict
+                    or not isinstance(measured, dict) or measured.get("operation") != "release.reserve"
+                    or type(measured.get("deadlineEpochNs")) is not int):
+                raise native_jit.SubmissionError()
+            native_jit.require_retained_request(typed, retained=planner_payload["nativeJitPending"],
+                operation=measured["operation"], deadline_epoch_ns=measured["deadlineEpochNs"])
+        else:
+            authority_release_private_input.require_public_request(
+                typed,
+                operation=measured.get("operation") if isinstance(measured, dict) else None,
+            )
         if (isinstance(measured, dict) and measured.get("operation") == "jit.request"
                 or isinstance(typed, dict) and typed.get("operation") == "jit.request"):
             _require_public_jit_retention_request(typed)
@@ -3369,6 +3410,8 @@ def complete_authority_planner_transaction(
         "plannerIdentity",
         "rootTransition",
     }
+    if isinstance(planner_payload, dict) and "nativeJitPending" in planner_payload:
+        required_payload_fields.add("nativeJitPending")
     required_plan_fields = {
         "schema",
         "plannerTransactionId",
@@ -3558,6 +3601,10 @@ def complete_authority_planner_transaction(
             f"SELECT serverware_metadata.{AUDIT_CAPACITY_FUNCTION_NAME}(%s,%s::jsonb,%s::jsonb,%s)",
             (plan["operation"], selected_json, mutation_json, plan["workUnits"]),
         )
+        if "nativeJitPending" in planner_payload:
+            _require_fresh_deadline(deadline_monotonic_ns=plan["deadlineMonotonicNs"],
+                deadline_epoch_ns=plan["deadlineEpochNs"],
+                reserved_at_epoch_ns=reserved["reserved_at_epoch_ns"])
         cursor.execute(
             "UPDATE serverware_metadata."
             "policy_authority_planner_transactions "

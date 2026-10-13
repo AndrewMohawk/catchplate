@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from serverware import authority_complete_query
+from serverware import authority_native_jit_retention_contract as native_jit_retention
 from serverware import authority_oauth_retirement_succession_catalog as retirement_catalog
 from serverware.authority_query_read_work import _ValidationWork
 
@@ -682,6 +683,7 @@ JIT_ORIGINAL_PAGE_CONTRACT = MappingProxyType({
 POSTGRES_IMMUTABLE_CUSTODY_TABLES = (
     RECOVERY_HISTORY_PAGE_TABLE, CHALLENGE_MAINTENANCE_PAGE_TABLE, JIT_ORIGINAL_PAGE_TABLE,
     RECOVERY_INVALIDATION_RETAINED_TABLE,
+    *native_jit_retention.TABLES,
 )
 
 # Protected transaction evidence, deliberately not an authenticated business
@@ -1640,6 +1642,7 @@ PHASE2_STORE_TABLES = tuple(sorted({
     *_PHASE3_ACTIVATION_EVIDENCE,
 }))
 V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
+    *native_jit_retention.TABLES,
     "setup_native_enrollments",
     "setup_native_ca_installations",
     "setup_native_canary_associations",
@@ -3083,12 +3086,15 @@ _OPERATIONS = {
         reads=(
             _APPROVAL + _QUOTA + _RELEASE + _WEBAUTHN
             + _RELEASE_AUTHORITY + _PHASE2_RELEASE_STATE
+            + native_jit_retention.TABLES
         ),
         writes=(
             _RELEASE_RESERVE_WRITES
             + _PHASE2_AGGREGATE
             + _PHASE2_EVIDENCE
+            + native_jit_retention.TABLES
         ),
+        mutation_kinds={native_jit_retention.TABLE: native_jit_retention.MUTATION_KINDS},
         proof_primitives=_PHASE2_OPAQUE_PROOF_SET,
         external_evidence_types=("release-reservation-authority/v1",),
         opaque_value_kinds=(

@@ -64,6 +64,14 @@ SUITES = (
     # Real crypto with synthetic keys/quotes; loader stops before native admission.
     Suite("backend", "test_authority_native_jit_review_custody.py", seconds=60),
     Suite("backend", "test_authority_native_jit_review_registration.py", seconds=60),
+    # Synthetic pending, writer-boundary, legacy-reader and ASGI controls only;
+    # no native startup, PostgreSQL transaction or provider acceptance.
+    Suite("backend", "test_authority_native_jit_pending.py", seconds=60),
+    Suite("backend", "test_authority_native_jit_executor_retention.py", seconds=60),
+    Suite("backend", "test_native_jit_legacy_reader.py", seconds=60),
+    Suite("backend", "test_native_jit_sqlite_bootstrap.py", seconds=60),
+    Suite("backend", "test_authority_native_jit_submission.py", seconds=60),
+    Suite("backend", "test_native_jit_submission_http.py", seconds=60),
     Suite("backend", "test_authority_release_private_input.py", seconds=60),
     Suite("backend", "test_authority_release_private_request.py", seconds=60),
     Suite("backend", "test_authority_release_private_ingress.py", seconds=60),
@@ -219,7 +227,7 @@ def node_completion(script, raw):
         "test_operator_guided_browser.cjs": {"ok": True, "browser": False, "network": False,
             "providerRequests": 0, "scope": "pure guided browser protocol and private download controls"},
         "test_operator_npm_ui.cjs": {**common,
-            "scope": "public catalog, inert DOM connect handlers, metadata-only recipe text; not browser or provider acceptance"},
+            "scope": "public catalog, inert DOM connect/download handlers, npm recipe and source-pin joins; not browser or provider acceptance"},
         "test_operator_npm_publish_ui.cjs": common,
         "test_operator_npm_install_ui.cjs": common,
         "test_operator_github_app_ui.mjs": {"ok": True, "network": False, "browser": False, "provider": False,

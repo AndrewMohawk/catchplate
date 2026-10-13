@@ -6465,6 +6465,9 @@ struct ValidatedReleaseAuthorizationQuota {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReleaseAuthorizationStage {
+    // Authenticated compound pending result, never a reservation. It has no
+    // legacy completion/cleanup RPC, even if later response validation fails.
+    PendingOnly,
     Reserved,
     DispatchUncertain,
     Dispatching,
@@ -26466,6 +26469,7 @@ fn consume_grant(
 fn release_authorization_operation_path(operation: &str) -> Result<&'static str, String> {
     match operation {
         "native-jit-prepare" => Ok(native_release_jit_preparation::PATH),
+        "native-jit-submit" => Ok(native_release_jit_preparation::submission::PATH),
         "native-prepare" => Ok("/api/data-plane/release-authorizations/native-prepare"),
         "policy-prepare" => Ok("/api/data-plane/release-authorizations/policy-prepare"),
         "reserve" => Ok(RELEASE_AUTHORIZATION_RESERVE_PATH),
@@ -26530,6 +26534,10 @@ where F: FnMut(),
         .as_deref()
         .ok_or("release authorization token is not configured")?;
     let body = Zeroizing::new(profile.canonical_ascii_bytes(payload)?);
+    if operation == "native-jit-submit" && (!profile.is_native() || deadline.is_none()
+        || body.len() > native_release_jit_preparation::submission::MAX_BODY_BYTES) {
+        return Err("native JIT submission profile or aggregate bound differs".to_owned());
+    }
     let single_attempt = operation == "complete"
         && payload.get("outcome").and_then(Value::as_str) == Some("not_forwarded");
     let attempts = if deadline.is_some() || single_attempt || operation == "reserve" {
@@ -26591,6 +26599,9 @@ where F: FnMut(),
         .map_err(|_| {
             format!("release_authorization_{operation}_response_authentication_failed")
         })?;
+        if matches!(operation, "native-jit-prepare" | "native-jit-submit") {
+            native_release_jit_preparation::submission::signed_headers(&signed.response_headers)?;
+        }
         if operation == "dispatch" {
             if signed.response_headers.is_empty() {
                 return Err(
@@ -29004,17 +29015,16 @@ fn request_release_authorization_with_connect<'a>(
             state, snapshot, principal_id, req, route, canonical_request)?;
         if profile.is_native() && require_jit_grant {
             if let Some(durable) = durable.as_ref() {
-                native_release_jit_preparation::prepare_and_refuse(
+                // Direct pending-only return: no path can fall through to the
+                // legacy reserve/grant/credential-release workflow.
+                return native_release_jit_preparation::prepare_and_submit(
                     native_release_jit_preparation::Request {
                         state, snapshot, authentication: &response_authentication,
                         original: connect_request.ok_or("native JIT buffered originals absent")?,
                         attempt_id, principal_id, route, credential_ref, credential_version,
                         policy_hash, request_digest, operation_digest: expected_operation_digest,
                         operation, canonical: canonical_request, request: req, durable, deadline,
-                    })?;
-                // Even an accidental future Ok cannot fall through to the old
-                // reserve path. Read-only preparation is not native admission.
-                return Err(native_release_jit_preparation::UNAVAILABLE.to_owned());
+                    }, shadow_finalization);
             }
         }
         Some(prepare_release_policy(state, snapshot, &response_authentication,
@@ -30085,6 +30095,9 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
         outcome: &str,
         evidence: Option<&DurablePolicyCompletionEvidence>,
     ) -> Result<bool, String> {
+        if self.stage == ReleaseAuthorizationStage::PendingOnly {
+            return Err("pending approval has no release completion".to_owned());
+        }
         if self.stage == ReleaseAuthorizationStage::Completed {
             return self
                 .terminal_releasable
@@ -30173,7 +30186,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
     }
 
     fn disarm_validated_denial(&mut self) -> Result<(), String> {
-        if self.stage != ReleaseAuthorizationStage::Reserved {
+        if !matches!(self.stage, ReleaseAuthorizationStage::Reserved | ReleaseAuthorizationStage::PendingOnly) {
             return Err("only an undispatched reserve denial can disarm cleanup".to_string());
         }
         self.stage = ReleaseAuthorizationStage::Completed;
@@ -30184,6 +30197,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
 
 impl Drop for ReleaseAuthorizationGuard<'_> {
     fn drop(&mut self) {
+        if self.stage == ReleaseAuthorizationStage::PendingOnly { return; }
         if self.stage != ReleaseAuthorizationStage::Completed
             && self.retained_completion.is_some()
         {
@@ -30204,7 +30218,7 @@ impl Drop for ReleaseAuthorizationGuard<'_> {
             ReleaseAuthorizationStage::Reserved => "not_forwarded",
             ReleaseAuthorizationStage::DispatchUncertain
             | ReleaseAuthorizationStage::Dispatching => "unknown",
-            ReleaseAuthorizationStage::Completed => return,
+            ReleaseAuthorizationStage::PendingOnly | ReleaseAuthorizationStage::Completed => return,
         };
         let evidence = (outcome == "unknown").then(|| {
             self.uncertainty_evidence("provider_outcome_or_response_validation_uncertain")

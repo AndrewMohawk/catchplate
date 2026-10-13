@@ -658,6 +658,9 @@ class KernelContext:
     verified_static_credential_rotation_evidence: Mapping[str, Any] | None = None
     # Independently selected historical rotation/custody policy, never arguments.
     setup_rotated_static_policy: Mapping[str, Any] | None = None
+    # Exact ciphertext/proof originals retained by the measured native JIT
+    # submission path. Never a caller admission flag or raw runtime documents.
+    native_jit_pending: Mapping[str, Any] | None = None
 
     def observed_query_rows(self, *, query_id: str) -> tuple[dict[str, Any], ...]:
         """Return the retained ordered SQL observation, not completeness proof.

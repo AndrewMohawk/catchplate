@@ -3270,6 +3270,11 @@ class _ReleaseReceiptKernel:
         database_now: datetime,
         request_digest: str,
     ) -> tuple[core.BoundedQuery, ...]:
+        if self.operation == "release.reserve":
+            from serverware import authority_transition_native_jit_pending as pending
+            if pending.is_profile(arguments):
+                return pending.queries(arguments=arguments, database_now=database_now,
+                    request_digest=request_digest)
         del database_now
         return self.query_builder(
             self.operation,
@@ -3281,6 +3286,12 @@ class _ReleaseReceiptKernel:
         self,
         context: core.KernelContext,
     ) -> core.KernelTransition:
+        if self.operation == "release.reserve":
+            from serverware import authority_transition_native_jit_pending as pending
+            if pending.is_profile(context.arguments):
+                return pending.transition(context)
+        if context.native_jit_pending is not None:
+            raise core.TransitionKernelError("native JIT retention is outside its release branch")
         if self.operation == "release.audit-drain" and not any(
             selected.get("present") is True
             for selected in context.selected_rows

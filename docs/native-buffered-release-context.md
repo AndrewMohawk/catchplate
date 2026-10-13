@@ -4,6 +4,11 @@
 
 ## Status and scope
 
+This page retains earlier source/test checkpoints. The
+[v26 successor](native-jit-review-custody.md) now connects submission,
+independent admission and pending-only retention in source; it is not deployed
+or an accepted native approval flow.
+
 The Rust source introduced at `38c9689dd97ebb0347f23f356929fb1dea587835` carries the actual
 buffered CONNECT request owners into atomic release preparation and reservation.
 It does not yet admit a compound native JIT request, authorize sealing or
@@ -462,7 +467,7 @@ durable-quota, approver-policy and redacted-review claims. The pure exported
 validator returns only `Result<(), String>`; it cannot return a prepared pair
 or broker owner.
 
-**Valid preparation still terminates with refusal.** Native cold admission,
+**At this checkpoint, valid preparation terminated with refusal.** Native cold admission,
 independent configuration/TTL pins, signing, atomic parent/child retention and
 authenticated private-review opening remain unimplemented here. Neither the
 new endpoint nor the reachable Rust branch authorizes reservation or release.
@@ -496,7 +501,7 @@ produced only the expected `E0308` and `E0603` failures. The result SHA-256 is
 `029b11726c0a0567d5d4d80b26810a79d2a9d63ccfe9264da81712a7b6fbae15`,
 bound to source pins
 `a9a1d096afe6820599cf4f44afe2944f87122f107931e69c00ebb2feae85d04d`.
-No normal binary was built or deployed. The unconditional refusal remains.
+No normal binary was built or deployed. That checkpoint retained the unconditional refusal.
 The durable `native-jit-preparation-rust.JBZM7oyC` record retains that result and
 11 byte-verified receipts. All 49 owned containers have terminal cleanup
 receipts and are absent; both warm build caches and the previous normal binary
@@ -504,39 +509,33 @@ were preserved.
 
 ### Next real integration boundary
 
-The next useful write slice is a durable/JIT request without an existing grant:
-one parent `release.reserve` operation atomically retains its encrypted review,
-admission evidence, pending child, capacity and audit, and returns the committed
-approval ID without releasing the credential. This is not implemented by the
-preparation exchange above. In particular:
+The successor now connects the previously missing write slice in source:
+one authenticated parent `release.reserve` submission is independently admitted
+by service and planner, then selects a pending-only kernel and executor path.
+Its full encrypted pair, literal evidence, pending child, capacity and audit
+share the parent transaction. The raw runtime stays transient; the plan retains
+only the four public/sealed originals. The old private channel still refuses.
 
-- Native source/configuration/deployment/TTL pins must be independently admitted
-  before the actual broker's `PreparedReleasePair` can support purpose-specific
-  signing and fresh-quote verification. Static-credential custody is a useful
-  ownership pattern, not reusable JIT authority.
-- Literal custody evidence must stay outside BusinessIntent and be independently
-  checked by both verifier and planner. Removing the service's unconditional
-  refusal alone would leave the receipt-driven release transition and mutation
-  allowlist unable to retain a pending child atomically.
-- The planner and executor's public-input guards still reject every non-null
-  nested JIT request. A complete admitted path needs an exact commitment-only
-  parent validator at those sites while preserving the raw-document refusal.
-- Retain the full versioned encrypted pair, including wrapped keys, nonces and
-  scope. The current legacy approval reader cannot open native ciphertext;
-  authenticated current-reviewer opening needs its own native owner.
-
-Calling standalone `jit.request` separately would not provide the required
-atomic parent/child write. The similarly named `authority_jit_compound_*`
-modules implement `jit.assertion.issue`, not pending-request creation. Existing
-SERIALIZABLE execution and bounded pending projections can be reused only after
-the new purpose's actual admission and transition contracts are connected.
-This map is source analysis, not an admission, migration or acceptance result.
+This connected implementation needs its own completed verification; isolated
+PostgreSQL component checks do not prove authenticated native retention or
+the current native caller. Authenticated current-reviewer opening and an exact
+one-use approved-request continuation remain missing. A separate `jit.request`
+call, existing ordinary approval UI, or a pending response cannot close those
+boundaries. The legacy reader explicitly rejects native private references.
 
 ### Purpose-specific v26 custody successor
 
 The [native JIT custody guide](native-jit-review-custody.md) describes the newer
 explicit v26 startup/assignment, same-broker sealing and actual signing/fresh-quote
-source integration. It advances the cold-admission boundary described above but
-still terminates before the missing atomic pending-request writer. Its separate
-Python proof verifier is not yet invoked by service or planner writes. Earlier
-test and deployment receipts on this page do not cover this successor.
+source integration, followed by bounded HTTP submission and independent
+service/planner proof verification. The Rust pending response cannot authorize
+dispatch or reservation cleanup. The guide records current verification failures
+and the remaining review/continuation work; no live enablement, hardware or
+provider acceptance follows from this source integration.
+
+The corrected earlier `429dee2a` checkpoint compiled its test binary and passed
+161 binary tests. Its API aggregate stopped on a two-versus-one diagnostic-span
+expectation, after 11 accepted probes; two probes did not run. The newer pending
+submission remains uncompiled. After the SQL payload-roster correction, 10
+isolated PostgreSQL DDL/kernel/CAS/commit-and-rollback controls passed. Those do
+not prove authenticated root/capability/ACL admission or deployment.

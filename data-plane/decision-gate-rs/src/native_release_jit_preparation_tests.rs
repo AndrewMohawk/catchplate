@@ -2,21 +2,22 @@
 //! The exporting test independently checks the raw 27-field facade arguments,
 //! both derived requests and the real synthetic Ed25519 HTTP response. This
 //! fixture carries no signing key, native owner, Prepared pair or authority.
+//! Historical producer-manifest wire fixture: not current-contract admission.
 //! Route metadata is synthetic, not a claim of compiled-policy admission.
 use super::*;
 
 const FIXTURE: &str = include_str!("../../../scripts/fixtures/native_release_jit_preparation.json");
 
-struct Fixture {
-    request: Value,
-    route: Route,
-    actor: String,
-    durable: ReleaseAuthorizationDurablePolicyBinding,
-    body: Vec<u8>,
+pub(super) struct Fixture {
+    pub(super) request: Value,
+    pub(super) route: Route,
+    pub(super) actor: String,
+    pub(super) durable: ReleaseAuthorizationDurablePolicyBinding,
+    pub(super) body: Vec<u8>,
 }
 
 impl Fixture {
-    fn load() -> Self {
+    pub(super) fn load() -> Self {
         let value: Value = serde_json::from_str(FIXTURE).unwrap();
         assert_eq!(value["schema"], "serverware.nativeReleaseJitPreparationFixture/v1");
         let row = &value["route"];
@@ -46,7 +47,7 @@ impl Fixture {
             body: value["responseBody"].as_str().unwrap().as_bytes().to_vec() }
     }
 
-    fn claims(&self) -> Claims<'_> {
+    pub(super) fn claims(&self) -> Claims<'_> {
         Claims { actor: &self.actor, attempt_id: self.request["attemptId"].as_str().unwrap(),
             principal_id: self.request["principalId"].as_str().unwrap(), route: &self.route,
             credential_ref: self.request["credentialRef"].as_str(),
@@ -234,13 +235,13 @@ fn lifetime_and_reachable_terminal_boundary_do_not_grant_native_authority() {
     // CONNECT owner or claim HTTP/native admission coverage from unit data.
     let source = include_str!("main.rs");
     let caller = source.split("fn request_release_authorization_with_connect").nth(1).unwrap();
-    let branch = caller.find("native_release_jit_preparation::prepare_and_refuse(").unwrap();
+    let branch = caller.find("return native_release_jit_preparation::prepare_and_submit(").unwrap();
     let old_prepare = caller.find("Some(prepare_release_policy(").unwrap();
     assert!(branch < old_prepare);
-    assert!(caller[branch..old_prepare].contains("return Err(native_release_jit_preparation::UNAVAILABLE.to_owned())"));
+    assert!(caller[branch..old_prepare].contains("}, shadow_finalization);"));
     let consumer = include_str!("native_release_jit_preparation.rs");
-    let terminal = consumer.split("pub(super) fn prepare_and_refuse(").nth(1).unwrap();
-    assert!(terminal.contains("let _retained = (retained, evidence);\n    Err(UNAVAILABLE.to_owned())"));
+    let terminal = consumer.split("pub(super) fn prepare_and_submit").nth(1).unwrap();
+    assert!(terminal.contains("submission::submit(retained, evidence, original_boottime_deadline, shadow)"));
     let freeze = terminal.find("native_jit_review::freeze_deadline(").unwrap();
     let http = terminal.find("post_release_authorization_http_on_deadline(").unwrap();
     let prepare = terminal.find("native_jit_review::prepare(").unwrap();

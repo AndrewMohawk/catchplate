@@ -11,8 +11,10 @@ signing, or commit an atomic pending approval. The first 141-test attempt failed
 two source guards; the corrected immutable retry passed all 146 selected tests
 as recorded below. Normal compilation and combined CI for that checkpoint also
 passed. The separate connection-owner continuation compiled and ran, but its
-first attempt failed one binary test. Its corrected focused retry passed;
-normal compilation also passed, while CI for that continuation remains pending.
+first attempt failed one binary test. Its corrected focused retry, normal
+compilation and subsequent 58-suite CI passed. The normal executable also passed
+the separate ordinary guided journey linked below; no native workflow or
+deployment acceptance follows.
 None of these component results is native workflow acceptance.
 
 The companion Python change at `7013967b` temporarily refuses raw nested JIT
@@ -126,9 +128,11 @@ The retry source-pin receipt SHA256 is
 Normal compilation at `cb1466be` passed in 227.639 seconds, producing the
 41,856,176-byte ELF SHA256
 `0908732386fad8f7c89e761665fbda763d3c522b275d6c34ade5322cbaa54b6b`
-with 518 recorded compiler inputs. This normal executable was **not executed or
-deployed**. All 44 retry cleanup receipts passed, with zero owned containers
-remaining; the original retained cache inputs were unchanged.
+with 518 recorded compiler inputs. At that compile checkpoint the normal
+executable had **not been executed or deployed**. It was subsequently executed
+in the isolated ordinary guided journey below, not deployed. All 44 retry cleanup
+receipts passed, with zero owned containers remaining; the original retained
+cache inputs were unchanged.
 
 The durable retry receipt directory is
 `native-ingress-library-rust-retry.qNDpQ9ui/receipts` under the private evidence
@@ -140,8 +144,17 @@ root. Its receipt SHA256 values are:
 - `normal.json`: `421da237cfe4e0c39897205fccb457c29828ee5acd25f4b93f9c8041c3da2608`.
 - `normal-compiler-inputs.json`: `448d861b8c576627c35e2a7848aac1f4f8f2c75f6378b0fd3b1773ad4b7ea125`.
 
-CI for this connection-owner batch remains pending. The earlier verified
-`3752cb7d` CI result below covers the preceding checkpoint, not this continuation.
+[CI 38404208827](https://github.com/example/private-deployment)
+subsequently passed all 58 suites, 512 Python tests and 145 Node groups, with zero
+skips, failures or reported exceptions in 447.976 seconds. Its retained
+`ci-38404208827.zgrFniED/quick/result.json` SHA-256 is
+`9c47b2f6a9df1c9fceb6b42cf8a9e91a711bc7abcf98a4fda777d0a53ff6e5a6`.
+The separate [guided ordinary journey](operator-guided-verification.md#latest-october-13-checkpoint--ordinary-run-with-the-connection-owner-candidate)
+passed at documentation-only successor `6cd18577` with this actual `09087323`
+normal binary, including UI creation, proxy allow, audit and revocation/denial.
+These results do not admit a native caller, private review or protected approval,
+and did not change the live deployment. The earlier `3752cb7d` CI result below
+remains evidence for its preceding checkpoint only.
 
 ## Python: temporary refusal at five boundaries
 

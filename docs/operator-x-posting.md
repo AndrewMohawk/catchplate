@@ -6,8 +6,10 @@ Status on 2026-10-12: the typed posting contract, ordinary SDK examples and
 feature-gated account/permission console flow are implemented in source,
 including connected consent, refresh and protective disconnect at `c207ac75`.
 **Isolated synthetic-provider TLS/Rust/SDK-through-proxy acceptance passed at
-`1e891965`; deployment and real-X acceptance remain unverified.** The deployed
-username-read preset does not authorize posting. See
+`1e891965`. The matching managed-X release is deployed at `2f4c4ed4` with normal
+Rust `811082ac`, explicitly unconfigured; real-X acceptance remains unverified.**
+The retained X custody is empty, and `https://api.x.com` is not an approved live
+destination. The separate username-read preset does not authorize posting. See
 [project completion](project-completion.md) for the full checkpoint. No pilot is
 required to finish or verify this ordinary workflow.
 
@@ -136,17 +138,19 @@ inputs, dirty working files, archive attributes, replacement objects, unsafe
 paths/modes/links, bounds and timestamp readback. They do not benchmark Cargo or
 verify a retained cache. No real build source, cache or deployment was changed.
 
-## Remaining work before enabling the preset
+## Remaining work before real provider use
 
 The intended story is: connect an X account in the console, give an application
 a posting permission, send its ordinary SDK request through the proxy, and
 inspect the durable audit result. The source now joins application configuration,
 the separate `x_oauth` account type, PKCE callback, encrypted custody, refresh,
-protective disconnect and capability-gated quota-free posting UI. These do not
-automatically enable the feature on the running instance.
+protective disconnect and capability-gated quota-free posting UI. Deployment of
+that capability does not configure an X application, connect an account, approve
+the provider destination or create a posting permission.
 
-1. Complete the matching app/proxy release; the isolated connected SDK run does
-   not enable the running instance.
+1. Keep the deployed app/proxy pair and retained-state evidence current. The
+   matching release is deployed, but the isolated connected SDK run does not
+   establish configured live-provider use.
 2. Add durable shared-account quota execution before offering that restriction;
    the current account/grant flow must continue to refuse it.
 3. With operator-supplied provider configuration and consent, verify the real X
@@ -175,7 +179,8 @@ replay, and 12 negative controls with no extra provider posts. Four synthetic
 revocations, seven audit attempt pairs and final audit verification passed;
 cleanup completed in the 202.355-second total. See
 [project completion](project-completion.md) for the receipts. These results
-establish neither deployed nor real-X posting, quota or native acceptance.
+establish neither real-X posting, quota nor native acceptance. Deployment is
+established separately by the retained-state rollout record, not by these tests.
 
 ### Ordinary X account ownership contract
 
@@ -212,8 +217,9 @@ The deployment owner must explicitly select
 `SERVERWARE_OPERATOR_MANAGED_X_ENABLED=1` and an existing private 0700
 `SERVERWARE_OPERATOR_X_CUSTODY_DIR`, mounted only in the app. This directory must
 be separate and non-nested from both app data and Google's provider key directory;
-it must also be kept out of gate/notification mounts. The normal Compose
-deployment has not been changed or enabled by these source additions. X controls
+it must also be kept out of gate/notification mounts. The reviewed managed-X
+Compose release now explicitly selects this capability with a separate empty
+custody directory. Other deployments retain the disabled default; X controls
 stay hidden when the deployment reports the feature disabled. When selected,
 account consent and new posting grants additionally require the actual matching
 app/gate configuration and policy observation; saved configuration alone cannot

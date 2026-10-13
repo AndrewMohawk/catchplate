@@ -17892,7 +17892,9 @@ def quote_public_key_info() -> dict[str, str]:
     return {"pem": pem, "spki_sha256": sha256_prefixed(der)}
 
 
-def runtime_manifest() -> dict[str, Any]:
+def runtime_manifest(*, read_only: bool = False) -> dict[str, Any]:
+    if type(read_only) is not bool:
+        raise ValueError("runtime manifest read mode is invalid")
     return {
         "mode": "dev" if TEE_QUOTE_PROVIDER == "dev-signed-quote" else "tee",
         "tee_quote_provider": TEE_QUOTE_PROVIDER,
@@ -17900,7 +17902,9 @@ def runtime_manifest() -> dict[str, Any]:
         "python": platform.python_version(),
         "platform": platform.platform(),
         "serverware_version": __version__,
-        "policy_signing_key_id": policy_public_key_hash(),
+        "policy_signing_key_id": (
+            policy_public_key_hash(read_only=True) if read_only else policy_public_key_hash()
+        ),
         "policy_high_water_store": db.metadata_store_backend_name(),
         "policy_minimum_sequence": POLICY_MIN_SEQUENCE,
         "policy_minimum_rollback_epoch": POLICY_MIN_ROLLBACK_EPOCH,
@@ -17963,8 +17967,13 @@ def runtime_manifest() -> dict[str, Any]:
     }
 
 
-def runtime_manifest_digest(manifest: dict[str, Any] | None = None) -> str:
-    value = runtime_manifest() if manifest is None else manifest
+def runtime_manifest_digest(
+    manifest: dict[str, Any] | None = None, *, read_only: bool = False,
+) -> str:
+    if type(read_only) is not bool:
+        raise ValueError("runtime manifest read mode is invalid")
+    value = ((runtime_manifest(read_only=True) if read_only else runtime_manifest())
+        if manifest is None else manifest)
     envelope = {
         "apiVersion": RUNTIME_MANIFEST_DIGEST_VERSION,
         "manifest": value,

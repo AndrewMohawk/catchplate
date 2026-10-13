@@ -442,3 +442,45 @@ its result SHA-256 is
 `b650c7ebfcd45e1ec2bb2857a57935497972d920c5c5d2d954a0fe3bf10cc49b`.
 All 63 suite source pins and individual receipts were checked against that
 commit. This is hosted ordinary component evidence, separate from Rust tests.
+
+### Authenticated compound-original preparation — October 13
+
+The native durable-JIT caller now has a distinct, read-only preparation endpoint:
+`POST /api/data-plane/release-authorizations/native-jit-prepare`. Authentication
+precedes its bounded body parser and metadata reads. It requires the shared
+PostgreSQL metadata/grant topology and derives the actual release facade's 27
+arguments, including its defaults, without invoking that facade. The response
+contains the runtime envelope and both derived requests as canonical JSON text
+strings, preserving original number spellings inside those documents.
+
+The existing response-signature middleware signs those exact bytes using only
+preprovisioned, mutually matching key/public-key/key-ID files. This endpoint
+does not bootstrap a signing key or drain the audit outbox. Its Rust consumer
+retains the actual buffered request and signed HTTP response, checks their
+original deadline and current policy, and independently compares request,
+durable-quota, approver-policy and redacted-review claims. The pure exported
+validator returns only `Result<(), String>`; it cannot return a prepared pair
+or broker owner.
+
+**Valid preparation still terminates with refusal.** Native cold admission,
+independent configuration/TTL pins, signing, atomic parent/child retention and
+authenticated private-review opening remain unimplemented here. Neither the
+new endpoint nor the reachable Rust branch authorizes reservation or release.
+
+Thirteen actual no-lifespan ASGI tests passed with zero skips in the isolated
+`native-jit-prepare-verified.kvxi2LBP` run. The test receipt SHA-256 is
+`720396021eec43106aa748de0e8a78a876bff695487177292c275b883463ed8a`.
+The test uses real temporary Ed25519 key files and real middleware, with
+explicitly synthetic policy/generation readers. It prohibits writer, SQL,
+network and request-time filesystem mutations at those tested seams. The
+container exited zero, was removed, and tested source pins were unchanged.
+The exported synthetic Rust fixture is byte-identical to both earlier positive
+exports, SHA-256
+`b1bdf10c83bee503dbf82be8a0fc2e72f9121db4110f0e7f61186bd09d578b23`.
+The earlier reporting-wrapper and header-case test failures remain retained.
+
+This does not prove the real PostgreSQL readers are free of filesystem checks
+or advisory locks: existing `db.connect()` still calls `ensure_data_dirs()`.
+It is not native admission, hardware, real-provider, reservation or deployment
+acceptance. Rust compilation and the new component controls are tracked
+separately; the synthetic fixture alone is not evidence that they executed.

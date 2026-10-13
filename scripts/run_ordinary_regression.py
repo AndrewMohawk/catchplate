@@ -63,6 +63,7 @@ SUITES = (
     Suite("backend", "test_authority_release_private_input.py", seconds=60),
     Suite("backend", "test_authority_release_private_request.py", seconds=60),
     Suite("backend", "test_authority_release_private_ingress.py", seconds=60),
+    Suite("backend", "test_native_jit_prepare.py", seconds=60),
     Suite("backend", "test_approval_history_metadata.py", seconds=60),
     Suite("backend", "test_operator_catalog_npm_install.py"),
     Suite("backend", "test_github_app.py"),
@@ -112,6 +113,7 @@ SUITES = (
     Suite("ui_contract", "test_operator_x_configuration_ui.mjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_x_quota_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_runtime_browser_assets.cjs", "node", seconds=60),
+    Suite("ui_contract", "test_approval_decision_ui.cjs", "node", seconds=60),
 )
 
 
@@ -226,6 +228,8 @@ def node_completion(script, raw):
             "scope": "actual JS with inert DOM and independent synthetic API DTOs; not backend, browser or provider acceptance"},
         "test_operator_x_quota_ui.cjs": {"ok": True, "browser": False, "network": False,
             "scope": "shared X posting-attempt quota UI contracts; no backend or enforcement acceptance"},
+        "test_approval_decision_ui.cjs": {"ok": True, "browser": False, "network": False,
+            "scope": "actual approval UI functions with inert DOM and synthetic API/WebAuthn; not browser or protected authority acceptance"},
     }
     def unique(pairs):
         value = {}

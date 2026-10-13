@@ -35,6 +35,15 @@ const BINDINGS: &[&str] = &["sourceContractDigest", "controlPlaneConfigurationDi
     "holderId", "bootId", "keyId", "controlPlaneResponseSigningKeyId", "releaseRecordSha256", "policyHash",
     "configurationSha256", "caCertificateSha256", "caPublicKeySpkiSha256", "expectedBinaryDigest"];
 
+/// Pure bounded original-byte/graph correlation only. This cannot configure or
+/// use a broker, create PreparedReleasePair, authenticate a caller, pin a source
+/// contract, or authorize signing/retention. Parent numbers stay RawValue bytes;
+/// the measured Python owner remains the complete canonical-number validator.
+pub fn validate_release_jit_review_originals(runtime: &[u8], parent: &[u8], child: &[u8])
+    -> Result<(), String> {
+    release::read(runtime, parent, child).map(|_| ())
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Configuration {

@@ -28,7 +28,8 @@ class RunnerTests(unittest.TestCase):
                 "test_authority_jit_private_request.py", "test_native_jit_review_material.py",
                 "test_native_jit_review_owner.py",
                 "test_authority_release_private_input.py", "test_authority_release_private_request.py",
-                "test_authority_release_private_ingress.py", "test_approval_history_metadata.py"):
+                "test_authority_release_private_ingress.py", "test_native_jit_prepare.py",
+                "test_approval_history_metadata.py"):
             denial = next(row for row in runner.SUITES if row.script == script)
             self.assertEqual((denial.category, denial.runtime, denial.arguments, denial.seconds),
                 ("backend", "python", (), 60))
@@ -46,6 +47,9 @@ class RunnerTests(unittest.TestCase):
                 ("backend", "python", (), 60))
         gmail = next(row for row in runner.SUITES if row.script == "test_operator_gmail_sdk_languages.cjs")
         self.assertEqual((gmail.category, gmail.runtime, gmail.arguments, gmail.seconds),
+            ("ui_contract", "node", (), 60))
+        decisions = next(row for row in runner.SUITES if row.script == "test_approval_decision_ui.cjs")
+        self.assertEqual((decisions.category, decisions.runtime, decisions.arguments, decisions.seconds),
             ("ui_contract", "node", (), 60))
         for script in ("test_operator_guided_checker.py", "test_operator_guided_fixture.py",
                 "test_operator_guided_browser.cjs"):
@@ -209,6 +213,8 @@ class RunnerTests(unittest.TestCase):
                 "scope": "actual JS with inert DOM and independent synthetic API DTOs; not backend, browser or provider acceptance"}, "PASS fixture\n"),
             "test_operator_x_quota_ui.cjs": ({"ok": True, "browser": False, "network": False,
                 "scope": "shared X posting-attempt quota UI contracts; no backend or enforcement acceptance"}, "PASS fixture\n"),
+            "test_approval_decision_ui.cjs": ({"ok": True, "browser": False, "network": False,
+                "scope": "actual approval UI functions with inert DOM and synthetic API/WebAuthn; not browser or protected authority acceptance"}, "PASS fixture\n"),
         }
         self.assertEqual({row.script for row in runner.SUITES if row.runtime == "node"},
             set(examples) | {"test_operator_runtime_browser_assets.cjs"})

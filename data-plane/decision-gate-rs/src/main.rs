@@ -99,6 +99,7 @@ mod native_ingress_attestation;
 mod native_target_principal_preflight;
 mod native_enrollment_authorizer;
 mod native_buffered_request;
+mod native_release_jit_preparation;
 mod native_enrollment_admission;
 mod native_workload_bootstrap_request_v1;
 mod native_enrollment_bootstrap_admission;
@@ -26462,6 +26463,7 @@ fn consume_grant(
 
 fn release_authorization_operation_path(operation: &str) -> Result<&'static str, String> {
     match operation {
+        "native-jit-prepare" => Ok(native_release_jit_preparation::PATH),
         "native-prepare" => Ok("/api/data-plane/release-authorizations/native-prepare"),
         "policy-prepare" => Ok("/api/data-plane/release-authorizations/policy-prepare"),
         "reserve" => Ok(RELEASE_AUTHORIZATION_RESERVE_PATH),
@@ -26564,7 +26566,9 @@ where F: FnMut(),
         let status = response.status();
         let bytes = Zeroizing::new(read_bounded_control_plane_response_body(
             &mut response,
-            if matches!(operation, "native-prepare" | "policy-prepare") && deadline.is_some() {
+            if operation == "native-jit-prepare" && deadline.is_some() {
+                native_release_jit_preparation::MAX_RESPONSE_BYTES
+            } else if matches!(operation, "native-prepare" | "policy-prepare") && deadline.is_some() {
                 MAX_NATIVE_RELEASE_PREPARATION_RESPONSE_BYTES
             } else { MAX_CONTROL_PLANE_RELEASE_AUTHORIZATION_RESPONSE_BYTES },
             &format!("release authorization {operation} response"),
@@ -28996,6 +29000,21 @@ fn request_release_authorization_with_connect<'a>(
             principal_id, credential_ref, credential_version, policy_hash, operation)?;
         native_buffered_request::check_release(profile, require_jit_grant, connect_request,
             state, snapshot, principal_id, req, route, canonical_request)?;
+        if profile.is_native() && require_jit_grant {
+            if let Some(durable) = durable.as_ref() {
+                native_release_jit_preparation::prepare_and_refuse(
+                    native_release_jit_preparation::Request {
+                        state, snapshot, authentication: &response_authentication,
+                        original: connect_request.ok_or("native JIT buffered originals absent")?,
+                        attempt_id, principal_id, route, credential_ref, credential_version,
+                        policy_hash, request_digest, operation_digest: expected_operation_digest,
+                        operation, canonical: canonical_request, request: req, durable, deadline,
+                    })?;
+                // Even an accidental future Ok cannot fall through to the old
+                // reserve path. Read-only preparation is not native admission.
+                return Err(native_release_jit_preparation::UNAVAILABLE.to_owned());
+            }
+        }
         Some(prepare_release_policy(state, snapshot, &response_authentication,
             attempt_id, principal_id, route, credential_ref, credential_version, policy_hash,
             request_digest, expected_operation_digest, operation, canonical_request,

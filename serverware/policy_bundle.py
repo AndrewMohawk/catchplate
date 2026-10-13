@@ -2035,8 +2035,12 @@ def policy_public_key_pem() -> str:
     ).decode("ascii")
 
 
-def policy_public_key_hash() -> str:
-    return _public_key_id(policy_public_key())
+def policy_public_key_hash(*, read_only: bool = False) -> str:
+    if type(read_only) is not bool:
+        raise ValueError("policy public-key read mode is invalid")
+    # Read-only protocol responses must never bootstrap a missing trust key.
+    public_key = _load_policy_signing_trust().public_key if read_only else policy_public_key()
+    return _public_key_id(public_key)
 
 
 def sign_policy_bundle(raw: dict[str, Any]) -> dict[str, Any]:

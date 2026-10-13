@@ -578,7 +578,12 @@ async def csrf_middleware(request: Request, call_next):
             headers=exc.headers,
         )
     response = await call_next(request)
-    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+    # This new preparation POST is a read-only original producer. Its entire
+    # ASGI path must not opportunistically drain unrelated durable audit work,
+    # including after an authenticated or malformed request is refused.
+    if (request.method not in {"GET", "HEAD", "OPTIONS"}
+            and request.scope.get("path")
+                != "/api/data-plane/release-authorizations/native-jit-prepare"):
         try:
             await _run_bounded_blocking(
                 _METADATA_AUDIT_OUTBOX_DRAIN_SLOTS,
@@ -611,6 +616,12 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     if operator_active and not operator_demo.request_allowed(request.method, request.url.path):
         return JSONResponse(status_code=403, content={"detail":
             "This operator demo allows only scoped local connections; production and native authority mutations are unavailable."})
+    if (request.method == "POST" and request.scope.get("path")
+            == "/api/data-plane/release-authorizations/native-jit-prepare"):
+        # The authenticated 512 KiB dependency owns this exact body's parsing.
+        # Never prebuffer before service-token authentication. The outer ASGI
+        # signer still supplies the common response security headers.
+        return await call_next(request)
     if (operator_active and request.method == "POST"
             and request.scope.get("path") == "/api/data-plane/operator-x-quota/claim"):
         # Only this new machine route owns its authenticated 33 KiB / 5 s
@@ -1441,6 +1452,9 @@ def _signed_control_plane_response_headers(
     representation_body: bytes | None = None,
     audit_timing: _audit_timing.AuditTiming | None = None,
 ) -> dict[str, str]:
+    read_only_preparation = (
+        request_path == "/api/data-plane/release-authorizations/native-jit-prepare"
+    )
     context_fields = (
         "runtime_manifest_digest",
         "policy_bundle_digest",
@@ -1465,12 +1479,18 @@ def _signed_control_plane_response_headers(
             )
         context = {field: attestation[field] for field in context_fields}
     else:
-        if audit_timing is not None:
+        if read_only_preparation and response_status_code != 200:
+            # A bounded refusal must not reopen metadata before authentication
+            # or after the endpoint rejected its storage topology. A missing
+            # success context is not repaired by an alternate authority read.
+            snapshot = None
+        elif audit_timing is not None:
             snapshot = get_policy_snapshot(_audit_observation=audit_timing)
         else:
             snapshot = get_policy_snapshot()
         _audit_timing.mark(audit_timing, "sign_policy_done")
-        manifest_digest = runtime_manifest_digest()
+        manifest_digest = (runtime_manifest_digest(read_only=True)
+            if read_only_preparation else runtime_manifest_digest())
         _audit_timing.mark(audit_timing, "sign_manifest_done")
         artifact_digests = attestation_artifact_digests()
         _audit_timing.mark(audit_timing, "sign_artifacts_done")
@@ -1488,9 +1508,11 @@ def _signed_control_plane_response_headers(
         response_headers=response_headers,
         nonce=request_nonce,
         context=context,
+        **({"read_only": True} if read_only_preparation else {}),
     )
     _audit_timing.mark(audit_timing, "sign_statement_done")
-    headers = response_signature_headers(statement)
+    headers = (response_signature_headers(statement, read_only=True)
+        if read_only_preparation else response_signature_headers(statement))
     _audit_timing.mark(audit_timing, "sign_crypto_done")
     return headers
 
@@ -5450,6 +5472,20 @@ def _require_currentness_response_context(request: Request, expected_path: str) 
 async def _bounded_release_authorization_prepare_request(
     request: Request,
 ) -> DataPlaneReleaseAuthorizationPrepare:
+    if request.scope.get("path") == "/api/data-plane/release-authorizations/native-jit-prepare":
+        # This path bypasses the generic middleware's body buffering, so keep
+        # its Content-Length syntax/negative checks after authentication here.
+        _require_data_plane_token(
+            request.headers.get("X-Serverware-Data-Plane-Token"),
+            DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN,
+        )
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) < 0:
+                    raise ValueError("negative Content-Length")
+            except ValueError:
+                raise HTTPException(status_code=400, detail="invalid Content-Length") from None
     return await _bounded_exact_data_plane_model(
         request,
         model_type=DataPlaneReleaseAuthorizationPrepare,
@@ -23105,6 +23141,135 @@ def _release_authorization_preparation(
     }
 
 
+def _release_authorization_reserve_arguments(
+    payload: DataPlaneReleaseAuthorizationReserve,
+    *,
+    authenticated_actor_id: str,
+    route: Any,
+    shared_quotas: list[dict[str, Any]],
+    require_jit_grant: bool,
+    approval_review: tuple[Any, ...],
+    durable_policy: dict[str, Any] | None,
+    approver_arguments: dict[str, Any],
+    native: bool,
+    policy_aware: bool,
+    expected_approver_policy_sha256: str | None,
+) -> dict[str, Any]:
+    """Build the same facade inputs for read-only preparation and reservation."""
+    jit = route.jit or {}
+    jit_approval_request = None
+    if require_jit_grant:
+        method, url, canonical_request, redacted_display = approval_review
+        jit_approval_request = {
+            "method": method,
+            "url": url,
+            "canonical_request": canonical_request,
+            "redacted_display": redacted_display,
+            "pending_ttl_seconds": max(
+                1, min(int(jit.get("pendingTtlSeconds", 300)), 3600)
+            ),
+            "grant_ttl_seconds": max(
+                1, min(int(jit.get("ttlSeconds", 30)), 3600)
+            ),
+            "grant_max_uses": max(1, int(jit.get("maxUses", 1))),
+        }
+    arguments = {
+        "attempt_id": payload.attempt_id,
+        "flow_id": payload.flow_id,
+        "principal_id": payload.principal_id,
+        "route_id": payload.route_id,
+        "credential_id": payload.credential_ref or "",
+        "credential_version": payload.credential_version,
+        "policy_hash": payload.policy_hash,
+        "request_digest": payload.request_digest,
+        "operation_digest": payload.operation_digest,
+        "operation_context": dict(payload.operation_context),
+        "shared_quotas": shared_quotas,
+        "require_jit_grant": require_jit_grant,
+        "reservation_ttl_seconds": RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS,
+        "jit_approval_request": jit_approval_request,
+        "actor_id": authenticated_actor_id,
+        "authority_policy_hash": payload.policy_hash,
+        "authority_route_id": route.id,
+        "native_profile": native,
+        "policy_aware_profile": policy_aware,
+        "expected_approver_policy_sha256": expected_approver_policy_sha256,
+    }
+    if require_jit_grant:
+        arguments.update(approver_arguments)
+    if durable_policy is not None:
+        arguments["durable_policy_binding"] = durable_policy
+    return arguments
+
+
+@app.post("/api/data-plane/release-authorizations/native-jit-prepare")
+def data_plane_release_jit_preparation(
+    request: Request,
+    payload: DataPlaneReleaseAuthorizationPrepare = Depends(
+        _bounded_release_authorization_prepare_request
+    ),
+    x_serverware_data_plane_token: str | None = Header(
+        default=None, alias="X-Serverware-Data-Plane-Token"
+    ),
+) -> Response:
+    from serverware import native_release_jit_preparation as preparation
+
+    method, path, query, nonce, _https, invalid_nonce = _request_signature_inputs(request.scope)
+    if method != "POST" or path != preparation.PATH or query or nonce is None or invalid_nonce:
+        raise HTTPException(status_code=400, detail="native JIT preparation requires an exact nonce-bound POST")
+    if payload.api_version != "serverware.nativeReleaseAuthorizationPrepare/v2":
+        raise HTTPException(status_code=409, detail="native JIT preparation requires the durable native profile")
+    _require_data_plane_token(
+        x_serverware_data_plane_token, DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN
+    )
+    try:
+        # Require the preprovisioned native metadata topology before any of
+        # the shared readers can select a generic SQLite/bootstrap connection.
+        db._require_postgres_jit_authority("native JIT release preparation")
+    except (db.MetadataStoreError, db.grants.GrantStoreError):
+        raise HTTPException(status_code=503, detail="native JIT metadata authority is unavailable") from None
+    (
+        authenticated_actor_id, _snapshot, route, shared_quotas,
+        require_jit_grant, approval_review, durable_policy,
+    ) = _release_authorization_inputs(payload, x_serverware_data_plane_token)
+    if not require_jit_grant or durable_policy is None:
+        raise HTTPException(status_code=409, detail="native JIT preparation requires a durable JIT route")
+    policy, approver_arguments = db.release_approver_policy_for_route(
+        route.jit or {}, require_jit_grant=True
+    )
+    try:
+        release_profiles.require_versioned_approver_policy(policy)
+        policy_digest = release_profiles.approver_policy_sha256(policy)
+        arguments = _release_authorization_reserve_arguments(
+            payload, authenticated_actor_id=authenticated_actor_id, route=route,
+            shared_quotas=shared_quotas, require_jit_grant=True,
+            approval_review=approval_review, durable_policy=durable_policy,
+            approver_arguments=approver_arguments, native=True, policy_aware=False,
+            expected_approver_policy_sha256=policy_digest,
+        )
+        originals = preparation.prepare(arguments)
+    except (ValueError, TypeError, OverflowError):
+        raise HTTPException(status_code=409, detail="native JIT release preparation is unavailable") from None
+    result = {
+        "apiVersion": preparation.SCHEMA,
+        "principalId": payload.principal_id,
+        "routeId": payload.route_id,
+        "policyHash": payload.policy_hash,
+        "requestDigest": payload.request_digest,
+        "operationDigest": payload.operation_digest,
+        "approverPolicy": policy,
+        "approverPolicySha256": policy_digest,
+        **originals,
+    }
+    body = json.dumps(result, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=True, allow_nan=False).encode("ascii")
+    if len(body) > preparation.MAX_RESPONSE_BYTES:
+        raise HTTPException(status_code=413, detail="native JIT preparation exceeds 512 KiB")
+    # Sign the actual canonical response bytes through the existing ASGI owner.
+    # No maintenance, reserve, audit mutation, broker or custody call occurs.
+    return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/data-plane/release-authorizations/reserve")
 def data_plane_release_authorization_reserve(
     payload: DataPlaneReleaseAuthorizationReserve = Depends(
@@ -23132,23 +23297,13 @@ def data_plane_release_authorization_reserve(
         payload.approver_policy_sha256 or "", release_profiles.approver_policy_sha256(policy)
     ):
         raise HTTPException(status_code=409, detail="versioned release approver policy changed before reservation")
-    jit = route.jit or {}
-    jit_approval_request = None
-    if require_jit_grant:
-        method, url, canonical_request, redacted_display = approval_review
-        jit_approval_request = {
-            "method": method,
-            "url": url,
-            "canonical_request": canonical_request,
-            "redacted_display": redacted_display,
-            "pending_ttl_seconds": max(
-                1, min(int(jit.get("pendingTtlSeconds", 300)), 3600)
-            ),
-            "grant_ttl_seconds": max(
-                1, min(int(jit.get("ttlSeconds", 30)), 3600)
-            ),
-            "grant_max_uses": max(1, int(jit.get("maxUses", 1))),
-        }
+    reserve_arguments = _release_authorization_reserve_arguments(
+        payload, authenticated_actor_id=authenticated_actor_id, route=route,
+        shared_quotas=shared_quotas, require_jit_grant=require_jit_grant,
+        approval_review=approval_review, durable_policy=durable_policy,
+        approver_arguments=approver_arguments, native=native, policy_aware=policy_aware,
+        expected_approver_policy_sha256=payload.approver_policy_sha256,
+    )
     _release_authorization_maintenance()
     try:
         reserve = (
@@ -23156,34 +23311,6 @@ def data_plane_release_authorization_reserve(
             if durable_policy is not None
             else db.reserve_release_authorization
         )
-        reserve_arguments = {
-            "attempt_id": payload.attempt_id,
-            "flow_id": payload.flow_id,
-            "principal_id": payload.principal_id,
-            "route_id": payload.route_id,
-            "credential_id": payload.credential_ref or "",
-            "credential_version": payload.credential_version,
-            "policy_hash": payload.policy_hash,
-            "request_digest": payload.request_digest,
-            "operation_digest": payload.operation_digest,
-            "operation_context": dict(payload.operation_context),
-            "shared_quotas": shared_quotas,
-            "require_jit_grant": require_jit_grant,
-            "reservation_ttl_seconds": (
-                RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS
-            ),
-            "jit_approval_request": jit_approval_request,
-            "actor_id": authenticated_actor_id,
-            "authority_policy_hash": payload.policy_hash,
-            "authority_route_id": route.id,
-            "native_profile": native,
-            "policy_aware_profile": policy_aware,
-            "expected_approver_policy_sha256": payload.approver_policy_sha256,
-        }
-        if require_jit_grant:
-            reserve_arguments.update(approver_arguments)
-        if durable_policy is not None:
-            reserve_arguments["durable_policy_binding"] = durable_policy
         result = reserve(**reserve_arguments)
     except (db.ReleaseAuthorizationError, db.PolicyStateBundleStoreError) as exc:
         raise _release_authorization_db_error(
@@ -24693,6 +24820,11 @@ UI_HTML = r"""
     const setupBindingSettlements = new Map();
     let setupLoadInFlight = null;
     let refreshInFlight = null;
+    let approvalReviewGeneration = 0;
+    let approvalReviewLoadInFlight = null;
+    let approvalDecisionInFlight = null;
+    const approvalDecisionUncertain = new Set();
+    const approvalDecisionUnsent = new Set();
     let auditSearchGeneration = 0;
     let auditSearchBusy = false;
     let hasRendered = false;
@@ -25968,10 +26100,10 @@ UI_HTML = r"""
         state.approvalReview = latest.approvalReview && state.approvals.some((item) => item.id === latest.approvalReview.id) ? latest.approvalReview : null;
         const directApprovalId = approvalIdFromLocation();
         let directApprovalError = null;
-        if (directApprovalId && state.approvalReview?.id !== directApprovalId && resolvedApprovalDeepLink !== directApprovalId) {
+        if (directApprovalId && state.approvalReview?.id !== directApprovalId && resolvedApprovalDeepLink !== directApprovalId
+            && !approvalDecisionHoldReason(directApprovalId)) {
           try {
-            state.approvalReview = await api(`/api/approvals/${encodeURIComponent(directApprovalId)}/review`);
-            resolvedApprovalDeepLink = directApprovalId;
+            await loadApprovalReview(directApprovalId, {automatic: true});
           } catch (error) {
             if (error.status !== 401) resolvedApprovalDeepLink = directApprovalId;
             directApprovalError = error;
@@ -27498,7 +27630,7 @@ UI_HTML = r"""
           <td data-label="Route">${esc(routeName(item.route_id))}</td>
           <td data-label="Request"><strong>${esc(item.method)}</strong><br><code>${esc(item.url)}</code></td>
           <td data-label="Until"><code>${esc(item.approved_until || item.expires_at)}</code></td>
-          <td data-label="Actions"><div class="toolbar review-actions"><button class="secondary" type="button" onclick="runUiAction('Load approval review', () => loadApprovalReview('${item.id}'))">Review</button>${item.status === 'pending' ? `<span class="muted">${esc(grantTtlSeconds)}s policy grant</span><button type="button" onclick="runUiAction('Approve request', () => approve('${item.id}'))" ${approvalBlockAttributes}>Approve</button>${approvalBlockMessage}<label class="sr-only" for="jit-deny-note-${item.id}">Denial reason</label><input id="jit-deny-note-${item.id}" placeholder="Denial reason"><button class="danger" type="button" onclick="runUiAction('Deny request', () => deny('${item.id}'))">Deny</button>` : ''}</div></td>
+          <td data-label="Actions"><div class="toolbar review-actions"><button class="secondary" type="button" onclick="runUiAction('Load approval review', () => loadApprovalReviewAction('${item.id}'))">Review</button>${item.status === 'pending' ? `<span class="muted">${esc(grantTtlSeconds)}s policy grant</span><button type="button" onclick="runUiAction('Approve request', () => approve('${item.id}'))" ${approvalBlockAttributes}>Approve</button>${approvalBlockMessage}<span class="muted">Enter the denial reason in the selected review.</span><button class="danger" type="button" onclick="runUiAction('Deny request', () => deny('${item.id}'))" ${approvalBlockAttributes}>Deny</button>` : ''}</div></td>
         </tr>`;
       }).join('') || '<tr class="empty-row"><td colspan="5" class="muted">No matching approvals</td></tr>';
       renderApprovalReview();
@@ -29340,26 +29472,190 @@ UI_HTML = r"""
         $('approval-review').scrollIntoView({behavior: smooth && !reducedMotion ? 'smooth' : 'auto', block: 'start'});
       });
     }
-    async function loadApprovalReview(id) {
-      state.approvalReview = await api(`/api/approvals/${encodeURIComponent(id)}/review`);
-      resolvedApprovalDeepLink = id;
-      window.history.replaceState({}, '', `/approvals/${encodeURIComponent(id)}`);
-      render();
-      focusApprovalReview(true);
+    async function loadApprovalReview(id, {automatic = false} = {}) {
+      if (automatic && (state.approvalReview || approvalReviewLoadInFlight || approvalDecisionHoldReason(id))) return false;
+      const generation = ++approvalReviewGeneration;
+      const owner = {id, generation};
+      approvalReviewLoadInFlight = owner;
+      try {
+        state.approvalReview = null;
+        if (approvalDecisionUnsent.has(id)) clearApprovalDecisionHold(id);
+        if (approvalDecisionHoldReason(id)) {
+          const current = await recoverApprovalDecision({id});
+          if (generation !== approvalReviewGeneration) return false;
+          render();
+          setStatus(current ? `Current approval status: ${current.status}. No decision or private review was retried.`
+            : 'Approval status is unavailable. The decision recovery hold remains.', 'pending');
+          return false;
+        }
+        const review = await api(`/api/approvals/${encodeURIComponent(id)}/review`);
+        if (generation !== approvalReviewGeneration) return false;
+        if (!review || review.id !== id) throw new Error('Approval review response does not match the selected request');
+        state.approvalReview = review;
+        resolvedApprovalDeepLink = id;
+        window.history.replaceState({}, '', `/approvals/${encodeURIComponent(id)}`);
+        if (!automatic) {
+          render();
+          focusApprovalReview(true);
+        }
+        return true;
+      } finally {
+        if (approvalReviewLoadInFlight === owner) approvalReviewLoadInFlight = null;
+      }
+    }
+    async function loadApprovalReviewAction(id) {
+      const loaded = await loadApprovalReview(id);
+      if (loaded) setStatus(`Review loaded for approval ${id}. Inspect it before deciding.`, 'pending');
+      return {uiHandled: true, pending: true, reviewLoaded: loaded};
     }
     function approvalReviewBlockReason(item) {
       const review = state.approvalReview;
       if (!review || review.id !== item.id) return 'Open review first';
+      if (item.status !== 'pending' || review.status !== 'pending') return 'Approval is no longer pending';
+      if (![item.expires_at, review.expires_at].every(value => typeof value === 'string'
+          && Number.isFinite(Date.parse(value)) && Date.parse(value) > Date.now())) return 'Approval expired or expiry unavailable';
+      if (!Array.isArray(review.risk_flags)) return 'Approval review risk information is unavailable';
       const flags = new Set(review.risk_flags || []);
       if (flags.has('approval_expired')) return 'Approval expired';
       if (flags.has('policy_hash_not_current')) return 'Policy changed; request a new approval';
+      if (!flags.has('policy_hash_current')) return 'Current policy has not been established for this review';
+      for (const field of ['id', 'route_id', 'principal_id', 'credential_version', 'policy_hash', 'expires_at', 'requested_at', 'method']) {
+        if (item[field] !== review[field]) return 'Approval metadata changed; refresh and inspect the review';
+      }
+      if (item.credential_id !== review.credential_ref || item.request_digest !== review.retry_semantics?.request_digest
+          || item.operation_digest !== review.retry_semantics?.operation_digest) return 'Approval request binding changed; refresh and inspect the review';
       return '';
     }
-    function approvalReviewActionBlockReason(item) {
+    function approvalDecisionHoldReason(id, decision = null) {
+      if (approvalDecisionUnsent.has(id)) return 'Recovery storage failed before submission. No decision was sent; reopen the review after storage recovers';
+      try {
+        const held = sessionStorage.getItem(`serverware.approvalDecisionUncertain.${id}`);
+        if (held !== null && held !== id) return 'Decision recovery marker is invalid; decision unavailable';
+        if ((held !== null || approvalDecisionUncertain.has(id))
+            && !(decision === approvalDecisionInFlight && decision?.holdInstalled)) {
+          return 'A submitted decision needs status recovery before any new decision';
+        }
+      } catch (_) {
+        return 'Browser decision recovery storage is unavailable';
+      }
+      return '';
+    }
+    function approvalReviewActionBlockReason(item, decision = null) {
+      if (approvalDecisionInFlight && approvalDecisionInFlight !== decision) return 'Another approval decision is in progress';
+      const hold = approvalDecisionHoldReason(item.id, decision);
+      if (hold) return hold;
       const blockReason = approvalReviewBlockReason(item);
       if (blockReason) return blockReason;
-      if (!state.approvalReview?.review_receipt?.id) return 'Review receipt unavailable or expired; refresh the review';
+      const review = state.approvalReview;
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(review.review_receipt?.id || '')
+          || typeof review.review_receipt?.expires_at !== 'string'
+          || !Number.isFinite(Date.parse(review.review_receipt.expires_at))
+          || Date.parse(review.review_receipt.expires_at) <= Date.now()
+          || !/^sha256:[0-9a-f]{64}$/.test(review.review_digest || '')) return 'Review receipt unavailable or expired; refresh and inspect the review';
       return '';
+    }
+    function renderApprovalDecisionState() {
+      const controls = captureControlState();
+      renderJitApprovals();
+      restoreControlState(controls);
+    }
+    function beginApprovalDecision(id, kind) {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id)) throw new Error('Approval identifier is invalid');
+      if (approvalDecisionInFlight) throw new Error('Another approval decision is in progress');
+      if (approvalDecisionUnsent.has(id)) clearApprovalDecisionHold(id);
+      const hold = approvalDecisionHoldReason(id);
+      if (hold) throw new Error(hold);
+      const decision = {id, kind};
+      approvalDecisionInFlight = decision;
+      try { renderApprovalDecisionState(); } catch (error) { approvalDecisionInFlight = null; throw error; }
+      return decision;
+    }
+    function finishApprovalDecision(decision) {
+      if (approvalDecisionInFlight === decision) approvalDecisionInFlight = null;
+      renderApprovalDecisionState();
+    }
+    function denialReason(id) {
+      const input = $(`approval-review-deny-note-${id}`);
+      if (!input || typeof input.value !== 'string') throw new Error('Open and inspect the selected review before entering a denial reason');
+      const reason = input.value.trim() || null;
+      if (reason !== null && (new TextEncoder().encode(reason).length > 500
+          || /[\x00-\x1f\x7f]/.test(reason)
+          || Array.from(reason).some(char => char.length === 1 && /[\uD800-\uDFFF]/.test(char)))) {
+        throw new Error('Denial reason must be at most 500 UTF-8 bytes without control characters');
+      }
+      return reason;
+    }
+    function approvalDecisionAuthContext() {
+      return JSON.stringify([adminToken(), state.authStatus?.userId, state.authStatus?.authMethod,
+        state.authStatus?.authenticated, state.authStatus?.sessionState, state.authStatus?.roles]);
+    }
+    function assertApprovalDecisionCurrent(decision) {
+      const item = (state.approvals || []).find(value => value.id === decision.id);
+      if (approvalDecisionInFlight !== decision || !item || state.approvalReview !== decision.review
+          || approvalReviewGeneration !== decision.generation
+          || JSON.stringify(canonicalValue(state.approvalReview)) !== decision.reviewFingerprint
+          || JSON.stringify(canonicalValue(item)) !== decision.itemFingerprint
+          || approvalDecisionAuthContext() !== decision.authContext
+          || denialReason(decision.id) !== decision.reason) throw new Error('Approval review, reason or authentication changed; no new denial was submitted');
+      const blocked = approvalReviewActionBlockReason(item, decision);
+      if (blocked) throw new Error(blocked);
+    }
+    function denialRequestOptions(options) {
+      const key = options?.publicKey;
+      const encoded = value => typeof value === 'string' && value.length > 0 && value.length <= 4096
+        && /^[A-Za-z0-9_-]+$/.test(value) && bytesToB64(b64ToBytes(value)) === value;
+      if (!options || options.serverware?.operation !== 'jit.deny'
+          || typeof options.serverware?.authorityChallengeId !== 'string'
+          || !options.serverware.authorityChallengeId.length || options.serverware.authorityChallengeId.length > 512
+          || !key || !encoded(key.challenge) || typeof key.rpId !== 'string' || !key.rpId.length
+          || key.rpId.length > 253 || /\s/.test(key.rpId) || key.userVerification !== 'required'
+          || !Number.isInteger(key.timeout) || key.timeout < 1 || key.timeout > 120000
+          || !Array.isArray(key.allowCredentials) || !key.allowCredentials.length || key.allowCredentials.length > 64
+          || !key.allowCredentials.every(item => item?.type === 'public-key' && encoded(item.id))) {
+        throw new Error('Eligible authority-bound denial options are unavailable');
+      }
+      return {challengeId: options.serverware.authorityChallengeId,
+        credentialIds: key.allowCredentials.map(item => item.id), publicKey: prepareRequestOptions(options)};
+    }
+    function retainApprovalDecisionHold(decision) {
+      const key = `serverware.approvalDecisionUncertain.${decision.id}`;
+      try {
+        sessionStorage.setItem(key, decision.id);
+        if (sessionStorage.getItem(key) !== decision.id) throw new Error('marker unavailable');
+      } catch (_) {
+        // No final request has been invoked. Do not label an unsent decision as
+        // an unknown server outcome, even if storage cleanup also needs recovery.
+        approvalDecisionUnsent.add(decision.id);
+        clearApprovalDecisionHold(decision.id);
+        throw new Error('Cannot retain decision recovery marker; no denial was submitted');
+      }
+      approvalDecisionUncertain.add(decision.id);
+      decision.holdInstalled = true;
+    }
+    function clearApprovalDecisionHold(id) {
+      try {
+        sessionStorage.removeItem(`serverware.approvalDecisionUncertain.${id}`);
+        if (sessionStorage.getItem(`serverware.approvalDecisionUncertain.${id}`) !== null) return false;
+        approvalDecisionUncertain.delete(id);
+        approvalDecisionUnsent.delete(id);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    async function recoverApprovalDecision(decision) {
+      // The review GET creates a receipt. Recovery only reads public metadata,
+      // and never reopens private material or automatically submits a decision.
+      if (state.approvalReview?.id === decision.id) state.approvalReview = null;
+      const approvals = await api('/api/approvals', {cache: 'no-store'});
+      if (!Array.isArray(approvals) || approvals.some(item => !item || typeof item.id !== 'string'
+          || typeof item.status !== 'string') || new Set(approvals.map(item => item.id)).size !== approvals.length) {
+        throw new Error('Approval status recovery is unavailable');
+      }
+      state.approvals = approvals;
+      const current = approvals.find(item => item.id === decision.id);
+      if (current && ['approved', 'denied', 'expired', 'superseded'].includes(current.status)) clearApprovalDecisionHold(decision.id);
+      return current;
     }
     function reviewPill(flag) {
       const cls = flag === 'policy_hash_not_current' || flag === 'approval_expired' ? 'bad' : flag === 'policy_hash_current' || flag === 'one_use_grant' ? 'good' : 'warn';
@@ -29440,56 +29736,124 @@ UI_HTML = r"""
           </div>
           <div class="toolbar approval-review-buttons">
             <button id="approval-review-approve-${review.id}" type="button" onclick="runUiAction('Approve request from review', () => approve('${review.id}'))" ${actionBlockAttributes}>Approve</button>
-            <button id="approval-review-deny-${review.id}" class="danger" type="button" onclick="runUiAction('Deny request from review', () => deny('${review.id}'))">Deny</button>
+            <button id="approval-review-deny-${review.id}" class="danger" type="button" onclick="runUiAction('Deny request from review', () => deny('${review.id}'))" ${actionBlockAttributes}>Deny</button>
           </div>
           ${actionBlockMessage}
         </div>` : '';
     }
     async function approve(id) {
-      const item = state.approvals.find((approval) => approval.id === id) || {id};
-      const blockReason = approvalReviewBlockReason(item);
-      if (!state.approvalReview || state.approvalReview.id !== id) {
+      const decision = beginApprovalDecision(id, 'approve');
+      try {
+        const item = state.approvals.find((approval) => approval.id === id) || {id};
+        const blockReason = approvalReviewBlockReason(item);
+        if (!state.approvalReview || state.approvalReview.id !== id) {
+          await loadApprovalReview(id);
+          setStatus(`Review loaded for approval ${id}.`, 'pending');
+          return {pending: true, reviewLoaded: true};
+        }
+        if (blockReason) {
+          setStatus(`Approval ${id} cannot be approved: ${blockReason}.`, 'error');
+          return {blocked: true, reason: blockReason};
+        }
+        const reviewReceiptId = state.approvalReview?.review_receipt?.id;
+        if (!reviewReceiptId) {
+          await loadApprovalReview(id);
+          setStatus(`Review receipt refreshed for approval ${id}. Inspect it before approving.`, 'pending');
+          return {pending: true, reviewLoaded: true};
+        }
+        const grantTtlSeconds = Number(item.grant_ttl_seconds || state.approvalReview?.retry_semantics?.grant_ttl_seconds || 30);
+        const options = await api(`/api/approvals/${id}/webauthn/options`, {
+          method: 'POST',
+          body: JSON.stringify({reviewReceiptId, ttlSeconds: grantTtlSeconds})
+        });
+        let body = {
+          reviewReceiptId,
+          authorityChallengeId: options.serverware.authorityChallengeId
+        };
+        if (window.PublicKeyCredential && (options.publicKey.allowCredentials || []).length) {
+          const assertion = await navigator.credentials.get({publicKey: prepareRequestOptions(options)});
+          body.assertion = credentialToJson(assertion);
+        }
+        await api(`/api/approvals/${id}/approve?ttl_seconds=${encodeURIComponent(grantTtlSeconds)}`, {
+          method: 'POST',
+          body: JSON.stringify(body)
+        });
+        await refresh();
         await loadApprovalReview(id);
-        setStatus(`Review loaded for approval ${id}.`, 'pending');
-        return {pending: true, reviewLoaded: true};
+      } finally {
+        finishApprovalDecision(decision);
       }
-      if (blockReason) {
-        setStatus(`Approval ${id} cannot be approved: ${blockReason}.`, 'error');
-        return {blocked: true, reason: blockReason};
-      }
-      const reviewReceiptId = state.approvalReview?.review_receipt?.id;
-      if (!reviewReceiptId) {
-        await loadApprovalReview(id);
-        setStatus(`Review receipt refreshed for approval ${id}. Inspect it before approving.`, 'pending');
-        return {pending: true, reviewLoaded: true};
-      }
-      const grantTtlSeconds = Number(item.grant_ttl_seconds || state.approvalReview?.retry_semantics?.grant_ttl_seconds || 30);
-      const options = await api(`/api/approvals/${id}/webauthn/options`, {
-        method: 'POST',
-        body: JSON.stringify({reviewReceiptId, ttlSeconds: grantTtlSeconds})
-      });
-      let body = {
-        reviewReceiptId,
-        authorityChallengeId: options.serverware.authorityChallengeId
-      };
-      if (window.PublicKeyCredential && (options.publicKey.allowCredentials || []).length) {
-        const assertion = await navigator.credentials.get({publicKey: prepareRequestOptions(options)});
-        body.assertion = credentialToJson(assertion);
-      }
-      await api(`/api/approvals/${id}/approve?ttl_seconds=${encodeURIComponent(grantTtlSeconds)}`, {
-        method: 'POST',
-        body: JSON.stringify(body)
-      });
-      await refresh();
-      await loadApprovalReview(id);
     }
     async function deny(id) {
-      const reviewNote = $(`approval-review-deny-note-${id}`);
-      const reason = (reviewNote || $(`jit-deny-note-${id}`))?.value.trim() || null;
-      const reviewed = state.approvalReview?.id === id;
-      await api(`/api/approvals/${id}/deny`, {method: 'POST', body: JSON.stringify({reason})});
-      await refresh();
-      if (reviewed) await loadApprovalReview(id);
+      const decision = beginApprovalDecision(id, 'deny');
+      try {
+        const item = (state.approvals || []).find(value => value.id === id);
+        const review = state.approvalReview;
+        if (!review || review.id !== id || !review.review_receipt?.id
+            || !Number.isFinite(Date.parse(review.review_receipt?.expires_at))
+            || Date.parse(review.review_receipt.expires_at) <= Date.now()) {
+          const loaded = await loadApprovalReview(id);
+          setStatus(loaded ? `Review loaded for approval ${id}. Inspect it before denying.` : 'Review selection changed. Inspect the selected review before deciding.', 'pending');
+          return {pending: true, reviewLoaded: loaded};
+        }
+        const blocked = item ? approvalReviewActionBlockReason(item, decision) : 'Approval is no longer in the current queue';
+        if (blocked) throw new Error(blocked);
+        if (typeof window.PublicKeyCredential !== 'function' || typeof navigator.credentials?.get !== 'function') {
+          throw new Error('WebAuthn is unavailable; no denial was submitted');
+        }
+        Object.assign(decision, {review, generation: approvalReviewGeneration, reason: denialReason(id),
+          reviewFingerprint: JSON.stringify(canonicalValue(review)), itemFingerprint: JSON.stringify(canonicalValue(item)),
+          authContext: approvalDecisionAuthContext(), reviewReceiptId: review.review_receipt.id});
+        const checkContext = () => assertApprovalDecisionCurrent(decision);
+        checkContext();
+        const options = denialRequestOptions(await api(`/api/approvals/${encodeURIComponent(id)}/deny/webauthn/options`, {
+          method: 'POST', body: JSON.stringify({reason: decision.reason, reviewReceiptId: decision.reviewReceiptId}), checkContext
+        }));
+        checkContext();
+        options.publicKey.timeout = Math.min(options.publicKey.timeout,
+          Date.parse(review.expires_at) - Date.now(), Date.parse(review.review_receipt.expires_at) - Date.now());
+        let credential;
+        try {
+          credential = await navigator.credentials.get({publicKey: options.publicKey});
+        } catch (error) {
+          if (error?.name === 'NotAllowedError' || error?.name === 'AbortError') {
+            setStatus('Denial cancelled or timed out. No denial was submitted.', 'pending');
+            return {uiHandled: true, cancelled: true};
+          }
+          throw new Error('WebAuthn denial assertion is unavailable; no denial was submitted');
+        }
+        checkContext();
+        if (!credential || credential.type !== 'public-key' || !options.credentialIds.includes(credential.id)
+            || !credential.rawId || bytesToB64(credential.rawId) !== credential.id
+            || !['clientDataJSON', 'authenticatorData', 'signature'].every(field =>
+              credential.response?.[field] instanceof ArrayBuffer && credential.response[field].byteLength > 0
+              && credential.response[field].byteLength <= 65536)) {
+          throw new Error('Eligible WebAuthn denial assertion is unavailable; no denial was submitted');
+        }
+        const body = {reason: decision.reason, reviewReceiptId: decision.reviewReceiptId,
+          authorityChallengeId: options.challengeId, assertion: credentialToJson(credential)};
+        checkContext();
+        retainApprovalDecisionHold(decision);
+        try {
+          const result = await api(`/api/approvals/${encodeURIComponent(id)}/deny`, {
+            method: 'POST', body: JSON.stringify(body), checkContext
+          });
+          if (!result || result.id !== id || result.status !== 'denied') throw new Error('Decision response unavailable');
+          clearApprovalDecisionHold(id);
+          try { await recoverApprovalDecision(decision); } catch (_) { state.approvalReview = null; }
+          setStatus(`Approval ${id} was denied.`, 'success');
+          return {uiHandled: true, denied: true};
+        } catch (_) {
+          let current = null;
+          try { current = await recoverApprovalDecision(decision); } catch (_) { /* Preserve the recovery hold. */ }
+          setStatus(current && ['approved', 'denied', 'expired', 'superseded'].includes(current.status)
+            ? `Submission response unavailable. Current approval status: ${current.status}. No decision was retried.`
+            : 'Denial outcome is unknown. The decision is held for status recovery; no decision was retried.', 'error');
+          return {uiHandled: true, uncertain: true};
+        }
+      } finally {
+        finishApprovalDecision(decision);
+      }
     }
     function cancelledAction(label) {
       setStatus(`${label} cancelled.`);

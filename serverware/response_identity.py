@@ -902,7 +902,34 @@ def _retire_legacy_response_key() -> None:
         ) from exc
 
 
-def response_public_key_info() -> dict[str, str]:
+def _read_only_response_key() -> tuple[Ed25519PrivateKey, str, tuple[Path, Path, Path]]:
+    """Load only preprovisioned, matching custody without publication effects."""
+    configured_paths = _configured_publication_paths()
+    if configured_paths is None:
+        raise ResponseIdentityPublicationError(
+            "read-only response signing requires provisioned public-key PEM and ID paths"
+        )
+    paths = (RESPONSE_SIGNING_KEY_PATH, *configured_paths)
+    key = _load_response_key_file(paths[0], expected_uid=os.geteuid())
+    key_id = sha256_prefixed(key.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo,
+    ))
+    if (validate_response_signing_key_custody(*paths) != key_id
+            or RESPONSE_SIGNING_KEY_PATH != paths[0]
+            or _configured_publication_paths() != paths[1:]):
+        raise ResponseIdentityPublicationError("read-only response signing custody changed")
+    return key, key_id, paths
+
+
+def response_public_key_info(*, read_only: bool = False) -> dict[str, str]:
+    if type(read_only) is not bool:
+        raise ValueError("response public-key read mode is invalid")
+    if read_only:
+        key, key_id, _paths = _read_only_response_key()
+        pem = key.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        return {"pem": pem.decode("ascii"), "spki_sha256": key_id}
     _configured_publication_paths()
     public_key = _load_response_key().public_key()
     pem = public_key.public_bytes(
@@ -929,9 +956,12 @@ def response_statement(
     response_headers: list[tuple[bytes, bytes]],
     nonce: str,
     context: dict[str, Any],
+    read_only: bool = False,
 ) -> dict[str, Any]:
+    if type(read_only) is not bool:
+        raise ValueError("response statement read mode is invalid")
     nonce = validate_response_nonce(nonce)
-    key_info = response_public_key_info()
+    key_info = response_public_key_info(read_only=True) if read_only else response_public_key_info()
     headers_digest, header_count = response_headers_binding(response_headers)
     return {
         "version": "serverware.responseSignature/v3",
@@ -951,17 +981,33 @@ def response_statement(
     }
 
 
-def sign_statement(statement: dict[str, Any]) -> str:
+def sign_statement(statement: dict[str, Any], *, read_only: bool = False) -> str:
+    if type(read_only) is not bool:
+        raise ValueError("response signing read mode is invalid")
+    if read_only:
+        key, key_id, paths = _read_only_response_key()
+        if statement.get("response_signing_key_id") != key_id:
+            raise ResponseIdentityPublicationError("read-only response statement key changed")
+        signature = "ed25519:" + b64e(key.sign(canonical_json(statement).encode("utf-8")))
+        if (validate_response_signing_key_custody(*paths) != key_id
+                or RESPONSE_SIGNING_KEY_PATH != paths[0]
+                or _configured_publication_paths() != paths[1:]):
+            raise ResponseIdentityPublicationError("read-only response signing custody changed")
+        return signature
     key = _load_response_key()
     return "ed25519:" + b64e(key.sign(canonical_json(statement).encode("utf-8")))
 
 
-def response_signature_headers(statement: dict[str, Any]) -> dict[str, str]:
+def response_signature_headers(
+    statement: dict[str, Any], *, read_only: bool = False,
+) -> dict[str, str]:
+    if type(read_only) is not bool:
+        raise ValueError("response headers read mode is invalid")
     if statement.get("version") != "serverware.responseSignature/v3":
         raise ValueError("response signature statement version is invalid")
     validate_response_nonce(statement.get("nonce"))
     encoded_statement = b64e(canonical_json(statement).encode("utf-8"))
-    signature = sign_statement(statement)
+    signature = sign_statement(statement, read_only=True) if read_only else sign_statement(statement)
     return {
         "X-Serverware-Response-Key-Id": str(statement["response_signing_key_id"]),
         "X-Serverware-Response-Body-SHA256": str(statement["body_sha256"]),

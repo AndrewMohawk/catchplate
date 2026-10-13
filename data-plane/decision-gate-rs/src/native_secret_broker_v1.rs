@@ -17,6 +17,7 @@ mod succession;
 mod static_credential;
 mod static_credential_rotation;
 pub(crate) mod jit_review;
+pub use jit_review::validate_release_jit_review_originals;
 #[path = "native_verifier/json.rs"]
 mod json;
 

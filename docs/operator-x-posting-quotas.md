@@ -2,13 +2,50 @@
 
 # Shared X posting-attempt limits
 
-Implementation is being verified; this document is not a deployment or
-real-provider acceptance record.
+## Current deployed checkpoint
 
-Current acceptance: the shared-limit/restart/refresh/reconnect story and the
-lost-claim-acknowledgement case have passed through real SDKs and the normal
-proxy against an isolated synthetic provider. Revocation, legacy compatibility
-and the retained-data rollout remain pending.
+The ordinary instance now runs source
+`a3899a95ce6affa88a5f27862585ef09c064d617` with normal Rust executable
+`682d66d8fe97d3022513b79292bfe6710c60bfb6f54342f910da94df2db39d80`.
+App `3fca3e3a…` and gate `0c323408…` passed paired and final readback in
+`x-quota-candidate-readback.mTrM7n7D`; the existing edge reopened and all four
+services were healthy, with no restarts, OOMs or published host ports.
+The paired and final receipt SHA-256 values are
+`1a703dfca03da755071fcb2cfbe122f5ffb94183f1152f4fbe54d066afa01bbd`
+and `e7ba6b840acb368671811788e3747a6f2a6396e4fd8bb854ec08c8cdf6c51a6c`.
+
+The approved first-start transition added exactly 19 schema objects, including
+four quota tables. It created one state row and appended one initialization audit
+event; usage is empty.
+Preservation receipt
+`fcdc5f420c8832fbce8702f326f05ba1e30624c6a355436b2615bc5bf4f6be10`
+records the retained-state comparison. Its only existing-row exception is the
+bounded `policy_candidate_authority.applied_at` startup refresh; all 495 earlier
+audit entries remain, followed by the one verified initialization event.
+Catalog revision 85, policy sequence 33, all 20 credentials,
+21 applications and 21 rules, approved origins and CA custody were preserved.
+
+The actual internal browser pass in `x-quota-live-browser.rSenfdNt` completed
+21 GETs and seven screenshots in 27.495 seconds with zero page/console errors
+or refused requests. Its receipt SHA-256 is
+`c04dfeb1a1da4cb3aa230e1da31f2beddfc59850dba767ae78da1ee28bb3f701`;
+durable closeout is `6c6974745c870dd211f03b7ec0db11dda740619d88d927706f460cb2357d3a84`.
+This is actual app rendering, not human SSO, provider, proxy-client or CA-download
+acceptance. Google and X remain unconfigured; the X quota capability is correctly
+null. Deployment did not connect an account, approve an X origin or create a grant.
+
+Isolated real-SDK verification passed the shared-limit/restart/refresh/reconnect,
+lost committed-claim acknowledgement, revoke-before-release and quota-free
+legacy compatibility stories below. Real-X posting and native/production
+authority acceptance remain separate. Exact-source
+[CI run 38377576998](https://github.com/example/private-deployment)
+passed all 52 offline suites in 339.117 seconds: 452 observed Python tests,
+145 Node groups and no skips.
+
+## Historical implementation and verification attempts
+
+The failed attempts and then-pending statements below describe their original
+checkpoints; they do not supersede the current deployed checkpoint above.
 
 At the October 13 source checkpoint, `acd157de` passed 120 focused Rust tests
 across 16 filters and produced normal executable
@@ -38,10 +75,10 @@ and the first Node SDK request. It failed at `node:a_first`, with no completed
 phases: the generation-metadata POST returned 200, but the Rust quota path
 mistook metadata-only `secret_available:false` for a missing credential and
 returned 503 / `credential_generation_missing`. Cleanup succeeded after
-56.977 seconds. A narrow Rust correction is being implemented and is not yet
-verified. Joined A+B success, separate lost-acknowledgement/revocation fault
-lanes, retained-data rollout and real-X acceptance remain open. The running
-instance has not received this feature.
+56.977 seconds. At that checkpoint, the narrow Rust correction, joined A+B
+success, separate lost-acknowledgement/revocation fault lanes, retained-data
+rollout and real-X acceptance were still open; the running instance had not
+received the feature.
 
 The correction at `94b7f755` adds two real signed-metadata/lease regression
 groups. Its first test compilation stopped on a missed borrow of the now-owned
@@ -49,7 +86,7 @@ injection plan in the existing Gmail fanout initializer; no tests executed.
 The failed build and successful owned-container cleanup remain in
 `serverware-x-quota-rust.Wg85qphg`. The follow-up restores that explicit borrow
 without changing quota, Gmail or forwarding semantics; compilation and runtime
-acceptance are still required.
+acceptance were still required at that checkpoint.
 
 At `5312c41b`, CI run `38361539528` passed all 51 offline suites with no
 skips. The separate Rust test compilation succeeded, but its first executed
@@ -58,7 +95,7 @@ The signed audit preflight correctly rejected the fixture after its real
 configuration reload lost a test-only quota selection. No audit guard was
 relaxed, no normal executable was published, and the live instance was not
 changed. The failed test output and successful container cleanup are retained
-in `serverware-x-quota-rust.btsZVUPw`; fixture repair and a fresh test run are
+in `serverware-x-quota-rust.btsZVUPw`; fixture repair and a fresh test run were
 required before continuing.
 
 At `06ffbeb7`, the test-only selection survives the real profile reload without
@@ -86,8 +123,8 @@ looked for `/x-custody/master.key`, while the actual owner uses
 `/x-custody/provider-key.json`. Cleanup succeeded after 69.008 seconds.
 The narrow fixture correction preserves all four mandatory key hashes and
 adds a regression against the actual owner's filename; all ten focused
-fixture controls pass. This needs no Rust rebuild. Full restart/refresh,
-exhaustion/reconnect and separate fault-lane acceptance remain open; these
+fixture controls pass. This needed no Rust rebuild. Full restart/refresh,
+exhaustion/reconnect and separate fault-lane acceptance were then open; these
 three successful requests are partial evidence, not deployment approval.
 
 Candidate `6235402e` then passed the complete A+B run in
@@ -107,7 +144,7 @@ The fixture-only wait is now twelve seconds (fifteen-second outer command
 bound), allowing that next bounded probe. The original 75-second preparation,
 300-second keeper, 240-second relay, 180-second checker, token lifetimes and
 five-second claim deadline remain unchanged. Both actual fault lanes and
-retained-data rollout remain required.
+retained-data rollout were then still required.
 
 The next fault attempt, `x-quota-fault-drop-healthfix.qxqHLbQD`, admitted the
 relay but the normal proxy refused startup: its fixed ordinary lease URL is
@@ -202,7 +239,23 @@ The SDK status was not retained. Source review shows that the revoked snapshot
 withholds the inner HTTP response, so the hold-mode oracle now requires Node's
 exact `httpStatus: null`; dropped-ACK mode still requires 409. All unexpired-ACK,
 audit, no-replay and zero-provider-post checks remain. Fresh joined acceptance
-of the corrected hold-mode oracle is pending.
+of the corrected hold-mode oracle was then pending.
+
+The corrected run, `x-quota-fault-revoke-final.IJmy5XvP`, passed in 68.519
+seconds with successful cleanup. After the claim ACK was held, actual rule
+revocation and loaded policy were confirmed before releasing that ACK. Node
+finished with exit 2 and `httpStatus: null` before the original claim expiry;
+the provider received zero posts. `terminal.json` SHA-256 is
+`3a2cfcd3e422776b6481a66361024db4ba991452fe14e3125c97ba3be996a0d3`;
+the checker SHA-256 is `630e39bbd706cc6fcff67968270ca1980725a66f3230b5917697f3d8fad4b0f4`.
+
+The separate quota-free compatibility run,
+`x-quota-legacy-compatibility.wVIYY8Dy`, passed 19 SDK phases in 205.960 seconds:
+six confirmed posts, one refresh, one reflection control and twelve denials,
+with successful cleanup. `terminal.json` SHA-256 is
+`a3be50fab95dca71e7f40a5ebb94192cd0d198dbb1b5042a76507f3e0d78629c`;
+the checker SHA-256 is `ec9361aebfff81456f38e6ed2c312a608c8555dd4485f2359ee6679dac6f6b72`.
+Both runs used the isolated synthetic provider, not a real X account.
 
 The rendered account/setup suite subsequently passed all ten groups with eight
 masked 1280/390-pixel screenshots and unchanged source. It verified default
@@ -213,6 +266,8 @@ All browser API/provider traffic was intercepted: this is UI evidence, not
 provider or proxy enforcement acceptance. The eight unchanged PNGs are retained
 with a source/copy hash manifest in `x-quota-browser-evidence.Mzl4cwzo`;
 preserving those files did not rerun the browser suite.
+
+## Limit semantics
 
 An operator may optionally set `daily_post_attempt_limit` when granting an
 application permission to post to a connected X account. Omit the field for
@@ -248,8 +303,10 @@ The app initializes a separate quota namespace in its normal startup
 transaction, retaining its initialization audit event. Existing partial or
 missing required quota state is refused, not silently repaired or reset.
 Rehearse this additive migration on a fresh retained copy before promotion;
-preserve every pre-existing table, row, audit entry, key and identity. The
-second start must preserve the initialized quota state exactly.
+preserve every pre-existing table, audit entry, key and identity, with only the
+explicitly reviewed bounded `policy_candidate_authority.applied_at` startup
+refresh excepted from row equality. The second start must preserve the
+initialized quota state exactly.
 
 The UI advertises limits only when both the actual gate descriptor and the
 durable store are ready. An unavailable capability is not permission to send
@@ -257,7 +314,7 @@ without the configured limit. These are trusted-host ordinary SQLite controls,
 not native approval authority or protection against a privileged rollback of
 the complete database and audit history.
 
-## Required acceptance
+## Acceptance boundary
 
 The joined verification uses a synthetic TLS provider and actual Node, Python
 and Go SDKs through the normal Rust proxy: two applications share four attempts,

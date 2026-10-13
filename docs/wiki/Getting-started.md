@@ -6,6 +6,8 @@ Use a small, read-only job first: for example, a script that reads issues from o
 
 Do not enter secrets in chat, issue comments or checked-in example files. The provider secret goes into the authenticated **Credentials** form. The workload receives only its own Serverware proxy token.
 
+Need to create the provider integration first? Use the [GitHub App walkthrough](https://github.com/AndrewMohawk/serverware/wiki/GitHub-App-setup) or [Google/X OAuth setup](https://github.com/AndrewMohawk/serverware/wiki/OAuth-provider-setup). For your own JSON API, use the [custom Bearer/header example](https://github.com/AndrewMohawk/serverware/wiki/Custom-API-credentials).
+
 ## 1. Save the provider credential
 
 1. Open **Credentials → Add credential**.

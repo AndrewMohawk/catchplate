@@ -88,7 +88,7 @@ function buildNpmPublishClientRecipe({proxyUrl, applicationId, proxyAuthenticati
       proxyAuthentication !== 'basic_and_bearer_v1' || typeof caPath !== 'string' || caPath.length > 512 || /[\u0000-\u001f\u007f]/.test(caPath))
     throw new Error('An exact publishing permission and standard proxy login are required');
   const quote = value => "'" + value.replace(/'/g, "'\\''") + "'";
-  return ['# npm 11.8.0 / Node.js 25.5.0. Publishing changes the registry.',
+  return ['# npm ' + operatorNpm.versions.npm + ' / Node.js ' + operatorNpm.nodeVersion + '. Publishing changes the registry.',
     '# Save this section as a dedicated serverware-npm.npmrc; keep environment references literal.',
     '# Never put the real npm token here. Use the existing app token only in SERVERWARE_PROXY_TOKEN.',
     'registry=' + operatorNpm.origin + '/',

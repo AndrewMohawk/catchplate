@@ -56,12 +56,13 @@ publisher's checkout. Preserve the fresh directory for diagnosis.
 
 ## Copy and review exactly the maintained pages
 
-These ten guides plus `_Sidebar.md` are the publication allowlist. Do not use
+These thirteen guides plus `_Sidebar.md` are the publication allowlist. Do not use
 `rsync --delete`, remove other Wiki pages, or copy the whole application checkout.
 
 ```bash
 wiki_pages=(
   Home.md Getting-started.md Credentials-and-providers.md Clients-and-recipes.md
+  GitHub-App-setup.md OAuth-provider-setup.md Custom-API-credentials.md
   Permissions-and-policies.md Proxy-and-CA.md Notifications-and-audit.md
   Operations-and-maintenance.md Troubleshooting.md Capability-matrix-and-glossary.md
   _Sidebar.md
@@ -104,8 +105,9 @@ normal push also rejects a conflicting remote update occurring after the fetch.
 
 ## Verify publication, then record it
 
-Open the rendered GitHub Wiki Home page, sidebar and each of the nine linked
-guides. Confirm page titles, tables, code blocks, internal navigation, and links
+Open the rendered GitHub Wiki Home page, sidebar and each of the twelve linked
+guides, including the three provider-setup walkthroughs. Confirm page titles,
+tables, code blocks, internal navigation, and links
 to repository examples and evidence anchors. A successful Git push alone is not
 rendered-page verification. Record the application source commit, Wiki commit,
 publication time and actual verification result in the project handoff. Only

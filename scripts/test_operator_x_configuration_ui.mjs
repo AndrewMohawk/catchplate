@@ -101,7 +101,10 @@ function fixture(options = {}) {
     window: {addEventListener(name, callback) { const list = windowEvents.get(name) || []; list.push(callback); windowEvents.set(name, list); }},
     sessionStorage: {getItem(key) { if (options.storageReadFailure) throw new Error(PRIVATE); return storage.get(key) ?? null; },
       setItem(key, value) { if (options.storageWriteFailure) throw new Error(PRIVATE); writes.push({key, value}); storage.set(key, value); },
-      removeItem(key) { if (options.storageRemoveFailure) throw new Error(PRIVATE); writes.push({key, removed: true}); storage.delete(key); }},
+      removeItem(key) {
+        if (options.storageRemoveFailure) throw new Error(PRIVATE);
+        writes.push({key, removed: true}); if (!options.storageRemoveNoop) storage.delete(key);
+      }},
     localStorage: {getItem: deny('localStorage'), setItem: deny('localStorage'), removeItem: deny('localStorage')},
     navigator: {clipboard: {async writeText(value) { copied.push(value); }}},
     crypto: {randomUUID() { if (options.uuidFailure) throw new Error(PRIVATE); return ID; }},
@@ -119,7 +122,11 @@ function fixture(options = {}) {
   workspace.state.catalog = catalog();
   // Only catalog transport is synthetic; busy/uncertain, emit, requireReview,
   // named holds and explicit review acknowledgement are the real controller.
-  workspace.refresh = async () => { state.refreshes++; workspace.state.catalog = catalog(); workspace.emit(); return true; };
+  workspace.refresh = async () => {
+    state.refreshes++; workspace.state.catalog = catalog();
+    if (options.onRefresh) return options.onRefresh(state, workspace);
+    workspace.emit(); return true;
+  };
   context.workspaceFixture = workspace;
   const view = run('createXConfigurationView(workspaceFixture)');
   const event = (id, name = 'click') => {
@@ -187,7 +194,35 @@ const tests = [
     assert.equal(f.node('x-configuration-account-link').hidden, true);
     assert.equal(f.node('x-configuration-saved-client').textContent, CLIENT);
     assert.equal(f.workspace.state.busy, false); assert.equal(f.node('x-configuration-save').disabled, true);
+    assert.equal(f.storage.size, 0, 'Joined terminal receipt retires its recovery marker');
+    assert.equal(f.node('x-configuration-operation-reference').textContent, ID, 'Public receipt remains visible');
+    assert.equal(f.node('x-configuration-check').disabled, true, 'Completed receipt needs no recovery request');
     await f.fill(); await f.event('x-configuration-form', 'submit'); assert.equal(f.posts().length, 1); f.clean();
+  }],
+  ['completed save reload starts writable and never recreates a historical recovery marker', async () => {
+    const first = fixture(); await first.start(); await first.fill(); await first.event('x-configuration-form', 'submit');
+    assert.equal(first.storage.size, 0); assert.equal(first.workspace.ready('credentials'), true);
+    const reloaded = fixture({storage: Object.fromEntries(first.storage), discovery: clone(first.state.discovery)});
+    assert.equal(reloaded.calls.length, 0); assert.equal(reloaded.workspace.state.busy, false);
+    assert.equal(reloaded.workspace.state.uncertain, false); assert.equal(reloaded.workspace.ready('credentials'), true);
+    await reloaded.start();
+    assert.deepEqual(reloaded.calls.map(({method, path}) => [method, path]), [['GET', PATH]]);
+    assert.equal(reloaded.storage.size, 0); assert.deepEqual(reloaded.writes, []);
+    assert.equal(reloaded.workspace.ready('applications'), true);
+    assert.equal(reloaded.node('x-configuration-form').hidden, true); assert.equal(reloaded.node('x-configuration-check').disabled, true);
+    first.clean(); reloaded.clean();
+  }],
+  ['viewing preexisting actor-owned or other-actor settings never creates a reload hold', async () => {
+    for (const operation of [receipt(), null]) {
+      const first = fixture({discovery: configured(receipt(), {operation})}); await first.start();
+      assert.equal(first.node('x-configuration-saved-client').textContent, CLIENT);
+      assert.equal(first.workspace.state.busy, false); assert.equal(first.workspace.state.uncertain, false);
+      assert.equal(first.storage.size, 0); assert.deepEqual(first.writes, []); assert.equal(first.posts().length, 0);
+      const reloaded = fixture({storage: Object.fromEntries(first.storage), discovery: clone(first.state.discovery)});
+      assert.equal(reloaded.workspace.ready('credentials'), true); await reloaded.start();
+      assert.equal(reloaded.storage.size, 0); assert.deepEqual(reloaded.writes, []); assert.equal(reloaded.posts().length, 0);
+      first.clean(); reloaded.clean();
+    }
   }],
   ['navigation, pagehide, native invalid event and local preparation errors clear secret', async () => {
     const f = fixture(); await f.start();
@@ -226,7 +261,11 @@ const tests = [
     f.workspace.setConsentHold(false, 'other-provider'); assert.equal(f.workspace.state.busy, false);
     assert.equal(f.workspace.state.uncertain, true, 'Recovery does not acknowledge unrelated mutation review');
     await f.event('mutation-review-confirm'); assert.equal(f.workspace.state.uncertain, false);
-    assert.equal(f.posts().length, 1); f.clean();
+    assert.equal(f.posts().length, 1); assert.equal(f.storage.size, 0);
+    const reloaded = fixture({storage: Object.fromEntries(f.storage), discovery: clone(f.state.discovery)});
+    assert.equal(reloaded.workspace.state.busy, false); assert.equal(reloaded.workspace.state.uncertain, false);
+    await reloaded.start(); assert.equal(reloaded.storage.size, 0); assert.equal(reloaded.posts().length, 0);
+    f.clean(); reloaded.clean();
   }],
   ['reload exposes retained reference immediately, never POSTs and never adopts another operation', async () => {
     const f = fixture({storage: {[STORAGE]: ID}, discovery: configured(receipt({operation_id: OTHER})), operation: receipt()});
@@ -237,6 +276,29 @@ const tests = [
     const wrong = fixture({storage: {[STORAGE]: ID}, onRecovery: () => response(receipt({operation_id: OTHER}))});
     await wrong.start(); await wrong.event('x-configuration-check');
     assert.equal(wrong.workspace.state.busy, true); assert.equal(wrong.storage.get(STORAGE), ID); wrong.clean();
+  }],
+  ['unknown save reload remains held when another actor has configuration but no matching receipt', async () => {
+    const first = fixture({onPost: () => Promise.reject(new Error(PRIVATE))});
+    await first.start(); await first.fill(); await first.event('x-configuration-form', 'submit');
+    assert.equal(first.storage.get(STORAGE), ID); assert.equal(first.posts().length, 1);
+    const reloaded = fixture({storage: Object.fromEntries(first.storage), discovery: configured(receipt(), {operation: null})});
+    assert.equal(reloaded.workspace.ready('credentials'), false); assert.equal(reloaded.workspace.state.uncertain, true);
+    await reloaded.start(); assert.equal(reloaded.storage.get(STORAGE), ID);
+    assert.equal(reloaded.workspace.state.busy, true, 'Configured state alone cannot acknowledge this actor-private save');
+    await reloaded.event('x-configuration-check');
+    assert.equal(reloaded.storage.get(STORAGE), ID); assert.equal(reloaded.workspace.state.busy, true);
+    assert.equal(reloaded.posts().length, 0); assert.match(reloaded.node('x-configuration-status').textContent, /actor-owned save receipt/);
+    first.clean(); reloaded.clean();
+  }],
+  ['401 or 403 recovery never retires the actor-private UUID or unlocks mutations', async () => {
+    for (const status of [401, 403]) {
+      const f = fixture({storage: {[STORAGE]: ID}, discovery: configured(receipt(), {operation: null}),
+        onRecovery: () => response({detail: PRIVATE}, status)});
+      await f.start(); await f.event('x-configuration-check');
+      assert.equal(f.workspace.state.catalog, null); assert.equal(f.storage.get(STORAGE), ID);
+      assert.equal(f.workspace.ready('credentials'), false); assert.equal(f.workspace.state.busy, true);
+      assert.equal(f.posts().length, 0); assert.match(f.node('x-configuration-status').textContent, /session could not be verified/); f.clean();
+    }
   }],
   ['actor-private missing receipt and unknown errors retain UUID without automatic retry', async () => {
     for (const result of [response({detail: PRIVATE}, 404), response({detail: PRIVATE}, 409),
@@ -254,7 +316,10 @@ const tests = [
       const f = fixture({onPost: () => Promise.resolve(response(body, 422))}); await f.start(); await f.fill();
       await f.event('x-configuration-form', 'submit');
       assert.equal(f.storage.has(STORAGE), !retires); assert.equal(f.workspace.state.busy, !retires);
-      assert.equal(f.posts().length, 1); assert.equal(f.node('x-configuration-save').disabled, true); f.clean();
+      assert.equal(f.posts().length, 1); assert.equal(f.node('x-configuration-save').disabled, true);
+      const reloaded = fixture({storage: Object.fromEntries(f.storage)});
+      assert.equal(reloaded.workspace.state.busy, !retires); assert.equal(reloaded.workspace.state.uncertain, !retires);
+      assert.equal(reloaded.posts().length, 0); f.clean(); reloaded.clean();
     }
   }],
   ['401 clears catalog and renders only fixed session guidance for reads and writes', async () => {
@@ -294,6 +359,33 @@ const tests = [
       assert.equal(f.workspace.state.busy, true); assert.equal(f.storage.get(STORAGE), ID);
       assert.match(f.node('x-configuration-status').textContent, /receipt was returned.*could not be rechecked/);
       await f.fill(); await f.event('x-configuration-form', 'submit'); assert.equal(f.posts().length, 1); f.clean();
+    }
+  }],
+  ['terminal receipt needs successful matching catalog refresh before its marker is retired', async () => {
+    for (const kind of ['failed', 'stale']) {
+      const f = fixture({onRefresh(state, workspace) {
+        if (state.refreshes === 1) { workspace.emit(); return true; }
+        if (kind === 'failed') workspace.state.catalog = null;
+        else workspace.state.catalog.revision++;
+        workspace.emit(); return kind !== 'failed';
+      }});
+      await f.start(); await f.fill(); await f.event('x-configuration-form', 'submit');
+      assert.equal(f.posts().length, 1); assert.equal(f.storage.get(STORAGE), ID);
+      assert.equal(f.workspace.state.busy, true); assert.equal(f.workspace.ready('credentials'), false); f.clean();
+    }
+  }],
+  ['storage retirement failure or a replaced marker preserves the hold without deleting another ID', async () => {
+    for (const fault of ['remove-fails', 'remove-noop', 'changed-marker']) {
+      const f = fixture({storageRemoveFailure: fault === 'remove-fails', storageRemoveNoop: fault === 'remove-noop',
+        onRefresh(state, workspace) {
+          if (fault === 'changed-marker' && state.refreshes === 2) f.storage.set(STORAGE, OTHER);
+          workspace.emit(); return true;
+        }});
+      await f.start(); await f.fill(); await f.event('x-configuration-form', 'submit');
+      assert.equal(f.posts().length, 1); assert.equal(f.storage.get(STORAGE), fault === 'changed-marker' ? OTHER : ID);
+      assert.equal(f.workspace.state.busy, true); assert.equal(f.workspace.ready('credentials'), false);
+      if (fault === 'changed-marker') assert.equal(f.writes.filter(item => item.removed).length, 0);
+      f.clean();
     }
   }],
   ['storage faults block writes; unsupported deployments preserve visible unresolved recovery', async () => {

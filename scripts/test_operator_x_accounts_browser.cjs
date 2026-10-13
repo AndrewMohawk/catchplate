@@ -18,6 +18,7 @@ const START = BASE + '/start';
 const DISCONNECT = BASE + '/disconnect';
 const GRANT = '/api/operator-demo/access-rules/x-post';
 const STORAGE = 'serverware.operator.x.account.operation.v1';
+const CONFIG_STORAGE = 'serverware.operator.x.configuration.operation.v1';
 const BUNDLE = 'x_text_post_v1';
 const SCOPES = ['offline.access', 'tweet.read', 'tweet.write', 'users.read'];
 const NONCE = 's'.repeat(43);
@@ -54,6 +55,15 @@ function configuration(state) {
     configuration: {config_version: 1, profile_binding_digest: digest(22), public_profile: profile, client_secret_configured: true},
     operation: null, review: null, blocked_reason: 'already_configured', consent_ready: false};
 }
+function unconfigured(state) {
+  return {...configuration(state), state: 'unconfigured', configuration: null, operation: null,
+    review: {expected_revision: state.revision, expected_policy_hash: state.active}, blocked_reason: null};
+}
+function configurationReceipt(state, id) {
+  return {schema: 'serverware.operatorXConfigurationOperation/v1', operation_id: id, status: 'committed',
+    config_version: 1, committed_revision: state.revision, policy_hash: state.active, profile_binding_digest: digest(22),
+    public_profile: configuration(state).configuration.public_profile, client_secret_configured: true, consent_ready: false};
+}
 function catalog(state) {
   const result = publicCatalog(state);
   result.capabilities.x_oauth = state.gateReady ? oauthCapability() : null;
@@ -70,14 +80,14 @@ function operation(id, kind, status, changes = {}) {
 function cas(state, body) {
   assert.equal(body.expected_revision, state.revision); assert.equal(body.expected_policy_hash, state.active);
 }
-async function privacy(page, id = null) {
+async function privacy(page, id = null, configurationId = null) {
   const result = await page.evaluate(() => ({dom: document.documentElement.outerHTML,
     fields: [...document.querySelectorAll('input,textarea')].map(item => item.value),
     local: Object.entries(localStorage), session: Object.entries(sessionStorage)}));
   for (const value of [SECRET, NONCE, CHALLENGE, 'https://x.com/i/oauth2/authorize?'])
     assert(!JSON.stringify(result).includes(value), 'private/transient consent material escaped to DOM or storage');
   assert.deepEqual(result.local, []);
-  assert.deepEqual(result.session, id ? [[STORAGE, id]] : []);
+  assert.deepEqual(result.session, [...(id ? [[STORAGE, id]] : []), ...(configurationId ? [[CONFIG_STORAGE, configurationId]] : [])]);
 }
 async function responsive(page) {
   for (const viewport of [{width: 1280, height: 960}, {width: 390, height: 844}]) {
@@ -86,8 +96,8 @@ async function responsive(page) {
     assert.equal(await page.locator('.page:visible').count(), 1);
   }
 }
-async function quotaScreenshots(page, artifacts, name, selectors) {
-  await privacy(page);
+async function quotaScreenshots(page, artifacts, name, selectors, configurationId = null) {
+  await privacy(page, null, configurationId);
   for (const viewport of [{width: 1280, height: 960}, {width: 390, height: 844}]) {
     await page.setViewportSize(viewport);
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'quota viewport overflow');
@@ -110,8 +120,13 @@ async function fixture(browser, options, exercise) {
     credentialInputModes: ['insert', 'replace_exact'], requestBodyModes: ['preserve_json_v1']}, async (page, state, controls) => {
     state.gateReady = options.gateReady !== false;
     state.quotaReady = options.quotaReady === true;
-    const observed = {starts: [], grants: [], disconnects: [], reads: [], consentNavigations: 0};
+    const observed = {starts: [], grants: [], disconnects: [], reads: [], configurationSaves: [], consentNavigations: 0};
     const operations = new Map();
+    let savedConfiguration = null;
+    if (options.configurationMode === 'preexisting') {
+      state.revision++;
+      savedConfiguration = configurationReceipt(state, IDS.rule);
+    }
     const answer = (route, value, status = 200) => route.fulfill({status, contentType: 'application/json',
       headers: {'Cache-Control': 'no-store'}, body: JSON.stringify(value)});
     const document = execFileSync('python3', ['-B', '-c', 'from serverware.operator_demo_portal import render; print(render())'],
@@ -123,7 +138,20 @@ async function fixture(browser, options, exercise) {
         if (request.method() === 'GET') {
           assert(!bytes?.length); observed.reads.push(url.pathname);
           if (url.pathname === '/api/operator-demo/catalog') return await answer(route, catalog(state));
-          if (url.pathname === CONFIG) return await answer(route, configuration(state));
+          if (url.pathname === CONFIG) {
+            if (!options.configurationMode) return await answer(route, configuration(state));
+            return await answer(route, savedConfiguration ? {...configuration(state),
+              operation: options.configurationLost ? null : savedConfiguration} : unconfigured(state));
+          }
+          if (url.pathname.startsWith(CONFIG + '/')) {
+            assert(options.configurationMode); assert(savedConfiguration);
+            assert.equal(url.pathname, CONFIG + '/' + savedConfiguration.operation_id);
+            assert.equal(observed.reads.filter(path => path.startsWith(CONFIG + '/')).length, 1);
+            if (options.configurationLost) {
+              state.expectedFailures.add(url.pathname); return await answer(route, {detail: SECRET}, 404);
+            }
+            return await answer(route, savedConfiguration);
+          }
           if (url.pathname.startsWith(BASE + '/operations/')) {
             const id = url.pathname.slice((BASE + '/operations/').length); assert(UUID.test(id));
             if (!operations.has(id) || options.missingStatus) {
@@ -140,6 +168,20 @@ async function fixture(browser, options, exercise) {
         assert.equal(request.method(), 'POST'); assert(bytes?.length && bytes.length <= 4096);
         assert(request.headers()['content-type']?.startsWith('application/json'));
         const body = JSON.parse(bytes.toString()); cas(state, body);
+        if (url.pathname === CONFIG) {
+          assert.equal(options.configurationMode, 'fresh'); assert.equal(savedConfiguration, null);
+          assert.deepEqual(Object.keys(body).sort(), ['client_id', 'client_secret', 'expected_policy_hash', 'expected_revision', 'operation_id']);
+          assert.equal(body.client_id, CLIENT); assert.equal(body.client_secret, SECRET); assert(UUID.test(body.operation_id));
+          assert.equal(observed.configurationSaves.length, 0);
+          assert.equal(await page.evaluate(key => sessionStorage.getItem(key), CONFIG_STORAGE), body.operation_id);
+          // Retain only the public part in test receipts. Never copy the secret.
+          observed.configurationSaves.push({operation_id: body.operation_id, client_id: body.client_id,
+            expected_revision: body.expected_revision, expected_policy_hash: body.expected_policy_hash});
+          state.revision++;
+          savedConfiguration = configurationReceipt(state, body.operation_id);
+          if (options.configurationLost) { state.expectedFailures.add(CONFIG); return await route.abort('failed'); }
+          return await answer(route, savedConfiguration, 201);
+        }
         if (url.pathname === START) {
           assert.deepEqual(Object.keys(body).sort(), ['expected_policy_hash', 'expected_revision', 'name', 'operation_id']);
           assert.equal(body.name, 'My X account'); assert(UUID.test(body.operation_id)); assert.equal(observed.starts.length, 0);
@@ -186,7 +228,7 @@ async function fixture(browser, options, exercise) {
         operations.set(body.operation_id, result); return await answer(route, result);
       } catch (error) { state.errors.push('X account fixture: ' + error.message); await route.abort(); }
     };
-    for (const path of ['/api/operator-demo/catalog', CONFIG, START, GRANT, DISCONNECT,
+    for (const path of ['/api/operator-demo/catalog', CONFIG, CONFIG + '/*', START, GRANT, DISCONNECT,
       BASE + '/operations/*', BASE + '/accounts/*/disconnect-review']) await controls.context.route(ORIGIN + path, handler);
     await controls.context.route(ORIGIN + '/?serverware_x_operation=*', async route => {
       const url = new URL(route.request().url());
@@ -229,7 +271,88 @@ async function begin(page) {
   await view(page, 'credentials'); await page.locator('#x-account-name').fill('My X account');
   await page.locator('#x-account-start').click();
 }
+async function saveConfiguration(page) {
+  await view(page, 'proxy');
+  await page.locator('#x-configuration-form').waitFor({state: 'visible'});
+  await page.waitForFunction(() => !document.querySelector('#x-configuration-fields').disabled);
+  await page.locator('#x-configuration-client-id').fill(CLIENT);
+  await page.locator('#x-configuration-client-secret').fill(SECRET);
+  assert(await page.locator('#x-configuration-save').isEnabled());
+  await page.locator('#x-configuration-save').click();
+}
+function noAccountEffects(state, seen) {
+  assert.equal(seen.starts.length, 0); assert.equal(seen.grants.length, 0); assert.equal(seen.disconnects.length, 0);
+  assert.equal(seen.consentNavigations, 0); assert.equal(state.credentials.length, 1);
+  assert.equal(state.applications.length, 1); assert.deepEqual(state.rules, []);
+}
+function recordConfigurationCase(artifacts, name, state, seen) {
+  noAccountEffects(state, seen);
+  artifacts.cases.push({name, publicSaves: clone(seen.configurationSaves), reads: [...seen.reads],
+    accountStarts: 0, grants: 0, disconnects: 0, providerRequests: 0, secretRetained: false});
+}
+const configurationTests = [
+  ['confirmed X application save then reload does not block credential setup', (browser, artifacts) => fixture(browser,
+    {configurationMode: 'fresh'}, async (page, state, seen) => {
+      await saveConfiguration(page);
+      await page.waitForFunction(() => document.querySelector('#x-configuration-status').textContent.startsWith('X application saved.'));
+      assert.equal(seen.configurationSaves.length, 1); const id = seen.configurationSaves[0].operation_id;
+      assert.equal(await page.locator('#x-configuration-operation-reference').textContent(), id);
+      assert(await page.locator('#x-configuration-check').isDisabled()); await privacy(page);
+      await view(page, 'overview'); const before = seen.reads.filter(path => path === CONFIG).length;
+      await page.reload({waitUntil: 'networkidle'}); await ready(page);
+      assert.equal(seen.reads.filter(path => path === CONFIG).length, before, 'reload does not require configuration recovery');
+      assert(await page.locator('#mutation-review').isHidden());
+      await view(page, 'credentials'); assert(await page.locator('#credential-add').isEnabled());
+      await view(page, 'proxy');
+      await page.waitForFunction(() => document.querySelector('#x-configuration-status').textContent.startsWith('X application saved.'));
+      assert(await page.locator('#x-configuration-check').isDisabled()); assert(await page.locator('#x-configuration-form').isHidden());
+      assert.equal(seen.configurationSaves.length, 1); await privacy(page);
+      await quotaScreenshots(page, artifacts, 'configuration-confirmed-reload', ['#x-configuration-saved', '#x-configuration-status']);
+      recordConfigurationCase(artifacts, 'confirmed-save-reload', state, seen);
+    })],
+  ['viewing a previous X application receipt never creates a reload hold', (browser, artifacts) => fixture(browser,
+    {configurationMode: 'preexisting'}, async (page, state, seen) => {
+      await view(page, 'proxy');
+      await page.waitForFunction(() => document.querySelector('#x-configuration-status').textContent.startsWith('X application saved.'));
+      assert.equal(await page.locator('#x-configuration-operation-reference').textContent(), IDS.rule);
+      assert(await page.locator('#x-configuration-check').isDisabled()); await privacy(page);
+      await view(page, 'overview'); const before = seen.reads.filter(path => path === CONFIG).length;
+      await page.reload({waitUntil: 'networkidle'}); await ready(page);
+      assert.equal(seen.reads.filter(path => path === CONFIG).length, before);
+      assert(await page.locator('#mutation-review').isHidden());
+      await view(page, 'credentials'); assert(await page.locator('#credential-add').isEnabled()); await privacy(page);
+      assert.equal(seen.configurationSaves.length, 0);
+      recordConfigurationCase(artifacts, 'preexisting-read-reload', state, seen);
+    })],
+  ['uncertain X application save remains UUID-only and held after reload and missing private receipt', (browser, artifacts) => fixture(browser,
+    {configurationMode: 'fresh', configurationLost: true}, async (page, state, seen) => {
+      await saveConfiguration(page);
+      await page.waitForFunction(() => document.querySelector('#x-configuration-status').textContent.includes('response was lost'));
+      assert.equal(seen.configurationSaves.length, 1); const id = seen.configurationSaves[0].operation_id;
+      await privacy(page, null, id);
+      assert.equal(await page.locator('#credential-fields').evaluate(fieldset => fieldset.disabled), true);
+      assert(await page.locator('#credential-add').isDisabled());
+      await view(page, 'overview'); await page.reload({waitUntil: 'networkidle'});
+      await page.locator('#mutation-review').waitFor({state: 'visible'});
+      assert.equal(await page.locator('#credential-fields').evaluate(fieldset => fieldset.disabled), true);
+      assert(await page.locator('#credential-add').isDisabled()); await privacy(page, null, id);
+      await view(page, 'proxy');
+      await page.waitForFunction(() => document.querySelector('#x-configuration-status').textContent.startsWith('Save outcome unconfirmed.'));
+      assert.equal(await page.locator('#x-configuration-operation-reference').textContent(), id);
+      assert(await page.locator('#x-configuration-save').isDisabled());
+      await page.locator('#x-configuration-check').click();
+      await page.waitForFunction(() => document.querySelector('#x-configuration-status').textContent.startsWith('No actor-owned save receipt'));
+      assert.equal(await page.locator('#credential-fields').evaluate(fieldset => fieldset.disabled), true);
+      assert(await page.locator('#credential-add').isDisabled()); assert(await page.locator('#x-configuration-save').isDisabled());
+      assert.equal(seen.configurationSaves.length, 1);
+      assert.deepEqual(seen.reads.filter(path => path.startsWith(CONFIG + '/')), [CONFIG + '/' + id]);
+      await privacy(page, null, id);
+      await quotaScreenshots(page, artifacts, 'configuration-uncertain-reload', ['#x-configuration-status', '#x-configuration-check'], id);
+      recordConfigurationCase(artifacts, 'uncertain-save-reload', state, seen);
+    })],
+];
 const tests = [
+  ...configurationTests,
   ['consent URL then public-UUID-only callback recovery, desktop/mobile', browser => fixture(browser, {empty: true}, async (page, state, seen, operations) => {
     await begin(page); await page.waitForURL('https://x.com/i/oauth2/authorize?**');
     assert.equal(await page.title(), 'Synthetic consent interception'); assert.equal(seen.starts.length, 1);
@@ -375,18 +498,28 @@ async function hashes() {
     ...(await readdir(join(ROOT, 'serverware/operator_demo_web'))).filter(name => /\.(html|js|css)$/.test(name)).sort().map(name => 'serverware/operator_demo_web/' + name)];
   return Object.fromEntries(await Promise.all(names.map(async name => [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')])));
 }
-async function runSuite(browser) {
+async function runSuite(browser, configurationOnly = false, recoveryOnly = false) {
   const before = await hashes(); const contexts = new Set(); let timer; let finished = false; let passed = 0;
-  const artifacts = {directory: await mkdtemp('/tmp/serverware-x-quota-browser-'), paths: []};
+  const artifacts = {directory: await mkdtemp('/tmp/serverware-x-accounts-browser-'), paths: [], cases: []};
   console.log(JSON.stringify({phase: 'source-before', hashes: before, artifactDirectory: artifacts.directory}));
   const bounded = {async newContext(...args) { assert(!finished); const context = await browser.newContext(...args);
     if (finished) { await context.close(); throw new Error('suite finished'); }
     contexts.add(context); context.on('close', () => contexts.delete(context)); return context; }};
   try {
-    await Promise.race([(async () => { for (const [name, test] of tests) { await test(bounded, artifacts); passed++; console.log('PASS ' + name); } })(),
-      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('X accounts browser deadline')), 120000); })]);
+    const selected = recoveryOnly ? [configurationTests[2]] : configurationOnly ? configurationTests : tests;
+    await Promise.race([(async () => { for (const [name, test] of selected) {
+      let caseTimer;
+      try {
+        if (configurationTests.some(entry => entry[1] === test)) await Promise.race([test(bounded, artifacts),
+          new Promise((_, reject) => { caseTimer = setTimeout(() => reject(new Error('X configuration case deadline')), 18000); })]);
+        else await test(bounded, artifacts);
+      } finally { clearTimeout(caseTimer); }
+      passed++; console.log('PASS ' + name);
+    } })(),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('X accounts browser deadline')), configurationOnly ? 60000 : 120000); })]);
     return {ok: true, groups: passed, backendAcceptance: false, providerRequests: 0, proxyRequests: 0,
       screenshots: artifacts.paths.length, screenshotPaths: artifacts.paths, artifactDirectory: artifacts.directory,
+      configurationCases: artifacts.cases,
       recipeExecuted: false, sameSource: true, sourceHashes: before};
   } finally { finished = true; clearTimeout(timer); await Promise.all([...contexts].map(context => context.close()));
     assert.deepEqual(await hashes(), before, 'consumed frontend/fixture source changed during test'); }
@@ -398,5 +531,6 @@ async function main() {
   const browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-background-networking']});
   try { console.log(JSON.stringify(await runSuite(browser))); } finally { await browser.close(); }
 }
-module.exports = {run, runSuite};
+module.exports = {run, runSuite, runConfigurationSuite: browser => runSuite(browser, true),
+  runConfigurationRecoverySuite: browser => runSuite(browser, true, true)};
 if (require.main === module) main().catch(error => { console.error(error.stack); process.exitCode = 1; });

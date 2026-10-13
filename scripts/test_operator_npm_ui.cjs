@@ -4,6 +4,7 @@
 const assert = require('node:assert/strict');
 const {readFileSync} = require('node:fs');
 const {resolve} = require('node:path');
+const {pathToFileURL} = require('node:url');
 const vm = require('node:vm');
 const {credential, application, rule, IDS, NOW} = require('./test_operator_catalog_browser.cjs');
 const {publicCatalog, digest} = require('./test_operator_ordinary_modes_browser.cjs');
@@ -13,6 +14,8 @@ const FILES = ['workspace_core.js', 'workspace_github.js', 'workspace_npm.js', '
   'workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js', 'workspace_resources.js', 'workspace_connect.js'];
 const SOURCE = FILES.map(name => readFileSync(resolve(ASSETS, name), 'utf8')).join('\n');
 const HTML = readFileSync(resolve(ASSETS, 'index.html'), 'utf8');
+const NPM_EXAMPLE = resolve(__dirname, '../examples/npm-registry');
+const NPM_PACKAGE = JSON.parse(readFileSync(resolve(NPM_EXAMPLE, 'package.json'), 'utf8'));
 const ORIGIN = 'https://registry.npmjs.org';
 const BUNDLE = 'npm_metadata_read_v1';
 const DUMMY = 'serverware-npm-placeholder-v1';
@@ -101,6 +104,46 @@ function context(dom = inertDom()) {
     fetch: () => { throw new Error('No network'); }, setTimeout: () => { throw new Error('No timers'); }});
   vm.runInContext(SOURCE, value, {timeout: 2000});
   return {value, dom, run: (expression, input) => { value.input = input; return vm.runInContext(expression, value, {timeout: 1000}); }};
+}
+// Run the actual proxy view and private-download click handler with in-memory
+// browser download primitives. This is not a rendered browser or SDK check.
+function npmDownloadFixture(raw) {
+  const current = context(); const blobs = [], downloads = [], revoked = [];
+  const node = id => current.dom.getElementById(id);
+  const createElement = current.dom.createElement;
+  current.dom.createElement = tag => {
+    const result = createElement(tag);
+    if (tag === 'a') {
+      result.click = () => downloads.push({href: result.href, filename: result.download});
+      result.remove = () => {};
+    }
+    return result;
+  };
+  current.dom.body = {append(anchor) { assert.equal(anchor.tag, 'a'); }};
+  const methodLabel = createElement('label');
+  current.dom.querySelector = selector => {
+    assert.equal(selector, 'label[for="proxy-method"]'); return methodLabel;
+  };
+  node('github-client-operation').querySelector = selector => {
+    assert.equal(selector, 'option[value="create"]');
+    return node('github-client-operation').options.find(option => option.value === 'create');
+  };
+  class DownloadURL extends URL {
+    static createObjectURL(blob) { blobs.push(blob); return 'blob:inert-npm/' + blobs.length; }
+    static revokeObjectURL(url) { revoked.push(url); }
+  }
+  Object.assign(current.value, {URL: DownloadURL, Blob,
+    setTimeout(callback, delay) { assert.equal(delay, 1000); callback(); }});
+  vm.runInContext(readFileSync(resolve(ASSETS, 'workspace_proxy_audit.js'), 'utf8'), current.value, {timeout: 1000});
+  const catalog = clone(current.run('projectCatalog(input)', raw));
+  node('proxy-application').value = IDS.application; node('proxy-rule').value = IDS.rule;
+  node('npm-client-package').value = catalog.access_rules[0].packages?.[0] || '';
+  const token = 'synthetic-app-token-for-private-download';
+  current.value.workspaceFixture = {state: {catalog, busy: false, uncertain: false}, loaded: () => true,
+    subscribe(callback) { callback(); }};
+  current.value.applicationsFixture = {tokenFor(id) { assert.equal(id, IDS.application); return token; }};
+  current.run('createProxyView(workspaceFixture, applicationsFixture)');
+  return {node, blobs, downloads, revoked, token};
 }
 const pure = context();
 const project = input => clone(pure.run('projectCatalog(input)', input));
@@ -278,12 +321,55 @@ const tests = [
   ['recipe uses stock npm, fixed dummy, environment-only app token and verified TLS', () => {
     const input = {proxyUrl: 'https://proxy.example.test', applicationId: IDS.application, proxyAuthentication: 'basic_and_bearer_v1', packages: PACKAGES, packageName: PACKAGES[0]};
     const text = pure.run('buildNpmClientRecipe(input)', input);
-    for (const expected of ['npm 11.8.0', 'strict-ssl=true', 'NODE_EXTRA_CA_CERTS=', 'https-proxy=https://' + IDS.application + ':${SERVERWARE_PROXY_TOKEN}@proxy.example.test',
+    for (const expected of ['npm ' + NPM_PACKAGE.dependencies.npm, 'strict-ssl=true', 'NODE_EXTRA_CA_CERTS=', 'https-proxy=https://' + IDS.application + ':${SERVERWARE_PROXY_TOKEN}@proxy.example.test',
       '//registry.npmjs.org/:_authToken=' + DUMMY, "view '@example/fixture' --json", 'fetch-retries=0', 'cache=${SERVERWARE_NPM_CACHE}', '--globalconfig /dev/null']) assert(text.includes(expected), expected);
     assert(!text.includes(PRIVATE)); assert(!text.includes('strict-ssl=false'));
     for (const change of [{proxyAuthentication: 'bearer'}, {packageName: 'outside-grant'}, {proxyUrl: 'http://proxy.example.test'},
       {proxyUrl: 'https://user:secret@proxy.example.test'}, {caPath: 'bad\npath'}, {applicationId: 'not-uuid'}])
       assert.throws(() => pure.run('buildNpmClientRecipe(input)', {...input, ...change}));
+  }],
+  ['generated npm guidance joins the maintained package, launcher core and lock pins', async () => {
+    const {VERSIONS} = await import(pathToFileURL(resolve(NPM_EXAMPLE, 'core.mjs')).href);
+    const lock = JSON.parse(readFileSync(resolve(NPM_EXAMPLE, 'package-lock.json'), 'utf8'));
+    assert.deepEqual(VERSIONS, NPM_PACKAGE.dependencies);
+    assert.deepEqual(lock.packages[''].dependencies, VERSIONS);
+    assert.deepEqual(clone(pure.run('operatorNpm.versions')), VERSIONS);
+    assert.equal(pure.run('operatorNpm.nodeVersion'), NPM_PACKAGE.engines.node);
+    assert.equal(lock.packages[''].engines.node, NPM_PACKAGE.engines.node);
+    for (const [name, version] of Object.entries(VERSIONS)) {
+      assert.equal(lock.packages['node_modules/' + name].version, version, name);
+      if (name !== 'npm') assert.equal(lock.packages['node_modules/npm/node_modules/' + name].version, version, 'npm bundled ' + name);
+    }
+    const input = {proxyUrl: 'https://proxy.example.test', applicationId: IDS.application,
+      proxyAuthentication: 'basic_and_bearer_v1', packages: PACKAGES, packageName: PACKAGES[0], tag: 'latest'};
+    for (const builder of ['buildNpmClientRecipe', 'buildNpmPublishClientRecipe']) {
+      const recipe = pure.run(builder + '(input)', input);
+      assert(recipe.startsWith('# npm ' + VERSIONS.npm + ' / Node.js ' + NPM_PACKAGE.engines.node), builder);
+      assert(!/11\.8\.0|21\.0\.4/.test(recipe), builder + ' must not advertise retired pins');
+    }
+    assert(pure.run('buildNpmInstallClientRecipe(input)', input).includes('node client.mjs install'));
+  }],
+  ['actual npm private downloads use the maintained pins without changing token or TLS handling', async () => {
+    const {capability: publishCapability, publishRule} = require('./test_operator_npm_publish_ui.cjs');
+    const publishing = rawCatalog({rules: [publishRule()]}); publishing.capabilities.npm_publish = publishCapability();
+    for (const raw of [rawCatalog(), publishing]) {
+      const f = npmDownloadFixture(raw);
+      assert.equal(f.node('download-config').disabled, false);
+      f.node('download-config').events.click();
+      assert.equal(f.blobs.length, 1); assert.equal(f.blobs[0].type, 'application/json');
+      assert.deepEqual(f.downloads, [{href: 'blob:inert-npm/1', filename: 'serverware-client.private.json'}]);
+      assert.deepEqual(f.revoked, ['blob:inert-npm/1']);
+      const text = await f.blobs[0].text(); const config = JSON.parse(text);
+      assert.equal(config.client_recipe.npm_version, NPM_PACKAGE.dependencies.npm);
+      assert.equal(config.client_recipe.node_version, NPM_PACKAGE.engines.node);
+      if (raw.access_rules[0].operation_bundle === BUNDLE)
+        assert.equal(config.client_recipe.pacote_version, NPM_PACKAGE.dependencies.pacote);
+      assert.equal(config.proxy_username, IDS.application); assert.equal(config.proxy_password, f.token);
+      assert.equal(config.client_recipe.sdk_auth_token, DUMMY); assert.equal(config.client_recipe.strict_ssl, true);
+      assert.equal(config.client_recipe.fresh_cache_required, true); assert.equal(config.client_recipe.automatic_retries, 0);
+      assert(!text.includes(PRIVATE)); assert(!/11\.8\.0|21\.0\.4/.test(text));
+      assert.equal(f.node('client-copy-status').textContent, 'Downloaded private client configuration. Keep it out of source control.');
+    }
   }],
   ['setup labels distinguish reusable credentials from consuming clients', async () => {
     const f = fixture({rules: []});
@@ -455,7 +541,7 @@ async function main() {
   assert.equal(process.argv.length, 2, 'No browser/live target or execution arguments accepted');
   for (const [name, test] of tests) { await test(); console.log('PASS ' + name); }
   console.log(JSON.stringify({ok: true, groups: tests.length, browser: false, network: false, generated_recipe_executed: false,
-    scope: 'public catalog, inert DOM connect handlers, metadata-only recipe text; not browser or provider acceptance'}));
+    scope: 'public catalog, inert DOM connect/download handlers, npm recipe and source-pin joins; not browser or provider acceptance'}));
 }
 module.exports = {context, rawCatalog, npmCredential, npmRule, cap, existingPair, IDS, clone};
 if (require.main === module) main().catch(error => { console.error(error.stack); process.exitCode = 1; });

@@ -2,6 +2,9 @@
 
 - [Getting started](https://github.com/AndrewMohawk/serverware/wiki/Getting-started)
 - [Credentials and providers](https://github.com/AndrewMohawk/serverware/wiki/Credentials-and-providers)
+- [GitHub App setup](https://github.com/AndrewMohawk/serverware/wiki/GitHub-App-setup)
+- [Google and X OAuth setup](https://github.com/AndrewMohawk/serverware/wiki/OAuth-provider-setup)
+- [Custom API credentials](https://github.com/AndrewMohawk/serverware/wiki/Custom-API-credentials)
 - [Clients and recipes](https://github.com/AndrewMohawk/serverware/wiki/Clients-and-recipes)
 - [Permissions and policies](https://github.com/AndrewMohawk/serverware/wiki/Permissions-and-policies)
 - [Proxy and CA](https://github.com/AndrewMohawk/serverware/wiki/Proxy-and-CA)

@@ -27,7 +27,22 @@ const context = vm.createContext({Date: Clock, URL, operatorError: message => Ob
   fetch: () => { networkCalls++; throw new Error('No network permitted'); }});
 const source = readFileSync(resolve(__dirname, '../serverware/operator_demo_web/workspace_notifications.js'), 'utf8');
 vm.runInContext(source, context, {timeout: 1000});
-const api = vm.runInContext('({valid:notificationNativeValid, present:notificationNativePresentation, project:projectNotificationStatus, render:createNotificationNativeObservation, delivery:notificationDeliveryMessage})', context);
+const api = vm.runInContext('({valid:notificationNativeValid, present:notificationNativePresentation, project:projectNotificationStatus, render:createNotificationNativeObservation, delivery:notificationDeliveryMessage, presets:notificationAuditPresets, selectPreset:notificationPresetSelection, filterProblem:notificationFilterProblem, filterMessage:notificationFilterMessage})', context);
+const PRESETS = {
+  proxy_blocks: ['data_plane.connect.denied', 'data_plane.policy.reload_failed', 'data_plane.request.denied', 'data_plane.response.blocked'],
+  access_changes: ['access_rule.alchemy_chain_status_created', 'access_rule.created', 'access_rule.github_created',
+    'access_rule.npm_install_created', 'access_rule.npm_metadata_created', 'access_rule.npm_publish_created',
+    'access_rule.revoked', 'access_rule.x_username_created', 'application.created', 'application.proxy_authentication_changed',
+    'application.revoked', 'application.token_rotated', 'credential.alchemy_key_created', 'credential.aws_sigv4_created',
+    'credential.aws_sigv4_replaced', 'credential.created', 'credential.github_app_created', 'credential.github_app_key_replaced',
+    'credential.github_token_created', 'credential.key_replaced', 'credential.npm_token_created', 'credential.revoked',
+    'credential.x_app_bearer_created'].map(type => 'operator_catalog.' + type),
+  approval_history: ['approval.approved', 'approval.decision_recorded', 'approval.denied', 'approval.requested', 'approval.review_opened',
+    'control_plane.approval.approved', 'control_plane.approval.consumed', 'control_plane.approval.denied',
+    'control_plane.approval.invalidated', 'control_plane.approval.requested'],
+};
+const AUDIT = [...Object.values(PRESETS).flat(), 'credential.oauth_refresh_failed'].sort();
+const plain = value => JSON.parse(JSON.stringify(value));
 
 function native(state = 'not_configured', changes = {}) {
   return {configured: state !== 'not_configured', source_available: ['waiting', 'observed'].includes(state), observation_only: true,
@@ -60,6 +75,88 @@ function delivery(changes = {}) {
   return api.project(value).slots[0].last_delivery;
 }
 const tests = [
+  ['audit presets have a fixed supported roster and are not action-source presets', () => {
+    assert.deepEqual(plain(api.presets).map(item => item.id), Object.keys(PRESETS));
+    const eventSource = readFileSync(resolve(__dirname, '../serverware/operator_notification_events.py'), 'utf8');
+    assert(Object.isFrozen(api.presets));
+    for (const preset of api.presets) {
+      assert(Object.isFrozen(preset)); assert(Object.isFrozen(preset.events));
+      assert.match(preset.label, /^Add /); assert.deepEqual(plain(preset.events), PRESETS[preset.id]);
+      assert.deepEqual(plain(preset.events), [...new Set(preset.events)].sort());
+      for (const type of preset.events) {
+        // Catalog summary literals are prefixed by the actual event producer.
+        const literal = type.replace(/^operator_catalog\./, '');
+        assert(eventSource.includes('"' + literal + '"') || eventSource.includes("'" + literal + "'"), type);
+        assert(!type.startsWith('native_pilot.'));
+      }
+    }
+    assert.equal(networkCalls, 0);
+  }],
+  ['explicit preset selection adds to a draft without mutating inputs and is idempotent', () => {
+    const advertised = Object.freeze([...AUDIT]); const selected = Object.freeze(['credential.oauth_refresh_failed']);
+    for (const [id, expected] of Object.entries(PRESETS)) {
+      const next = api.selectPreset('audit_log', id, advertised, selected);
+      assert.deepEqual(plain(next), [...selected, ...expected].sort());
+      assert.deepEqual(plain(api.selectPreset('audit_log', id, advertised, next)), plain(next));
+      assert.deepEqual(selected, ['credential.oauth_refresh_failed']); assert.deepEqual(advertised, AUDIT);
+      assert.notEqual(next, selected);
+    }
+    assert.equal(networkCalls, 0);
+  }],
+  ['audit presets select only advertised events and cannot cross into action-required slots', () => {
+    const advertised = ['approval.requested', 'fixture.future_audit', 'native_pilot.prepare_available'];
+    assert.deepEqual(plain(api.selectPreset('audit_log', 'approval_history', advertised, [])), ['approval.requested']);
+    assert.deepEqual(plain(api.selectPreset('audit_log', 'approval_history', advertised, ['fixture.future_audit'])),
+      ['approval.requested', 'fixture.future_audit']);
+    for (const channel of ['action_required', 'unknown', null])
+      assert.equal(api.selectPreset(channel, 'approval_history', advertised, []), null);
+    assert.equal(api.selectPreset('audit_log', 'proxy_blocks', advertised, []), null);
+    assert.equal(api.selectPreset('audit_log', 'unknown', advertised, []), null);
+    assert.equal(api.selectPreset('audit_log', 'approval_history', [], []), null);
+    assert.equal(networkCalls, 0);
+  }],
+  ['preset selection rejects malformed or unadvertised current filters without repairing or expanding them', () => {
+    for (const selected of [null, {}, ['unknown.event'], ['approval.requested', 'approval.requested'],
+      ['approval.requested', 'approval.approved'], ['Bad.Type'], Array.from({length: 65}, (_, i) => 'fixture.' + String(i).padStart(2, '0'))])
+      assert.equal(api.selectPreset('audit_log', 'approval_history', AUDIT, selected), null);
+    for (const advertised of [null, {}, ['approval.requested', 'approval.requested'], ['Bad.Type'],
+      Array.from({length: 69}, (_, i) => 'fixture.' + String(i).padStart(2, '0'))])
+      assert.equal(api.selectPreset('audit_log', 'approval_history', advertised, []), null);
+    assert.equal(networkCalls, 0);
+  }],
+  ['additive presets respect the 64-event union limit without dropping existing selections', () => {
+    const other = Array.from({length: 64}, (_, i) => 'fixture.event_' + String(i).padStart(2, '0'));
+    const advertised = Object.freeze([...PRESETS.proxy_blocks, ...other].sort());
+    const full = Object.freeze([...other]);
+    assert.equal(api.selectPreset('audit_log', 'proxy_blocks', advertised, full), null);
+    assert.deepEqual(full, other);
+    const next = api.selectPreset('audit_log', 'proxy_blocks', advertised, other.slice(0, 60));
+    assert.equal(next.length, 64); assert.deepEqual(plain(next), [...PRESETS.proxy_blocks, ...other.slice(0, 60)].sort());
+    assert.deepEqual(plain(api.selectPreset('audit_log', 'proxy_blocks', advertised, next)), plain(next));
+    assert.equal(api.selectPreset('audit_log', 'proxy_blocks', advertised, other.slice(0, 61)), null);
+  }],
+  ['enabled-empty draft validation is visible and muted empty settings remain savable', () => {
+    assert.match(api.filterProblem(true, []), /Select at least one event or disable.*Nothing was submitted/);
+    assert.equal(api.filterProblem(false, []), null);
+    assert.match(api.filterMessage(true, []), /No source events selected in this draft.*Empty saved filters deliver no source events; synthetic tests are separate/);
+    assert.match(api.filterMessage(false, []), /Disabled; no source events selected.*save.*without enabling delivery/);
+    for (const enabled of [true, false]) {
+      assert.equal(api.filterProblem(enabled, ['approval.requested']), null);
+      assert.match(api.filterMessage(enabled, ['approval.requested']), /Draft changes take effect only after Save.*does not confirm source availability/);
+      assert.match(api.filterProblem(enabled, Array.from({length: 65}, (_, i) => 'fixture.' + String(i).padStart(2, '0'))), /at most 64/);
+    }
+    assert.match(api.filterMessage(false, new Array(65)), /65\/64.*Remove events before saving/);
+    assert.equal(networkCalls, 0);
+  }],
+  ['saved enabled-empty and muted-empty slots remain readable without implicit filter changes', () => {
+    const value = status();
+    for (const [index, slot] of value.slots.entries()) Object.assign(slot, {revision: 1, label: 'Saved destination',
+      enabled: index % 2 === 0, secret_present: true, event_types: []});
+    const before = JSON.stringify(value);
+    assert.equal(api.project(value), value); assert.equal(JSON.stringify(value), before);
+    assert(value.slots.every(slot => slot.event_types.length === 0));
+    assert.equal(networkCalls, 0);
+  }],
   ['68 advertised audit types never widen the 64-filter destination limit or select anything', () => {
     const value = status();
     const types = [...Array.from({length: 64}, (_, index) => 'fixture.event_' + String(index).padStart(2, '0')),

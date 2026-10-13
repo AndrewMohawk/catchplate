@@ -20,6 +20,7 @@ Serverware lets your scripts, services, agents and CI jobs use provider credenti
 
 - [Get your first client working](https://github.com/AndrewMohawk/serverware/wiki/Getting-started): save a credential, grant access, configure the client and check the result.
 - [Add or connect a provider](https://github.com/AndrewMohawk/serverware/wiki/Credentials-and-providers): GitHub App/PAT, Google, npm, X, Alchemy, custom keys and AWS storage.
+- Follow a worked setup: [GitHub App](https://github.com/AndrewMohawk/serverware/wiki/GitHub-App-setup), [Google/X OAuth](https://github.com/AndrewMohawk/serverware/wiki/OAuth-provider-setup), or [custom Bearer/header API](https://github.com/AndrewMohawk/serverware/wiki/Custom-API-credentials).
 - [Run an existing library or CI job](https://github.com/AndrewMohawk/serverware/wiki/Clients-and-recipes): Node.js, Python, Go, curl, npm and GitHub Actions examples.
 - [Choose and restrict permissions](https://github.com/AndrewMohawk/serverware/wiki/Permissions-and-policies): provider presets, exact API paths, optional filtering and publishing hours.
 - [Set the proxy address and trust its CA](https://github.com/AndrewMohawk/serverware/wiki/Proxy-and-CA): client settings, destination review and provider application configuration.

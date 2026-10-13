@@ -13,6 +13,44 @@ function notificationTypes(value, maximum = 64) {
   return Array.isArray(value) && value.length <= maximum && value.every((item, i) =>
     typeof item === 'string' && /^[a-z][a-z0-9_.]{0,127}$/.test(item) && (!i || value[i - 1] < item));
 }
+const notificationAuditPresets = Object.freeze([
+  {id: 'proxy_blocks', label: 'Add proxy blocks and errors', events: [
+    'data_plane.connect.denied', 'data_plane.policy.reload_failed', 'data_plane.request.denied', 'data_plane.response.blocked']},
+  {id: 'access_changes', label: 'Add credential and permission changes', events: [
+    'access_rule.alchemy_chain_status_created', 'access_rule.created', 'access_rule.github_created',
+    'access_rule.npm_install_created', 'access_rule.npm_metadata_created', 'access_rule.npm_publish_created',
+    'access_rule.revoked', 'access_rule.x_username_created', 'application.created',
+    'application.proxy_authentication_changed', 'application.revoked', 'application.token_rotated',
+    'credential.alchemy_key_created', 'credential.aws_sigv4_created', 'credential.aws_sigv4_replaced',
+    'credential.created', 'credential.github_app_created', 'credential.github_app_key_replaced',
+    'credential.github_token_created', 'credential.key_replaced', 'credential.npm_token_created',
+    'credential.revoked', 'credential.x_app_bearer_created'].map(type => 'operator_catalog.' + type)},
+  {id: 'approval_history', label: 'Add approval history', events: [
+    'approval.approved', 'approval.decision_recorded', 'approval.denied', 'approval.requested', 'approval.review_opened',
+    'control_plane.approval.approved', 'control_plane.approval.consumed', 'control_plane.approval.denied',
+    'control_plane.approval.invalidated', 'control_plane.approval.requested']},
+].map(preset => Object.freeze({...preset, events: Object.freeze(preset.events)})));
+function notificationPresetSelection(channel, presetId, advertised, selected) {
+  const preset = notificationAuditPresets.find(item => item.id === presetId);
+  if (channel !== 'audit_log' || !preset || !notificationTypes(advertised, 68) || !notificationTypes(selected) ||
+      selected.some(type => !advertised.includes(type))) return null;
+  const available = preset.events.filter(type => advertised.includes(type));
+  if (!available.length) return null;
+  const next = [...new Set([...selected, ...available])].sort();
+  return notificationTypes(next) ? next : null;
+}
+function notificationFilterProblem(enabled, selected) {
+  if (!notificationTypes(selected)) return 'Choose at most 64 event types for this destination. Nothing was submitted.';
+  return enabled && !selected.length ? 'No source events selected. Select at least one event or disable this destination before saving. Nothing was submitted.' : null;
+}
+function notificationFilterMessage(enabled, selected) {
+  if (selected.length > 64) return 'Too many event types selected (' + selected.length + '/64). Remove events before saving.';
+  if (!selected.length) return enabled ?
+    'No source events selected in this draft. Select events or disable it before saving. Empty saved filters deliver no source events; synthetic tests are separate.' :
+    'Disabled; no source events selected. You can save this destination without enabling delivery.';
+  return selected.length + ' source event types selected' + (enabled ? '.' : '; delivery is disabled.') +
+    ' Draft changes take effect only after Save. Selection does not confirm source availability or delivery.';
+}
 const notificationNativePhases = Object.freeze({prepare_available: 'Preparation available', security_key_available: 'Security-key phase available',
   confirmation_available: 'Confirmation available', waiting: 'Waiting', preparing: 'Preparation in progress',
   preparing_confirmation: 'Confirmation preparation in progress', action_in_progress: 'Action already in progress',
@@ -250,9 +288,13 @@ function createNotificationsView(workspace) {
       const action = form.elements.namedItem('url_action').value;
       const input = form.elements.namedItem('url'); input.disabled = !canWrite() || action !== 'replace'; input.required = action === 'replace';
       form.querySelector('[data-notification-url-group]').hidden = action !== 'replace';
-      const selectedEvents = form.querySelectorAll('[name="event_types"]:checked').length;
-      form.querySelector('[data-notification-events-summary]').textContent = 'Event filters (' + selectedEvents + '/64 selected)';
-      form.querySelector('[data-notification-save]').disabled = !canWrite() || selectedEvents > 64;
+      const selectedEvents = [...form.querySelectorAll('[name="event_types"]:checked')].map(input => input.value).sort();
+      const enabled = form.elements.namedItem('enabled').checked;
+      form.querySelector('[data-notification-events-summary]').textContent = 'Event filters (' + selectedEvents.length + '/64 selected)';
+      form.querySelector('[data-notification-events-status]').textContent = notificationFilterMessage(enabled, selectedEvents);
+      form.querySelector('[data-notification-save]').disabled = !canWrite() || Boolean(notificationFilterProblem(enabled, selectedEvents));
+      for (const button of form.querySelectorAll('[data-notification-preset]')) button.disabled = !canWrite() ||
+        !notificationPresetSelection(slot.channel, button.dataset.notificationPreset, status.capabilities[slot.channel].event_types, selectedEvents);
       form.querySelector('[data-notification-test]').disabled = !canWrite() || !slot || !slot.enabled || !slot.secret_present || !slot.revision || draftChanged(form, slot) ||
         ['queued', 'sending'].includes(slot.last_delivery?.status);
     }
@@ -291,7 +333,8 @@ function createNotificationsView(workspace) {
     const form = textNode('form', undefined, 'card'); form.dataset.notificationSlot = slot.slot; form.autocomplete = 'off';
     form.append(textNode('h3', slot.adapter === 'slack' ? 'Slack' : 'Generic webhook'));
     const state = textNode('p', slot.revision === 0 ? 'Not configured.' :
-      (slot.enabled ? 'Enabled for selected events.' : 'Disabled.') + ' Destination URL ' + (slot.secret_present ? 'stored; never returned.' : 'not stored.'));
+      (slot.enabled ? slot.event_types.length ? 'Enabled for selected events.' : 'Enabled, but no source events are selected.' : 'Disabled.') +
+      ' Destination URL ' + (slot.secret_present ? 'stored; never returned.' : 'not stored.'));
     state.dataset.slotStatus = ''; form.append(state);
     const revision = textNode('p', 'Saved revision: ' + slot.revision, 'small muted'); revision.dataset.slotRevision = ''; form.append(revision);
     const delivery = textNode('p', notificationDeliveryMessage(slot.last_delivery), 'small');
@@ -309,6 +352,24 @@ function createNotificationsView(workspace) {
     const group = textNode('div'); group.dataset.notificationUrlGroup = ''; fields.append(group);
     const url = field(form, group, 'url', 'Webhook URL'); url.type = 'password'; url.maxLength = 4096; url.autocomplete = 'new-password'; url.spellcheck = false;
     group.append(textNode('p', 'Write-only HTTPS destination. Never paste it into an application permission. Cleared on submission and when leaving this page.', 'small muted'));
+    const eventStatus = textNode('p'); eventStatus.dataset.notificationEventsStatus = ''; eventStatus.setAttribute('aria-live', 'polite'); fields.append(eventStatus);
+    if (slot.channel === 'audit_log') {
+      fields.append(textNode('p', 'Optional audit presets add supported event types to this destination’s draft. Existing selections stay selected. Review filters, then Save; presets never enable delivery or send a test.', 'small muted'));
+      const presets = textNode('div', undefined, 'actions');
+      for (const preset of notificationAuditPresets) {
+        const button = textNode('button', preset.label, 'secondary'); button.type = 'button'; button.dataset.notificationPreset = preset.id;
+        button.addEventListener('click', () => {
+          if (!canWrite()) return;
+          const selected = [...form.querySelectorAll('[name="event_types"]:checked')].map(input => input.value).sort();
+          const next = notificationPresetSelection(slot.channel, preset.id, status.capabilities[slot.channel].event_types, selected);
+          if (!next) { say('This audit preset is unavailable or would exceed 64 selected events. No filters were changed.'); return; }
+          for (const checkbox of form.querySelectorAll('[name="event_types"]')) checkbox.checked = next.includes(checkbox.value);
+          controls(); say('Audit preset added to this destination’s draft only. Review the filters and Save explicitly. No message was sent.');
+        });
+        presets.append(button);
+      }
+      fields.append(presets, textNode('p', 'Presets are unavailable if none of their events are supported or adding them would exceed 64 selections. Approval history is an audit summary, not an action-required alert.', 'small muted'));
+    }
     const events = textNode('details'); const eventSummary = textNode('summary'); eventSummary.dataset.notificationEventsSummary = ''; events.append(eventSummary);
     events.append(textNode('p', 'Choose at most 64 event types for this destination. Only selected event types are delivered. An empty selection delivers no source events; synthetic tests remain separate.', 'small muted'));
     for (const type of status.capabilities[slot.channel].event_types) {
@@ -376,9 +437,8 @@ function createNotificationsView(workspace) {
         event_types: [...form.querySelectorAll('[name="event_types"]:checked')].map(input => input.value).sort(),
         max_attempts: Number(form.elements.namedItem('max_attempts').value), url_action: urlAction,
         ...(urlAction === 'replace' ? {url: form.elements.namedItem('url').value} : {})};
-      if (!notificationTypes(body.event_types)) {
-        say('Choose at most 64 event types for this destination. Nothing was submitted.'); return;
-      }
+      const filterProblem = notificationFilterProblem(body.enabled, body.event_types);
+      if (filterProblem) { say(filterProblem); return; }
       if (!/^[\x20-\x7e]{1,80}$/.test(body.label) || urlAction === 'clear' && body.enabled ||
           urlAction === 'replace' && !body.url || urlAction === 'keep' && !slot.secret_present || slot.revision === 0 && urlAction !== 'replace') {
         say('Enter a printable destination label and a replacement URL for a new slot. Disable the slot before removing its URL. Nothing was submitted.'); return;

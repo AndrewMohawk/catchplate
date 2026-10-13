@@ -1,6 +1,8 @@
 // Explicit metadata-only npm connection. Neither a generic Bearer key nor a
 // registry URL grants this preset implicitly; source support is not live proof.
 const operatorNpm = Object.freeze({origin: 'https://registry.npmjs.org', connection: 'npm_token_v1',
+  // Joined to examples/npm-registry package/core/lock pins by the UI regression suite.
+  versions: Object.freeze({npm: '11.20.0', pacote: '21.5.1', 'npm-registry-fetch': '19.1.1'}), nodeVersion: '25.5.0',
   bundle: 'npm_metadata_read_v1', response: 'npm_metadata_json_v1', token: 'serverware-npm-placeholder-v1',
   placeholder: 'Bearer serverware-npm-placeholder-v1', headers: ['accept', 'npm-auth-type', 'npm-command',
     'npm-in-ci', 'npm-scope', 'pacote-pkg-id', 'pacote-req-type', 'pacote-version', 'user-agent']});
@@ -164,7 +166,7 @@ function buildNpmClientRecipe({proxyUrl, applicationId, proxyAuthentication, pac
       typeof caPath !== 'string' || caPath.length > 512 || /[\u0000-\u001f\u007f]/.test(caPath))
     throw new Error('An exact npm metadata permission and standard proxy login are required');
   const quote = value => "'" + value.replace(/'/g, "'\\''") + "'";
-  return ['# npm 11.8.0 / Node.js 25.5.0; metadata only, not install or publish.',
+  return ['# npm ' + operatorNpm.versions.npm + ' / Node.js ' + operatorNpm.nodeVersion + '; metadata only, not install or publish.',
     '# Save these settings in a dedicated serverware-npm.npmrc in an empty test directory.',
     '# Keep environment references literal. The real npm token never belongs here.',
     'registry=' + operatorNpm.origin + '/',

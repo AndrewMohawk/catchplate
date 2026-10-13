@@ -4,7 +4,7 @@
 const assert = require('node:assert/strict');
 const {createHash} = require('node:crypto');
 const {execFileSync} = require('node:child_process');
-const {readFile, mkdtemp} = require('node:fs/promises');
+const {readFile, readdir, mkdtemp} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
 const {fixture: baseFixture, ready, view, credential, application, rule, NOW} = require('./test_operator_catalog_browser.cjs');
 
@@ -18,6 +18,19 @@ const PRIVATE = ['https://notify.example.test/synthetic-private-destination',
   'https://hooks.slack.com/services/T00000000/B00000000/SYNTHETIC_NOT_A_REAL_WEBHOOK',
   'synthetic-private-error-MUST-NOT-RENDER', 'private_delivery_detail_must_not_render'];
 const clone = value => JSON.parse(JSON.stringify(value));
+const AUDIT_PRESETS = {
+  proxy_blocks: ['data_plane.connect.denied', 'data_plane.policy.reload_failed', 'data_plane.request.denied', 'data_plane.response.blocked'],
+  access_changes: ['access_rule.alchemy_chain_status_created', 'access_rule.created', 'access_rule.github_created',
+    'access_rule.npm_install_created', 'access_rule.npm_metadata_created', 'access_rule.npm_publish_created',
+    'access_rule.revoked', 'access_rule.x_username_created', 'application.created', 'application.proxy_authentication_changed',
+    'application.revoked', 'application.token_rotated', 'credential.alchemy_key_created', 'credential.aws_sigv4_created',
+    'credential.aws_sigv4_replaced', 'credential.created', 'credential.github_app_created', 'credential.github_app_key_replaced',
+    'credential.github_token_created', 'credential.key_replaced', 'credential.npm_token_created', 'credential.revoked',
+    'credential.x_app_bearer_created'].map(type => 'operator_catalog.' + type),
+  approval_history: ['approval.approved', 'approval.decision_recorded', 'approval.denied', 'approval.requested', 'approval.review_opened',
+    'control_plane.approval.approved', 'control_plane.approval.consumed', 'control_plane.approval.denied',
+    'control_plane.approval.invalidated', 'control_plane.approval.requested'],
+};
 const EVENTS = JSON.parse(execFileSync('python3', ['-I', '-B', '-c',
   `import ast,json,pathlib
 tree=ast.parse(pathlib.Path("serverware/operator_notification_events.py").read_text())
@@ -53,11 +66,9 @@ print(json.dumps(result))`],
 {cwd: ROOT, timeout: 5000, maxBuffer: 65536, encoding: 'utf8'})); // AST only: no application/config/database import.
 const INPUTS = ['scripts/test_operator_notifications_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
   'serverware/operator_demo_portal.py', 'serverware/operator_notification_api.py', 'serverware/operator_notifications.py',
-  'serverware/operator_notification_store.py', 'serverware/operator_notification_events.py',
-  ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js', 'workspace_google.js',
-    'workspace_google_reauthorization.js', 'workspace_resources.js', 'workspace_applications.js', 'workspace_proxy_audit.js',
-    'workspace_connect.js', 'workspace_notifications.js'].map(name => 'serverware/operator_demo_web/' + name)];
+  'serverware/operator_notification_store.py', 'serverware/operator_notification_events.py'];
 let artifacts;
+let suiteRunning = false;
 
 function slot(name, changes = {}) {
   const [channel, adapter] = name.split('.');
@@ -124,6 +135,7 @@ async function fixture(browser, options, exercise) {
         'event_types', 'max_attempts', 'url_action', ...(body.url_action === 'replace' ? ['url'] : [])].sort());
       assert.equal(typeof body.label, 'string'); assert(body.label.length >= 1 && body.label.length <= 80 && body.label.trim() === body.label);
       assert.equal(typeof body.enabled, 'boolean'); assert(['keep', 'replace', 'clear'].includes(body.url_action));
+      assert(!body.enabled || body.event_types.length > 0, 'enabled-empty drafts must stop before POST');
       assert(Number.isInteger(body.max_attempts) && body.max_attempts >= 1 && body.max_attempts <= 3);
       assert.deepEqual(body.event_types, [...new Set(body.event_types)].sort());
       assert(body.event_types.every(value => EVENTS[target.channel].includes(value)));
@@ -165,7 +177,10 @@ async function fixture(browser, options, exercise) {
     });
 }
 async function hashes() {
-  return Object.fromEntries(await Promise.all(INPUTS.map(async name =>
+  const frontend = (await readdir(join(ROOT, 'serverware/operator_demo_web'), {recursive: true}))
+    .filter(name => /\.(?:html|js|css)$/.test(name)).map(name => 'serverware/operator_demo_web/' + name);
+  const inputs = [...INPUTS, ...frontend].sort();
+  return Object.fromEntries(await Promise.all(inputs.map(async name =>
     [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')])));
 }
 async function clean(page) {
@@ -256,6 +271,111 @@ const tests = [
       }
       assert.equal(observed.posts.length, 0); await screenshot(page, 'four-independent-notification-slots');
     })],
+  ['new destinations stay muted and empty until an explicit slot-local draft choice', browser => fixture(browser,
+    {status: {slots: SLOTS.map(name => slot(name, {revision: 0, label: '', enabled: false, secret_present: false, event_types: []}))}},
+    async (page, observed) => {
+      await open(page); const before = clone(observed.snapshot.slots);
+      for (const name of SLOTS) {
+        const target = form(page, name);
+        assert.equal(await target.locator('[name="event_types"]:checked').count(), 0);
+        assert.equal(await target.locator('[name="enabled"]').isChecked(), false);
+        assert.equal(await target.locator('details').getAttribute('open'), null);
+        assert(await target.locator('[data-notification-events-status]').isVisible());
+        assert.match(await target.locator('[data-notification-events-status]').innerText(), /Disabled; no source events selected/);
+        assert(await target.locator('[data-notification-test]').isDisabled());
+        assert.equal(await target.locator('[data-notification-preset]').count(), name.startsWith('audit_log.') ? 3 : 0);
+      }
+      const target = form(page);
+      await target.locator('[data-notification-preset="proxy_blocks"]').click();
+      assert.deepEqual(await target.locator('[name="event_types"]:checked').evaluateAll(nodes => nodes.map(node => node.value)), AUDIT_PRESETS.proxy_blocks);
+      assert.equal(await target.locator('[name="enabled"]').isChecked(), false);
+      assert.deepEqual(observed.snapshot.slots, before); assert.equal(observed.posts.length, 0); assert.equal(await recovery(page), null);
+      await page.locator('#notifications-refresh').click(); await settled(page);
+      assert.equal(await form(page).locator('[name="event_types"]:checked').count(), 0, 'refresh reads saved filters, not the unsubmitted preset');
+      assert.equal(observed.posts.length, 0);
+    })],
+  ['saved enabled-empty destinations warn outside collapsed details and cannot save, but synthetic test stays separate', browser => fixture(browser,
+    {status: {slots: SLOTS.map(name => slot(name, {event_types: []}))}}, async (page, observed) => {
+      await open(page); const before = clone(observed.snapshot.slots);
+      for (const name of SLOTS) {
+        const target = form(page, name);
+        assert.equal(await target.locator('details').getAttribute('open'), null);
+        assert(await target.locator('[data-notification-events-status]').isVisible());
+        assert.match(await target.locator('[data-slot-status]').innerText(), /Enabled, but no source events are selected/);
+        assert.match(await target.locator('[data-notification-events-status]').innerText(), /No source events selected in this draft.*Empty saved filters deliver no source events/s);
+        assert(await target.locator('[data-notification-save]').isDisabled());
+        assert(await target.locator('[data-notification-test]').isEnabled());
+        await target.evaluate(node => node.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})));
+      }
+      assert.equal(observed.posts.length, 0); assert.equal(await recovery(page), null); assert.deepEqual(observed.snapshot.slots, before);
+      assert.match(await page.locator('#notifications-status').innerText(), /Select at least one event or disable.*Nothing was submitted/s);
+      await submit(page, form(page), 'test');
+      assert.equal(observed.posts.length, 1); assert.equal(observed.posts[0].kind, 'test');
+      assert(observed.snapshot.slots.every(item => item.event_types.length === 0));
+      await screenshot(page, 'enabled-empty-notification-warning');
+    })],
+  ['muted empty settings can be saved but enabling requires an explicit nonempty filter', browser => fixture(browser,
+    {status: {slots: SLOTS.map(name => slot(name, {enabled: false, event_types: []}))}}, async (page, observed) => {
+      await open(page); const others = clone(observed.snapshot.slots.slice(0, 3)); let target = form(page);
+      assert(await target.locator('[data-notification-save]').isEnabled());
+      assert(await target.locator('[data-notification-test]').isDisabled());
+      await target.locator('[name="label"]').fill('Muted audit destination'); await submit(page, target);
+      assert.equal(observed.posts.length, 1); assert.equal(observed.posts[0].kind, 'save');
+      assert.equal(observed.posts[0].body.enabled, false); assert.deepEqual(observed.posts[0].body.event_types, []);
+      target = form(page); await target.locator('[name="enabled"]').check();
+      assert(await target.locator('[data-notification-save]').isDisabled());
+      await target.evaluate(node => node.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})));
+      assert.equal(observed.posts.length, 1);
+      await target.locator('details summary').click();
+      await target.locator('[name="event_types"][value="data_plane.request.denied"]').check();
+      assert(await target.locator('[data-notification-save]').isEnabled());
+      assert(await target.locator('[data-notification-test]').isDisabled());
+      await submit(page, target);
+      assert.equal(observed.posts.length, 2); assert(observed.posts.every(item => item.kind === 'save'));
+      assert.equal(observed.posts[1].body.enabled, true); assert.deepEqual(observed.posts[1].body.event_types, ['data_plane.request.denied']);
+      assert.deepEqual(observed.snapshot.slots.slice(0, 3), others); assert.equal(observed.snapshot.queue.queued, 0);
+    })],
+  ['explicit audit presets add exact supported filters only to the selected draft until Save', browser => fixture(browser,
+    {status: {slots: SLOTS.map(name => slot(name, name.startsWith('audit_log.') ?
+      {enabled: false, event_types: ['credential.oauth_refresh_failed']} : {}))}}, async (page, observed) => {
+      await open(page); const before = clone(observed.snapshot.slots); const target = form(page); let selected = ['credential.oauth_refresh_failed'];
+      const reads = observed.reads.length;
+      for (const [id, types] of Object.entries(AUDIT_PRESETS)) {
+        assert(types.every(type => EVENTS.audit_log.includes(type)), 'independent preset oracle agrees with actual advertised event contract');
+        await target.locator('[data-notification-preset="' + id + '"]').click();
+        selected = [...new Set([...selected, ...types])].sort();
+        assert.deepEqual(await target.locator('[name="event_types"]:checked').evaluateAll(nodes => nodes.map(node => node.value)), selected);
+        assert.equal(await target.locator('[name="enabled"]').isChecked(), false);
+        assert.deepEqual(observed.snapshot.slots, before); assert.equal(observed.posts.length, 0);
+        assert.equal(observed.reads.length, reads); assert.equal(await recovery(page), null);
+        for (const name of SLOTS.filter(item => item !== 'audit_log.webhook')) {
+          assert.deepEqual(await form(page, name).locator('[name="event_types"]:checked').evaluateAll(nodes => nodes.map(node => node.value)),
+            before.find(item => item.slot === name).event_types);
+        }
+      }
+      await target.locator('[data-notification-preset="proxy_blocks"]').click();
+      assert.deepEqual(await target.locator('[name="event_types"]:checked').evaluateAll(nodes => nodes.map(node => node.value)), selected);
+      await submit(page, target);
+      assert.equal(observed.posts.length, 1); assert.equal(observed.posts[0].kind, 'save');
+      assert.deepEqual(observed.posts[0].body.event_types, selected); assert.equal(observed.posts[0].body.enabled, false);
+      assert.equal(observed.snapshot.queue.queued, 0); assert.deepEqual(observed.snapshot.slots.slice(0, 3), before.slice(0, 3));
+    })],
+  ['unavailable audit presets stay disabled and partial capability lists never select unadvertised events', browser => fixture(browser,
+    {status: {capabilities: {...status().capabilities, audit_log: {source_available: true,
+      event_types: ['approval.requested', 'data_plane.connect.denied']}},
+      slots: SLOTS.map(name => slot(name, name.startsWith('audit_log.') ? {event_types: ['approval.requested']} : {}))}},
+    async (page, observed) => {
+      await open(page); const target = form(page); const before = clone(observed.snapshot.slots);
+      assert(await target.locator('[data-notification-preset="access_changes"]').isDisabled());
+      await target.locator('[data-notification-preset="access_changes"]').evaluate(node => node.dispatchEvent(new Event('click', {bubbles: true})));
+      assert.equal(await target.locator('[name="event_types"]:checked').count(), 1);
+      await target.locator('[data-notification-preset="proxy_blocks"]').click();
+      await target.locator('[data-notification-preset="approval_history"]').click();
+      assert.deepEqual(await target.locator('[name="event_types"]:checked').evaluateAll(nodes => nodes.map(node => node.value)),
+        ['approval.requested', 'data_plane.connect.denied']);
+      assert.equal(observed.posts.length, 0); assert.equal(await recovery(page), null); assert.deepEqual(observed.snapshot.slots, before);
+      assert.equal(await form(page, 'action_required.webhook').locator('[data-notification-preset]').count(), 0);
+    })],
   ['68 available audit types preserve saved filters and enforce a 64-selection limit', browser => fixture(browser, {},
     async (page, observed) => {
       await open(page); const target = form(page); const before = clone(observed.snapshot.slots);
@@ -272,6 +392,11 @@ const tests = [
       for (const checkbox of (await target.locator('[name="event_types"]').all()).slice(0, 3)) await checkbox.uncheck();
       assert.match(await target.locator('[data-notification-events-summary]').innerText(), /65\/64 selected/);
       assert(await target.locator('[data-notification-save]').isDisabled());
+      for (const button of await target.locator('[data-notification-preset]').all()) assert(await button.isDisabled());
+      const overLimit = await target.locator('[name="event_types"]:checked').evaluateAll(nodes => nodes.map(node => node.value));
+      await target.locator('[data-notification-preset="proxy_blocks"]').evaluate(node => node.dispatchEvent(new Event('click', {bubbles: true})));
+      assert.deepEqual(await target.locator('[name="event_types"]:checked').evaluateAll(nodes => nodes.map(node => node.value)), overLimit);
+      assert.equal(observed.posts.length, 0);
       await target.locator('[name="event_types"]').nth(3).uncheck();
       assert(await target.locator('[data-notification-save]').isEnabled());
       await submit(page, target); assert.equal(observed.posts.length, 1);
@@ -532,27 +657,70 @@ const tests = [
     })],
 ];
 
+async function runSuite(browser) {
+  assert(!suiteRunning, 'notification suite is already running');
+  assert(browser && typeof browser.newContext === 'function', 'an existing Playwright browser is required');
+  assert(tests.length > 0, 'fixture cases must be finalized before execution');
+  suiteRunning = true;
+  const owned = new Set(); const creating = new Set();
+  let stopping = false; let created = 0; let closed = 0; let deadline; let cleanupDeadline;
+  let before; let after;
+  const scopedBrowser = {async newContext(options) {
+    assert(!stopping, 'notification suite has stopped');
+    const pending = browser.newContext(options); creating.add(pending);
+    let context;
+    try { context = await pending; }
+    finally { creating.delete(pending); }
+    owned.add(context); created++;
+    context.once('close', () => { owned.delete(context); closed++; });
+    if (stopping) { await context.close(); throw new Error('notification suite stopped during context creation'); }
+    return context;
+  }};
+  try {
+    before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
+    artifacts = await mkdtemp('/tmp/serverware-notifications-browser-');
+    console.log(JSON.stringify({artifactDirectory: artifacts, scope: 'synthetic notification fixtures; no actual destinations'}));
+    try {
+      await Promise.race([(async () => {
+        for (const [name, run] of tests) {
+          assert(!stopping, 'notification suite has stopped');
+          await run(scopedBrowser); console.log('PASS ' + name);
+        }
+      })(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('notification fixture absolute deadline')), 150000); })]);
+    } finally {
+      stopping = true; clearTimeout(deadline);
+      try {
+        await Promise.race([(async () => {
+          await Promise.allSettled([...creating]);
+          await Promise.allSettled([...owned].map(context => context.close()));
+          assert.equal(owned.size, 0, 'all suite-owned contexts must be closed');
+          assert.equal(creating.size, 0, 'no suite context creation may remain pending');
+          assert.equal(closed, created, 'every suite-created context reported closure');
+        })(), new Promise((_, reject) => { cleanupDeadline = setTimeout(() => reject(new Error('notification context cleanup deadline')), 10000); })]);
+      } finally {
+        clearTimeout(cleanupDeadline);
+        console.log(JSON.stringify({phase: 'context-cleanup', created, closed, remaining: owned.size,
+          pendingCreations: creating.size, sharedBrowserClosed: false}));
+        after = await hashes(); console.log(JSON.stringify({phase: 'source-after', hashes: after}));
+        assert.deepEqual(after, before, 'source bytes and complete frontend roster stayed frozen throughout fixture run');
+      }
+    }
+    const summary = {ok: true, groups: tests.length, scope: 'intercepted synthetic Notifications browser fixtures only',
+      liveRequests: 0, destinationDeliveries: 0, sourceWorkerExecuted: false, productionAcceptance: false};
+    console.log(JSON.stringify(summary));
+    return {...summary, artifactDirectory: artifacts, sourcePinsBefore: before, sourcePinsAfter: after,
+      ownedContextCleanup: {created, closed, remaining: owned.size, pendingCreations: creating.size, sharedBrowserClosed: false}};
+  } finally {
+    suiteRunning = false;
+  }
+}
 async function main() {
   assert.equal(process.argv.length, 2, 'notification fixtures accept no live target or credentials');
-  assert(tests.length > 0, 'fixture cases must be finalized before execution');
-  const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
-  artifacts = await mkdtemp('/tmp/serverware-notifications-browser-');
-  console.log(JSON.stringify({artifactDirectory: artifacts, scope: 'synthetic notification fixtures; no actual destinations'}));
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
   const browser = await chromium.launch({headless: true,
     args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--disable-sync', '--host-resolver-rules=MAP * ~NOTFOUND']});
-  let deadline;
-  try {
-    await Promise.race([(async () => {
-      for (const [name, run] of tests) { await run(browser); console.log('PASS ' + name); }
-      console.log(JSON.stringify({ok: true, groups: tests.length, scope: 'intercepted synthetic Notifications browser fixtures only',
-        liveRequests: 0, destinationDeliveries: 0, sourceWorkerExecuted: false, productionAcceptance: false}));
-    })(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('notification fixture absolute deadline')), 150000); })]);
-  } finally {
-    clearTimeout(deadline);
-    try { await browser.close(); }
-    finally { const after = await hashes(); console.log(JSON.stringify({phase: 'source-after', hashes: after}));
-      assert.deepEqual(after, before, 'source bytes stayed frozen throughout fixture run'); }
-  }
+  try { return await runSuite(browser); }
+  finally { await browser.close(); }
 }
+module.exports = {runSuite};
 if (require.main === module) main().catch(error => { console.error(error.stack); process.exitCode = 1; });

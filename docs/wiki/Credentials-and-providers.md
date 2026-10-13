@@ -12,6 +12,8 @@ Provider options are capability-dependent. An unavailable destination or unsuppo
 
 ## GitHub: personal access token or GitHub App
 
+For a complete read-only example, follow [Create and install a GitHub App](https://github.com/AndrewMohawk/serverware/wiki/GitHub-App-setup), including provider-console settings, IDs, private-key storage and client verification.
+
 **Personal access token:** choose **GitHub → Personal access token**, name it and enter a token limited to the intended repository and Issues rights. Saving does not check its provider validity or renew it.
 
 **GitHub App:** first create/install the App in GitHub for the required repository. In Serverware choose **GitHub → GitHub App**, then supply:
@@ -28,6 +30,8 @@ Provider options are capability-dependent. An unavailable destination or unsuppo
 Then assign **Read issues and comments** or **Read and create issues/comments** to a client. A read-only App cannot grant writes. App IDs and installation IDs are not Serverware client IDs. Existing provider-side permissions do not override the narrower Serverware grant. [GitHub contract and key replacement](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-github-client-compatibility.md).
 
 ## Google: connect an account for Gmail reads
+
+The [Google/X OAuth setup guide](https://github.com/AndrewMohawk/serverware/wiki/OAuth-provider-setup#google-operator-application-setup) walks the operator through the provider console, callback registration, fixed scopes and activation before account consent.
 
 1. The proxy operator configures the Google OAuth application under **Proxy setup**; see [provider application setup](https://github.com/AndrewMohawk/serverware/wiki/Proxy-and-CA).
 2. In **Credentials → Add credential**, choose Google when available, label the account, and use **Continue to Google**.
@@ -52,6 +56,8 @@ A metadata grant does not permit installation, and installation does not permit 
 
 ## X: app-only lookup and account posting are different credentials
 
+For managed account posting, start with [X OAuth application and account setup](https://github.com/AndrewMohawk/serverware/wiki/OAuth-provider-setup#x-operator-application-setup).
+
 For **X · username lookup**, store the app-only bearer token—not a user OAuth token, API secret or full Authorization header. Assign one exact lowercase username, without `@`, URL or wildcard. This preset cannot post.
 
 Account-authorized text posting is a separate managed OAuth flow, offered only when the operator has configured X and the instance advertises the matching capability. Connect the account through that flow, then assign the text-posting permission explicitly. It is not enabled by importing an app-only bearer token. Where advertised, a daily posting-attempt limit is shared across clients using the verified X account; uncertain attempts still count. No media, replies or arbitrary X API access is implied. [Read preset](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-provider-presets.md), [account lifecycle](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-x-account-lifecycle.md), [shared quotas](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-x-posting-quotas.md).
@@ -61,6 +67,8 @@ Account-authorized text posting is a separate managed OAuth flow, offered only w
 Choose **Alchemy · chain status** and enter only the API/access key—not a URL, wallet key, Notify token or Authorization header. Assign the client one approved chain, Ethereum mainnet or Sepolia. The preset allows `eth_chainId` and `eth_blockNumber` with empty parameters; it does not sign/send transactions or grant general JSON-RPC access. Saving the key does not verify provider entitlement. [Alchemy contract](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-provider-presets.md#fixed-x-and-alchemy-contracts).
 
 ## Manual API key: Bearer or custom header
+
+Follow the [worked custom-API guide](https://github.com/AndrewMohawk/serverware/wiki/Custom-API-credentials) for a narrow GET permission, verified-TLS curl request, exact dummy replacement and audit check.
 
 Choose **Manual API key**, name the credential, and select how the provider expects it: a Bearer token or one custom header such as `X-API-Key`. Enter the provider secret without inventing an OAuth lifecycle. Later, a permission selects automatic insertion or exact public-dummy replacement, the approved origin, exact path and methods. This covers supported JSON APIs, not every authentication scheme, SDK or webhook. [Ordinary JSON contract](https://github.com/AndrewMohawk/serverware/blob/main/docs/ordinary-client-compatibility.md).
 

@@ -395,7 +395,7 @@ function createProxyView(workspace, applications) {
     }
     if (isNpmRule(rule)) {
       config.operation_bundle = rule.operation_bundle; config.packages = [...rule.packages];
-      config.client_recipe = {npm_version: '11.8.0', pacote_version: '21.0.4', node_version: '25.5.0',
+      config.client_recipe = {npm_version: operatorNpm.versions.npm, pacote_version: operatorNpm.versions.pacote, node_version: operatorNpm.nodeVersion,
         package: element('npm-client-package').value, sdk_auth_token: operatorNpm.token, strict_ssl: true,
         extra_ca_file: config.ca_file, fresh_cache_required: true, automatic_retries: 0, metadata_only: true};
       config.note += ' npm view/pacote.manifest metadata only; no install, publish, tarballs or npm audit. Use NODE_EXTRA_CA_CERTS before Node startup; retain default roots and TLS verification. The public npm dummy is not the provider token.';
@@ -411,7 +411,7 @@ function createProxyView(workspace, applications) {
       config.operation_bundle = rule.operation_bundle; config.package = rule.package; config.tag = rule.tag;
       config.publishing_window = rule.publishing_window === null ? null : {...rule.publishing_window};
       config.publishing_window_timezone = 'UTC'; config.read_metadata_included = true;
-      config.client_recipe = {npm_version: '11.8.0', node_version: '25.5.0', sdk_auth_token: operatorNpm.token,
+      config.client_recipe = {npm_version: operatorNpm.versions.npm, node_version: operatorNpm.nodeVersion, sdk_auth_token: operatorNpm.token,
         strict_ssl: true, extra_ca_file: config.ca_file, fresh_cache_required: true, automatic_retries: 0};
       config.note += ' Publishing changes the registry; this page has not run it. Metadata reads remain allowed outside publishing hours. No automatic retry after an uncertain publish. Keep TLS verification and Node default roots enabled.';
     }

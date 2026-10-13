@@ -20,6 +20,10 @@ Open **Notifications**. There are four independent slots:
 
 Each slot has its own enablement, filters, saved revision and delivery settings. Enabling Slack action alerts does not enable Slack audit delivery. An empty URL field means neither “delete” nor “replace”: use the explicit keep/replace/clear choice, and disable a slot before clearing its URL. Saving or refreshing settings sends no message.
 
+Choose at least one event before enabling a destination. An enabled slot with no selected events receives no subscribed activity, even if a synthetic test succeeds. The current UI makes this visible and blocks saving enabled-empty drafts; muted empty drafts can still be saved.
+
+Where offered, the audit-only preset buttons add proxy blocks/errors, credential/permission changes, or approval history to that slot's draft. They preserve existing selections, include only events advertised by the instance, and never enable, save or send automatically. Review the selected events and explicitly save. They do not change action-alert filters or make an unavailable approval source active.
+
 The first saved configuration starts from the current committed audit head; it does not replay the whole historical log. Later filter changes do not silently expand another slot's selection. [Notification contract](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-notifications.md#two-channels-four-independent-destinations).
 
 ## Test the saved destination

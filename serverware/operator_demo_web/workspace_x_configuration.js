@@ -1,5 +1,5 @@
 // First-save provider settings only. No account consent or provider request is
-// performed here; storage retains only the public operation UUID for recovery.
+// performed here; storage retains only an unresolved public operation UUID.
 const xConfigurationPath = '/api/operator-demo/oauth/x/configuration/v1';
 const xConfigurationKey = 'serverware.operator.x.configuration.operation.v1';
 const xConfigurationScopes = Object.freeze(['offline.access', 'tweet.read', 'tweet.write', 'users.read']);
@@ -83,6 +83,7 @@ function createXConfigurationView(workspace) {
     current() && discovery.review !== null && !operationId && !receipt && validInput();
   function render() {
     const saved = profile();
+    const displayedOperation = operationId || receipt?.operation_id || null;
     panel.hidden = available !== true && !operationId;
     element('x-configuration-settings').hidden = available !== true;
     element('x-configuration-review').hidden = available === false;
@@ -97,8 +98,8 @@ function createXConfigurationView(workspace) {
     element('x-configuration-scopes').textContent = discovery || saved ? xConfigurationScopes.join('\n') : 'Exact scopes are shown after review.';
     element('x-configuration-saved').hidden = !saved;
     element('x-configuration-saved-client').textContent = saved?.client_id || '';
-    element('x-configuration-operation').hidden = !operationId;
-    element('x-configuration-operation-reference').textContent = operationId || '';
+    element('x-configuration-operation').hidden = !displayedOperation;
+    element('x-configuration-operation-reference').textContent = displayedOperation || '';
     element('x-configuration-check').disabled = busy || storageBlocked || !operationId || workspace.writeInFlight();
     element('x-configuration-consent').textContent = saved ?
       (workspace.state.catalog?.capabilities?.x_oauth ?
@@ -154,6 +155,17 @@ function createXConfigurationView(workspace) {
     try { sessionStorage.setItem(xConfigurationKey, id); operationId = id; return true; }
     catch (_) { storageBlocked = true; return false; }
   }
+  function retire(id) {
+    try {
+      if (operationId !== id || sessionStorage.getItem(xConfigurationKey) !== id) throw new Error();
+      sessionStorage.removeItem(xConfigurationKey);
+      if (sessionStorage.getItem(xConfigurationKey) !== null) throw new Error();
+      operationId = null;
+    } catch (_) {
+      storageBlocked = true;
+      throw operatorError('The confirmed save reference could not be cleared safely. Keep its reference and inspect recovery before another change.');
+    }
+  }
   async function load() {
     discovery = null;
     const next = projectXConfiguration(await request(xConfigurationPath));
@@ -161,12 +173,19 @@ function createXConfigurationView(workspace) {
       !operatorExact(receipt.public_profile, next.configuration.public_profile) || receipt.committed_revision > next.revision ||
       receipt.committed_revision === next.revision && receipt.policy_hash !== next.policy_hash))
       throw operatorError('Saved X settings and the operation receipt disagree. Keep the reference and check again; do not save another application.');
-    if (!operationId && next.operation && retain(next.operation.operation_id)) receipt = next.operation;
+    // A historical committed receipt is read-only information, not a new
+    // unresolved save. Merely viewing settings must not create a reload hold.
+    if (!operationId) receipt = next.operation;
     // A discovery read may resolve only this exact retained operation, never a
     // different actor's setting or an unrelated/latest historical operation.
     if (operationId && next.operation?.operation_id === operationId) receipt = next.operation;
     discovery = next; available = true;
-    await workspace.refresh();
+    const refreshed = await workspace.refresh();
+    if (operationId && receipt) {
+      if (!refreshed || !current())
+        throw operatorError('Saved X settings could not be joined to current workspace state. Keep the reference and check again; no new save was sent.');
+      retire(operationId);
+    }
   }
   async function review() {
     if (busy || workspace.writeInFlight()) return;
@@ -203,8 +222,7 @@ function createXConfigurationView(workspace) {
     } catch (error) {
       discovery = null;
       if (error.xConfigurationRejectedInput) {
-        try { sessionStorage.removeItem(xConfigurationKey); operationId = null; }
-        catch (_) { storageBlocked = true; }
+        try { retire(operationId); } catch (_) { /* Preserve the storage hold. */ }
       } else if (operationId) workspace.requireReview('X application save could not be fully confirmed. Use Check result with its retained operation ID before allowing another change.');
       say(receipt ? 'A save receipt was returned, but current settings could not be rechecked. Use Check result; no new save was sent.' : operatorMessage(error));
       receipt = null;

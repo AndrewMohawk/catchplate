@@ -699,5 +699,134 @@ class RetainedDeploymentReviewTests(unittest.TestCase):
                 review.source_identity(source, manifest)
 
 
+class TraefikPeerReviewTests(unittest.TestCase):
+    """Synthetic Docker responses; never contact an engine or read live env."""
+
+    def setUp(self):
+        guard = ExitStack()
+        self.addCleanup(guard.close)
+        for name in ('subprocess.run', 'socket.socket', 'socket.create_connection', 'socket.getaddrinfo'):
+            guard.enter_context(patch(name, side_effect=AssertionError('peer test attempted external I/O')))
+        self.service_id, self.task_id, self.network_id = 's' * 25, 't' * 25, 'n' * 25
+        self.service = {'ID': self.service_id, 'Version': {'Index': 12},
+            'Spec': {'Name': 'traefik_traefik', 'TaskTemplate': {'Networks': [{'Target': self.network_id}]}}}
+        self.task = {'ID': self.task_id, 'ServiceID': self.service_id, 'DesiredState': 'running',
+            'Status': {'State': 'running', 'ContainerStatus': {'ContainerID': 'a' * 64}}}
+        self.container = {'Id': 'a' * 64, 'Config': {'Labels': {
+            'com.docker.swarm.service.id': self.service_id,
+            'com.docker.swarm.service.name': 'traefik_traefik', 'com.docker.swarm.task.id': self.task_id}},
+            'State': {'Running': True, 'Paused': False, 'Restarting': False, 'Dead': False,
+                'Pid': 10, 'StartedAt': 'synthetic-start'},
+            'NetworkSettings': {'Networks': {'traefik-v3-public': {
+                'NetworkID': self.network_id, 'IPAddress': '198.51.100.70', 'EndpointID': 'e' * 64}}}}
+        _, self.observed, _ = documents()
+        self.edge = self.observed['edge']
+        self.edge['Config']['Env'].append('TRAEFIK_IPV4=198.51.100.70')
+        self.edge['NetworkSettings']['Networks']['traefik-v3-public']['NetworkID'] = self.network_id
+        self.tasks = None
+        self.calls = []
+        guard.enter_context(patch.object(legacy, 'command', side_effect=self.command))
+        guard.enter_context(patch.object(legacy, 'command_json', side_effect=self.command_json))
+
+    def command(self, args, **_kwargs):
+        self.calls.append(args)
+        self.assertEqual(args, ['docker', 'service', 'ps', '--no-trunc', '--filter',
+            'desired-state=running', '--format', '{{.ID}}', self.service_id])
+        return (self.task_id + '\n').encode() if self.tasks is None else self.tasks
+
+    def command_json(self, args, **_kwargs):
+        self.calls.append(args)
+        choices = [(['docker', 'service', 'inspect', 'traefik_traefik'], self.service),
+            (['docker', 'inspect', '--type', 'task', self.task_id], self.task),
+            (['docker', 'inspect', '--type', 'container', 'a' * 64], self.container)]
+        for expected, value in choices:
+            if args == expected:
+                return [deepcopy(value)]
+        if args[:2] == ['docker', 'compose']:
+            self.assertEqual(_kwargs['environment']['TRAEFIK_IPV4'], '198.51.100.70')
+            return {'services': {}}
+        raise AssertionError('unexpected read-only command')
+
+    def run_review(self):
+        args = SimpleNamespace(source=Path(review.NEW_SOURCE), source_manifest=Path('/synthetic/manifest'),
+            provider_custody=review.PROVIDER_CUSTODY, phase='proposed')
+        with patch.object(review, 'source_identity'), \
+                patch.object(legacy, 'file_digest', side_effect=lambda path: review.PINS[path]), \
+                patch.object(legacy, 'discover', side_effect=lambda: deepcopy(self.observed)), \
+                patch.object(review, 'compare_model', return_value={'ok': True}):
+            return review.review(args)
+
+    def test_actual_task_address_is_required_without_mutating_configuration(self):
+        original = deepcopy(self.edge)
+        value = review.current_traefik_peer(self.edge)
+        self.assertEqual(value['ipv4'], '198.51.100.70')
+        self.assertEqual(value['containerId'], 'a' * 64)
+        self.assertEqual(value['taskId'], self.task_id)
+        self.assertEqual(self.edge, original)
+        self.assertEqual(len(self.calls), 4)
+
+    def test_zero_multiple_or_malformed_current_tasks_refuse(self):
+        for tasks in (b'', (self.task_id + '\n' + 'u' * 25 + '\n').encode(), b'--all\n'):
+            with self.subTest(tasks=tasks):
+                self.tasks = tasks
+                with self.assertRaises(legacy.Refused):
+                    review.current_traefik_peer(self.edge)
+
+    def test_wrong_service_task_container_or_running_identity_refuses(self):
+        cases = [(self.service['Spec'], 'Name', 'another_service'),
+            (self.task, 'ServiceID', 'x' * 25), (self.task, 'ID', 'u' * 25),
+            (self.task, 'DesiredState', 'shutdown'), (self.task['Status'], 'State', 'starting'),
+            (self.container, 'Id', 'b' * 64),
+            (self.container['Config']['Labels'], 'com.docker.swarm.task.id', 'u' * 25),
+            (self.container['Config']['Labels'], 'com.docker.swarm.service.id', 'x' * 25),
+            (self.container['Config']['Labels'], 'com.docker.swarm.service.name', 'another_service')]
+        cases += [(self.container['State'], key, value) for key, value in
+            [('Running', False), ('Paused', True), ('Restarting', True), ('Dead', True), ('Pid', 0)]]
+        for target, key, value in cases:
+            with self.subTest(field=key), patch.dict(target, {key: value}):
+                with self.assertRaises(legacy.Refused):
+                    review.current_traefik_peer(self.edge)
+
+    def test_stale_invalid_or_unshared_peer_refuses_without_broadening_allowlist(self):
+        network = self.container['NetworkSettings']['Networks']['traefik-v3-public']
+        for address in ('198.51.100.4', '0.0.0.0', '127.0.0.1', '224.0.0.1',
+                '169.254.1.1', '198.51.100.70/24', '198.051.100.70', '::1', None):
+            with self.subTest(address=address), patch.dict(network, IPAddress=address):
+                with self.assertRaises(legacy.Refused):
+                    review.current_traefik_peer(self.edge)
+        with patch.dict(network, NetworkID='x' * 25):
+            with self.assertRaises(legacy.Refused):
+                review.current_traefik_peer(self.edge)
+        with patch.dict(self.service['Spec']['TaskTemplate'], Networks=[]):
+            with self.assertRaises(legacy.Refused):
+                review.current_traefik_peer(self.edge)
+        self.assertIn('TRAEFIK_IPV4=198.51.100.70', self.edge['Config']['Env'])
+
+    def test_review_refuses_stale_saved_edge_peer_before_compose(self):
+        self.edge['Config']['Env'][-1] = 'TRAEFIK_IPV4=198.51.100.4'
+        with self.assertRaisesRegex(legacy.Refused, 'edge allowlist must match current Traefik task'):
+            self.run_review()
+        self.assertFalse(any(command[:2] == ['docker', 'compose'] for command in self.calls))
+
+    def test_review_checks_current_task_again_after_comparison(self):
+        self.assertTrue(self.run_review()['edgePeerFromCurrentInspection'])
+        self.assertEqual(self.calls.count(['docker', 'service', 'inspect', 'traefik_traefik']), 2)
+
+    def test_review_refuses_task_replacement_even_when_peer_address_is_reused(self):
+        original = self.command_json
+        service_reads = 0
+        def replaced(args, **kwargs):
+            nonlocal service_reads
+            if args == ['docker', 'service', 'inspect', 'traefik_traefik']:
+                service_reads += 1
+                if service_reads == 2:
+                    self.task_id = self.task['ID'] = 'u' * 25
+                    self.container['Config']['Labels']['com.docker.swarm.task.id'] = self.task_id
+            return original(args, **kwargs)
+        with patch.object(legacy, 'command_json', side_effect=replaced):
+            with self.assertRaisesRegex(legacy.Refused, 'stable current Traefik task and peer'):
+                self.run_review()
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

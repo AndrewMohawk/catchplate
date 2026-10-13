@@ -76,6 +76,8 @@ RETAINED_CANDIDATE = {
     "compiler_input_files": 499,
 }
 Refused, require = legacy.Refused, legacy.require
+TRAEFIK_SERVICE = "traefik_traefik"
+TRAEFIK_NETWORK = "traefik-v3-public"
 
 
 def error_receipt(_error):
@@ -341,6 +343,62 @@ def source_identity(source, source_manifest, *, transition_mode="migration"):
         "sourceCommit": selected["commit"], "sourceManifestSha256": selected["source_manifest_sha256"]}, "retained compiler input join")
 
 
+def current_traefik_peer(edge):
+    """Match the retained /32 to the actual single running Swarm task.
+
+    An edge's saved environment is configuration, not discovery: the task's
+    overlay address can change while that edge remains healthy. Refuse stale
+    values; do not rewrite the environment, use a VIP, or broaden the allowlist.
+    The returned public identity is sampled again after the model comparison.
+    """
+    values = legacy.command_json(["docker", "service", "inspect", TRAEFIK_SERVICE])
+    require(type(values) is list and len(values) == 1, "Traefik service selection")
+    service = values[0]
+    service_id = service["ID"]
+    require(type(service_id) is str and re.fullmatch(r"[a-z0-9]{25}", service_id)
+        and service["Spec"]["Name"] == TRAEFIK_SERVICE, "Traefik service identity")
+    task_ids = legacy.command(["docker", "service", "ps", "--no-trunc", "--filter",
+        "desired-state=running", "--format", "{{.ID}}", service_id]).decode("ascii").splitlines()
+    require(len(task_ids) == 1 and re.fullmatch(r"[a-z0-9]{25}", task_ids[0]), "single current Traefik task")
+    values = legacy.command_json(["docker", "inspect", "--type", "task", task_ids[0]])
+    require(type(values) is list and len(values) == 1, "Traefik task inspection")
+    task = values[0]
+    require(task["ID"] == task_ids[0] and task["ServiceID"] == service_id
+        and task["DesiredState"] == "running" and task["Status"]["State"] == "running",
+        "current running Traefik task")
+    container_id = task["Status"]["ContainerStatus"]["ContainerID"]
+    require(type(container_id) is str and re.fullmatch(r"[0-9a-f]{64}", container_id), "Traefik task container")
+    values = legacy.command_json(["docker", "inspect", "--type", "container", container_id])
+    require(type(values) is list and len(values) == 1, "Traefik container inspection")
+    container = values[0]
+    labels, state = container["Config"]["Labels"], container["State"]
+    require(container["Id"] == container_id and labels.get("com.docker.swarm.service.id") == service_id
+        and labels.get("com.docker.swarm.service.name") == TRAEFIK_SERVICE
+        and labels.get("com.docker.swarm.task.id") == task_ids[0]
+        and state["Running"] is True and state["Paused"] is False and state["Restarting"] is False
+        and state["Dead"] is False and type(state["Pid"]) is int and state["Pid"] > 0,
+        "running Traefik container identity")
+    network = container["NetworkSettings"]["Networks"][TRAEFIK_NETWORK]
+    edge_network = edge["NetworkSettings"]["Networks"][TRAEFIK_NETWORK]
+    network_id, peer = network["NetworkID"], network["IPAddress"]
+    require(type(network_id) is str and re.fullmatch(r"[a-z0-9]{25}", network_id)
+        and edge_network["NetworkID"] == network_id
+        and sum(row.get("Target") == network_id for row in service["Spec"]["TaskTemplate"]["Networks"]) == 1,
+        "shared current Traefik overlay")
+    try:
+        address = ipaddress.IPv4Address(peer)
+    except (ValueError, TypeError):
+        raise Refused("Traefik overlay IPv4") from None
+    require(type(peer) is str and str(address) == peer and not address.is_unspecified
+        and not address.is_multicast and not address.is_loopback and not address.is_link_local
+        and peer != edge_network["IPAddress"], "Traefik overlay IPv4")
+    require(legacy.envmap(edge["Config"].get("Env")).get("TRAEFIK_IPV4") == peer,
+        "edge allowlist must match current Traefik task")
+    return {"serviceId": service_id, "serviceVersion": service["Version"]["Index"],
+        "taskId": task_ids[0], "containerId": container_id, "network": network,
+        "pid": state["Pid"], "startedAt": state["StartedAt"], "ipv4": peer}
+
+
 def review(args):
     transition_mode = getattr(args, "transition_mode", "migration")
     selected = selection(transition_mode)
@@ -349,12 +407,8 @@ def review(args):
     fingerprints = {path: legacy.file_digest(path) for path in selected["layers"]}
     require(fingerprints == selected["pins"], "fixed Compose layers")
     observed = legacy.discover()
-    edge_env = legacy.envmap(observed["edge"]["Config"].get("Env"))
-    peer = edge_env.get("TRAEFIK_IPV4")
-    require(isinstance(peer, str) and str(ipaddress.IPv4Address(peer)) == peer
-        and not ipaddress.IPv4Address(peer).is_unspecified and not ipaddress.IPv4Address(peer).is_multicast,
-        "current edge peer selection")
-    environment = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "TRAEFIK_IPV4": peer,
+    traefik = current_traefik_peer(observed["edge"])
+    environment = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "TRAEFIK_IPV4": traefik["ipv4"],
         "OPERATOR_MANAGED_SOURCE": selected["source"], "OPERATOR_MANAGED_PROVIDER_CUSTODY_DIR": str(args.provider_custody),
         "OPERATOR_DEMO_NOTIFICATIONS_ENABLED": "1", "OPERATOR_DEMO_NOTIFICATIONS_CUSTODY_DIR": legacy.CUSTODY}
     command = ["docker", "compose", "-p", legacy.PROJECT, "--env-file", legacy.ENVFILE]
@@ -376,6 +430,7 @@ def review(args):
         require(all(old[key] == new[key] for key in ("Id", "Image", "Config", "HostConfig", "Mounts", "NetworkSettings"))
             and old["State"]["Pid"] == new["State"]["Pid"] and old["State"]["StartedAt"] == new["State"]["StartedAt"],
             "stable inspection identity")
+    require(current_traefik_peer(after["edge"]) == traefik, "stable current Traefik task and peer")
     require({path: legacy.file_digest(path) for path in selected["layers"]} == fingerprints, "stable Compose layers")
     source_identity(args.source, args.source_manifest, transition_mode=transition_mode)
     return {**result, "sourceFilesVerified": selected["source_files"], "compilerInputFilesMatched": selected["compiler_input_files"],

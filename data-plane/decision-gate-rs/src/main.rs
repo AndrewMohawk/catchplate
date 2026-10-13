@@ -63693,37 +63693,48 @@ mod tests {
     }
 
     #[test]
-    fn buffered_and_connect_forwarding_source_requires_one_prepared_upstream_before_authority() {
+    fn buffered_and_connect_forwarding_source_pins_conditional_preparation_and_dispatch() {
         let source = include_str!("main.rs");
         let entry = source
-            .split_once("fn forward_absolute_request_to<W: TerminalDeadlineWrite>(")
+            .split_once("fn forward_absolute_request_to_with_connect<W: TerminalDeadlineWrite>(")
             .expect("buffered production entry")
             .1
             .split_once("\nfn request_streaming_preflight(")
             .expect("buffered production entry terminator")
             .0;
-        let preparation = entry
-            .find("prepare_upstream_for_buffered_forward(")
-            .expect("buffered upstream preparation");
-        let local_none_denial = entry
-            .find("let Some(prepared_upstream) = prepared_upstream else")
-            .expect("missing preparation must be denied locally");
+        let capture = entry.find("let shadow_admission = state.policy_shadow.capture_for_gate(")
+            .expect("shadow admission precedes preparation");
         let observation_nonce = entry
             .find("reserve_response_observation_nonce(")
             .expect("response observation nonce authority");
+        let conditional = entry.find("let prepared_upstream = if shadow_admission.may_prepare_upstream()")
+            .expect("conditional preparation admission");
+        let preparation = entry.find("prepare_upstream_for_buffered_forward(")
+            .expect("buffered upstream preparation");
         let forwarding_core = entry
             .find("forward_absolute_request_inner_with_prepared_and_connect(")
             .expect("prepared buffered forwarding core");
-        assert!(preparation < local_none_denial);
-        assert!(local_none_denial < observation_nonce);
-        assert!(local_none_denial < forwarding_core);
+        // Observation-v1 nonce admission intentionally precedes preparation.
+        // None is not authorization: shadow/policy rejects it in the core, or
+        // observation-v2 takes its separate transaction instead of local send.
+        assert!(capture < observation_nonce && observation_nonce < conditional);
+        assert!(conditional < preparation && preparation < forwarding_core);
+        let preparation_branch = entry[conditional..]
+            .split_once("\n    let mut response_proof_authorization = None;").unwrap().0;
+        assert!(preparation_branch.contains("&& response_observation_v2_execution.is_none()"));
+        assert!(preparation_branch.contains("Ok(prepared) => prepared"));
+        assert!(preparation_branch.contains("Err(error) => {"));
+        assert!(preparation_branch.contains("audit_upstream_preparation_error("));
+        assert!(preparation_branch.contains("upstream_preparation_error_response(&error)"));
+        assert!(preparation_branch.contains("return false;"));
+        assert!(preparation_branch.ends_with("} else {\n        None\n    };"));
         assert_eq!(
             entry.matches("prepare_upstream_for_buffered_forward(").count(),
             1
         );
 
         let core = source
-            .split_once("fn forward_absolute_request_inner_with_prepared<'a>(")
+            .split_once("fn forward_absolute_request_inner_with_prepared_and_connect<'a>(")
             .expect("prepared buffered forwarding core")
             .1
             .split_once("\n#[cfg(test)]\nfn forward_absolute_request_inner<'a>(")
@@ -63735,15 +63746,38 @@ mod tests {
         let prepared_binding = core
             .find("validate_prepared_upstream_binding(")
             .expect("prepared upstream decision binding");
+        let non_v2 = core.find("if response_observation_v2.is_none() {").unwrap();
+        let prepared_check = core[non_v2..].split_once("\n    let route_streaming =").unwrap().0;
+        assert!(prepared_check.contains("let Some(prepared) = prepared_upstream.as_ref() else"));
+        assert_eq!(prepared_check.matches("\"upstream_transport_preparation_failed\"").count(), 2);
+        let v2 = core.find("if let Some(execution) = response_observation_v2 {").unwrap();
+        let normal_prepared = core.find("let Some(prepared_upstream) = prepared_upstream else").unwrap();
+        let v2_branch = &core[v2..normal_prepared];
+        assert!(v2_branch.contains("execute_response_observation_v2_transaction("));
+        assert!(v2_branch.ends_with("buffered!(response);\n    }\n    "));
+        let private_lease = core.find("let quota_lease = quota_preparation.prepare_release_if_admitted(").unwrap();
+        let injection = core.find("apply_bound_credential_injection_for_gate(").unwrap();
         let pinned_builder = core
             .find("take_builder(&prepared_upstream.client, method)")
             .expect("exact prepared client dispatch");
-        assert!(decision < prepared_binding);
-        assert!(prepared_binding < pinned_builder);
+        assert!(decision < non_v2 && non_v2 < prepared_binding);
+        assert!(prepared_binding < v2 && v2 < normal_prepared);
+        assert!(normal_prepared < private_lease && private_lease < injection && injection < pinned_builder);
         assert!(core.contains("prepared_upstream: Option<PreparedUpstream>"));
         assert!(!core.contains("prepare_upstream_for_forward("));
         assert!(!core.contains("prepare_upstream_for_buffered_forward("));
         assert!(!core.contains("prepare_upstream(state"));
+
+        let shadow_source = include_str!("policy_core.rs");
+        assert!(shadow_source.contains("pub(crate) fn may_prepare_upstream(&self) -> bool {\n        !self.custody_fail_closed\n    }"));
+        assert!(shadow_source.contains("pub(crate) fn must_fail_closed(&self) -> bool {\n        self.custody_fail_closed\n    }"));
+        let decision_core = source.split_once("fn decide_internal_with_mode_and_shadow_and_google<'a>(").unwrap().1
+            .split_once("\nfn http_response(").unwrap().0;
+        let shadow_refusal = decision_core.find("if shadow_admission.must_fail_closed() {").unwrap();
+        let transformation = decision_core.find("let mut req = req;").unwrap();
+        assert!(shadow_refusal < transformation);
+        assert!(decision_core[shadow_refusal..transformation].contains("return deny("));
+        assert!(decision_core[shadow_refusal..transformation].contains("\"policy_shadow_custody_unavailable\""));
 
         let connect = source
             .split_once("fn handle_connect_request(")
@@ -66818,7 +66852,10 @@ mod tests {
 
     #[test]
     fn every_forwarder_owns_the_typed_reservation_before_fallible_post_decision_work() {
-        let source = include_str!("main.rs");
+        // Inspect production only: negative predicates must not match their
+        // own source literals in this test module.
+        let source = include_str!("main.rs").split_once("\n#[cfg(test)]\nmod tests {")
+            .expect("production/test source boundary").0;
         for (name, next) in [
             (
                 "fn forward_absolute_request_inner_with_prepared<'a>(",
@@ -66859,7 +66896,11 @@ mod tests {
                 .find("record_shadow_dispatch_barrier(")
                 .unwrap_or_else(|| panic!("{name} lacks active dispatch-barrier evidence"));
             let dispatch = body
-                .find("send_upstream_request_with_current_lease_finalized(")
+                .find(if name == "fn forward_absolute_request_inner_with_prepared<'a>(" {
+                    "send_upstream_request_with_quota_owner("
+                } else {
+                    "send_upstream_request_with_current_lease_finalized("
+                })
                 .unwrap_or_else(|| panic!("{name} lacks finalized dispatch"));
             assert!(typed_guard < dispatch, "{name}");
             assert!(dispatch < finalization, "{name}");
@@ -66875,8 +66916,9 @@ mod tests {
         assert!(!source.contains("finalization.finalize_local_response("));
         let policy_core_source = include_str!("policy_core.rs");
         assert!(policy_core_source.contains(
-            "ActiveEffectRequirements::from_plan(active_plan)"
+            ".map(ActiveEffectRequirements::from_plan)"
         ));
+        assert!(policy_core_source.contains("decision.effect_requirements != ActiveEffectRequirements::from_plan(plan)"));
         assert!(policy_core_source.contains(
             "fn finalize_post_dispatch_state("
         ));
@@ -66905,14 +66947,22 @@ mod tests {
             "signed_identity: super::policy_shadow::ShadowGenerationIdentity"
         ));
         assert!(!generation_source.contains("generation_id: String"));
-        let finalized_send = source
+        let legacy_send = source
             .split_once(
                 "fn send_upstream_request_with_current_lease_and_timeout_validated_and_finalized",
             )
             .expect("finalized send helper")
             .1
+            .split_once("\nfn send_upstream_request_with_quota_owner<")
+            .expect("legacy finalized wrapper terminator")
+            .0;
+        assert!(legacy_send.contains("send_upstream_request_with_quota_owner(state, snapshot, binding, builder, maximum_timeout,\n        deadlines, require_response_proof, None, validate_request, observe_dispatch_barrier)"));
+        let finalized_send = source
+            .split_once("fn send_upstream_request_with_quota_owner<")
+            .expect("actual finalized send owner")
+            .1
             .split_once("\nfn earliest_credential_lease_expiry_epoch_ms")
-            .expect("finalized send helper terminator")
+            .expect("actual finalized send owner terminator")
             .0;
         let finalization = finalized_send
             .find("let shadow_dispatch_permit = observe_dispatch_barrier(&request)")
@@ -66920,11 +66970,19 @@ mod tests {
         let permit_check = finalized_send
             .find("permit.authorizes_credentialed_send(")
             .expect("exact final-request dispatch permit check");
+        let currentness = finalized_send.find("acquire_upstream_send_authority(state, snapshot, binding)")
+            .expect("ordinary current credential/snapshot owner");
+        let trust = finalized_send.find("if !policy_trust_is_fresh(state)")
+            .expect("current policy trust before dispatch");
+        let commitment = finalized_send.find("shadow_final_upstream_request_commitment(&request)")
+            .expect("actual built request commitment");
         let dispatch = finalized_send
             .find(".execute(request)")
             .expect("upstream dispatch");
-        assert!(finalization < dispatch);
-        assert!(permit_check < dispatch);
+        assert!(currentness < trust && trust < finalization);
+        assert!(finalization < commitment && commitment < permit_check && permit_check < dispatch);
+        assert!(dispatch < finalized_send.find("permit.commit_provider_send(effect_state, &effect_result_sha256)")
+            .expect("actual post-dispatch terminal accounting"));
         assert!(finalized_send.contains(
             ".map_err(UpstreamSendError::DispatchBarrier)?"
         ));
@@ -67000,17 +67058,32 @@ mod tests {
             "fn publication_for_admission("
         ));
         assert!(policy_core_source.contains(
-            "custody.reserve_spool_append(&context, &event)"
+            "custody.reserve_spool_append(&reserve_context, &event)"
         ));
+        let spool_reserve = policy_core_source.split_once("custody.reserve_spool_append(&reserve_context, &event)")
+            .expect("spool reservation call").1;
+        assert!(spool_reserve.find("finish_custody_call(custody.as_ref(), reserve_context)").unwrap()
+            < spool_reserve.find("reservation.matches_event(&event)").unwrap());
         assert!(policy_core_source.contains(
             "pub(crate) fn record_effect_dispatch_barrier("
         ));
         assert!(policy_core_source.contains(
             "struct ImmutableSpillReceiptRef"
         ));
-        assert!(policy_core_source.contains(
-            "const SHADOW_GLOBAL_RECEIPT_CACHE_BYTES: usize = 32 * 1024 * 1024"
-        ));
+        // This is a modeled reference/reconciliation reservation budget,
+        // explicitly not an allocator, heap or RSS bound.
+        let arena = include_str!("policy_custody/receipt_arena.rs");
+        assert!(arena.contains("const MODELED_RECEIPT_REFERENCE_BUDGET_BYTES: usize =\n    32 * 1024 * 1024;"));
+        assert!(arena.contains("if bytes == 0 || bytes > self.modeled_remaining_bytes()"));
+        assert!(policy_core_source.contains("PolicyCoreModeledReceiptArena::try_new(\n            SHADOW_MODELED_RECEIPT_REFERENCE_CAPACITY,"));
+        assert!(policy_core_source.contains("state.receipt_arena.reserve(\n            ModeledReservationKind::Reconciliation,\n            SHADOW_RECEIPT_TRANSIENT_RESERVATION_BYTES,"));
+        let record = policy_core_source.split_once("fn record_with_original(").unwrap().1
+            .split_once("\n    fn ").unwrap().0;
+        assert!(record.find(".reserve_reconciliation_capacity(Some(generation_id))").unwrap()
+            < record.find(".authorizes_event_payload(canonical_event_bytes.len())").unwrap());
+        let payload_budget = record.find(".authorizes_event_payload(canonical_event_bytes.len())").unwrap();
+        assert!(payload_budget < record.find("custody.append_terminal(&context, &request)").unwrap());
+        assert!(payload_budget < record.find("custody.reserve_spool_append(&reserve_context, &event)").unwrap());
         assert!(!policy_core_source.contains(
             "VecDeque<VerifiedShadowSpillReceipt>"
         ));
@@ -67048,13 +67121,19 @@ mod tests {
             .expect("terminal finalization terminator")
             .0;
         let terminal_append = terminal_source
-            .find(".ledger.record(")
+            .find("self.inner.ledger.record_with_original(")
             .expect("custody terminal append");
-        let terminal_flag = terminal_source[terminal_append..]
+        let matched_receipt = terminal_source.find("prepared_record.match_receipt(receipt)")
+            .expect("exact durable terminal receipt match");
+        let terminal_flag = terminal_source[matched_receipt..]
             .find(".finalization_consumed")
-            .map(|offset| terminal_append + offset)
+            .map(|offset| matched_receipt + offset)
             .expect("terminal completion flag");
-        assert!(terminal_append < terminal_flag);
+        let terminal_cas = terminal_source[terminal_flag..].find(".compare_exchange(").unwrap() + terminal_flag;
+        let terminal_publish = terminal_source.find("state.final_active = Some(matched_record.into_record())").unwrap();
+        assert!(terminal_append < matched_receipt && matched_receipt < terminal_flag);
+        assert!(terminal_flag < terminal_cas && terminal_cas < terminal_publish);
+        assert!(terminal_source[matched_receipt..terminal_flag].contains("self.inner.ledger.mark_hard_unready()"));
         assert!(!policy_core_source.contains("fn next_sequence("));
         assert!(!policy_core_source.contains("UnsignedShadowRecord"));
         assert!(!policy_core_source.contains("record_missing_generation"));
@@ -67105,13 +67184,24 @@ mod tests {
         assert!(shadow_source.contains(
             "trait ProductionPolicyShadowCustodyProcess"
         ));
-        assert!(shadow_source.contains(
-            "fn signer_backend_sha256(&self)"
-        ));
-        assert!(shadow_source.contains(
-            "fn persistence_backend_sha256(&self)"
-        ));
-        assert!(shadow_source.contains("provider_worker_terminated"));
+        let manifest = shadow_source.split_once("impl ProductionCustodyDispatchManifest {").unwrap().1
+            .split_once("pub(in crate::policy_shadow) enum ProductionCustodyDispatchRequest").unwrap().0;
+        let manifest_validation = manifest.split_once("    fn validate(").unwrap().1;
+        for backend in ["signer", "persistence", "retrieval"] {
+            let binding = format!("self.{backend}_backend_sha256\n                != configuration.{backend}_backend_sha256");
+            assert!(manifest_validation.contains(binding.as_str()));
+        }
+        assert!(manifest_validation.contains("self.recompute_sha256()? != self.manifest_sha256"));
+        assert!(shadow_source.contains("let manifest = process.dispatch_manifest()?;\n        manifest.validate(&configuration)?;"));
+        let worker_manifest = shadow_source.find("let worker_manifest = self.process.dispatch_manifest()?").unwrap();
+        let worker_validation = shadow_source[worker_manifest..].find("worker_manifest.validate(&worker_configuration)?").unwrap() + worker_manifest;
+        let worker_spawn = shadow_source[worker_validation..].find(".spawn(").unwrap() + worker_validation;
+        assert!(worker_manifest < worker_validation && worker_validation < worker_spawn);
+        let terminated = shadow_source.split_once("pub(crate) fn from_process_supervisor(").unwrap().1
+            .split_once("\n    fn validate_against(").unwrap().0;
+        assert!(terminated.contains("if worker_terminated_at_unix_nanos <= 0\n            || worker_terminated_at_boottime_nanos == 0\n            || !process_reaped\n            || !late_mutation_fence_closed"));
+        assert!(terminated.contains("return Err(ShadowError::CustodyUnavailable)"));
+        assert!(terminated.contains("process_reaped: VerifiedProcessReaped"));
         assert!(shadow_source.contains("late_mutation_fence_closed"));
         assert!(shadow_source.contains(
             "struct VerifiedActiveEffectPermit"
@@ -67255,9 +67345,15 @@ mod tests {
             .map(|offset| reserve + offset)
             .expect("reserve response validation");
         let secret = decision[validation..]
-            .find("ensure_scoped_credential_lease_bound(")
+            .find("ensure_scoped_credential_lease_on_deadline(")
             .map(|offset| validation + offset)
             .expect("post-reserve secret lease");
+        let secret_call = decision[secret..].split_once("\n                    )").unwrap().0;
+        assert!(secret_call.contains("credential_request_authority.as_ref()"));
+        assert!(secret_call.contains("credential_release_authorization.as_ref()"));
+        assert!(secret_call.contains("release_authorization.reservation.preparation.as_ref().map(|native| native.deadline)"));
+        let secret_effect = decision[validation..].find("match execute_shadow_credential_effect(").unwrap() + validation;
+        assert!(validation < secret_effect && secret_effect < secret);
         let output = decision[secret..]
             .find("*output = Some(release_authorization)")
             .map(|offset| secret + offset)

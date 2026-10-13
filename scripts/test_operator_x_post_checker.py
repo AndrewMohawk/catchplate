@@ -38,6 +38,7 @@ RULE = "33333333-3333-4333-8333-333333333333"
 CONSENT = "44444444-4444-4444-8444-444444444444"
 DISCONNECT = "55555555-5555-4555-8555-555555555555"
 SCOPE = ("operator." + APP, "operator." + RULE, "sha256:" + "a" * 64)
+BINARY = "sha256:" + "b" * 64
 ANCHOR = 2_000_000_000_000
 TEXT = "Serverware local check: caf\u00e9 & <verified>\n"
 BODIES = {
@@ -103,6 +104,32 @@ def commitments(row):
 def event(kind, value, index):
     return {"id": sha(str(index).encode()), "event_type": kind, "event": deepcopy(value),
         "event_hash": sha(("audit" + str(index)).encode())}
+
+
+def lease(generation=2):
+    # Independent literal app audit shape, not a generated/accepted real lease.
+    return {"outcome": "issued", "status_code": 200, "reason": None,
+        "recipient_key_id": "sha256:" + "c" * 64, "recipient_nonce_sha256": "sha256:" + "d" * 64,
+        "policy_hash": SCOPE[2], "data_plane_binary_digest": BINARY,
+        "purpose": "generationMetadata" if generation is None else "dispatchSecret",
+        "expected_credential_version": generation,
+        "expected_metadata_sha256": None if generation is None else sha(str(generation).encode()),
+        "release_attempt_id": None, "release_binding_digest": None, "release_kind": None,
+        "release_reservation_id": None, "release_request_digest": None, "release_operation_digest": None,
+        "release_quota_claim_count": 0, "principal_id": SCOPE[0], "route_id": SCOPE[1],
+        "credential_id": CREDENTIAL, "requested_max_ttl_seconds": 5,
+        "recipient_attestation_present": False, "credential_count": 1, "credential_ids": [CREDENTIAL],
+        "issued_at_epoch_ms": ANCHOR, "expires_at_epoch_ms": ANCHOR + 5000}
+
+
+def linked(events):
+    """Synthetic predecessor links test ordering only, not audit signatures."""
+    result = deepcopy(events)
+    previous = None
+    for row in result:
+        row["prev_event_hash"] = previous
+        previous = row["event_hash"]
+    return result
 
 
 def attempts(rows=None):
@@ -486,9 +513,97 @@ checker.main()
             with self.subTest(line=mutate.__code__.co_firstlineno), self.assertRaises(check.CheckFailure):
                 check.validate_success_result(value)
 
-    def test_negative_orchestration_denies_dispatch_secret_even_without_provider_arrival(self):
+    def test_existing_scope_renewal_requires_previously_observed_generation_two_anchor(self):
+        prior = [event(check.LEASE, lease(None), 70), event(check.LEASE, lease(1), 71),
+            event(check.LEASE, lease(), 72)]
+        original = deepcopy(prior)
+        anchor = check.existing_scope_lease_anchor(prior, SCOPE, CREDENTIAL, BINARY)
+        renewed = lease()
+        renewed.update(recipient_key_id="sha256:" + "e" * 64, recipient_nonce_sha256="sha256:" + "f" * 64,
+            issued_at_epoch_ms=ANCHOR + 4000, expires_at_epoch_ms=ANCHOR + 9000)
+        check.validate_negative_lease(renewed, anchor, SCOPE, CREDENTIAL, BINARY, disconnected=False)
+        check.validate_negative_lease(lease(None), anchor, SCOPE, CREDENTIAL, BINARY, disconnected=False)
+        self.assertEqual(prior, original)
+        for missing in ([], prior[:2]):
+            with self.assertRaises(check.CheckFailure):
+                check.existing_scope_lease_anchor(missing, SCOPE, CREDENTIAL, BINARY)
+        different = lease(); different["expected_metadata_sha256"] = "sha256:" + "f" * 64
+        with self.assertRaises(check.CheckFailure):
+            check.existing_scope_lease_anchor(prior + [event(check.LEASE, different, 73)], SCOPE, CREDENTIAL, BINARY)
+        for absent in (None, {}, {**anchor, "extra": None}):
+            with self.assertRaises(check.CheckFailure):
+                check.validate_negative_lease(renewed, absent, SCOPE, CREDENTIAL, BINARY, disconnected=False)
+
+    def test_renewal_rejects_scope_generation_binary_and_request_binding_changes(self):
+        anchor = check.existing_scope_lease_anchor([event(check.LEASE, lease(), 70)], SCOPE, CREDENTIAL, BINARY)
+        mutations = {"principal_id": "unassigned", "route_id": "other-route", "policy_hash": "sha256:" + "f" * 64,
+            "credential_id": APP, "credential_ids": [APP], "credential_count": True,
+            "expected_credential_version": 1, "expected_metadata_sha256": "sha256:" + "f" * 64,
+            "data_plane_binary_digest": "sha256:" + "f" * 64, "outcome": "rejected", "reason": "other",
+            "status_code": True, "purpose": [], "requested_max_ttl_seconds": 6,
+            "recipient_attestation_present": True, "release_quota_claim_count": 1,
+            "recipient_key_id": "unbound", "recipient_nonce_sha256": "unbound",
+            "issued_at_epoch_ms": True, "expires_at_epoch_ms": ANCHOR + 5001}
+        mutations.update({key: "unexpected-binding" for key in ("release_attempt_id", "release_binding_digest",
+            "release_kind", "release_reservation_id", "release_request_digest", "release_operation_digest")})
+        for key, replacement in mutations.items():
+            with self.subTest(field=key):
+                changed = lease(); changed[key] = replacement
+                with self.assertRaises(check.CheckFailure):
+                    check.validate_negative_lease(changed, anchor, SCOPE, CREDENTIAL, BINARY, disconnected=False)
+        for changed in (dict(lease(), extra=None), {k: v for k, v in lease().items() if k != "release_attempt_id"},
+                dict(lease(), expected_credential_version=True), dict(lease(), credential_count=2),
+                dict(lease(), expires_at_epoch_ms=ANCHOR)):
+            with self.assertRaises(check.CheckFailure):
+                check.validate_negative_lease(changed, anchor, SCOPE, CREDENTIAL, BINARY, disconnected=False)
+        for key, replacement in (("credential_ids", []), ("expected_credential_version", 2),
+                ("expected_metadata_sha256", "sha256:" + "f" * 64), ("requested_max_ttl_seconds", 4),
+                ("release_request_digest", "sha256:" + "f" * 64)):
+            changed = lease(None); changed[key] = replacement
+            with self.subTest(metadata=key), self.assertRaises(check.CheckFailure):
+                check.validate_negative_lease(changed, anchor, SCOPE, CREDENTIAL, BINARY, disconnected=False)
+        for value in (lease(), lease(None)):
+            with self.assertRaises(check.CheckFailure):
+                check.validate_negative_lease(value, anchor, SCOPE, CREDENTIAL, BINARY, disconnected=True)
+
+    def test_final_audit_requires_every_issued_lease_before_disconnect_fence_by_chain(self):
+        first = event(check.LEASE, lease(None), 70)
+        second = event(check.LEASE, lease(), 71)
+        fence = event(check.LIFECYCLE + "disconnect_fenced", {}, 72)
+        done = event(check.LIFECYCLE + "disconnected", {}, 73)
+        denied = event(check.CONNECT_DENIED, {}, 74)
+        valid = linked([first, second, fence, done, denied])
+        check.require_leases_before_disconnect(valid)
+        check.require_leases_before_disconnect(list(reversed(valid)))
+        check.require_leases_before_disconnect([valid[i] for i in (2, 4, 0, 3, 1)])
+        # The row can already be in a later negative window's baseline. Its
+        # durable predecessor relation, not its wall time/list position, wins.
+        for generation in (None, 2):
+            late = event(check.LEASE, lease(generation), 75)
+            for ordered in ([first, second, fence, late, done], [first, second, fence, done, late]):
+                changed = linked(ordered)
+                with self.assertRaisesRegex(check.CheckFailure, "not before the committed disconnect fence"):
+                    check.require_leases_before_disconnect(list(reversed(changed)))
+                instance = object.__new__(check.XPostCheck)
+                with self.assertRaisesRegex(check.CheckFailure, "not before the committed disconnect fence"):
+                    instance.validate_audit(changed, check.features.audit_cutoff(changed))
+        for case in ("missing", "unknown", "cycle", "collision", "extra_fence"):
+            changed = deepcopy(valid)
+            if case == "missing": changed[1].pop("prev_event_hash")
+            elif case == "unknown": changed[1]["prev_event_hash"] = "sha256:" + "f" * 64
+            elif case == "cycle": changed[1]["prev_event_hash"] = changed[2]["event_hash"]
+            elif case == "collision": changed[1]["event_hash"] = changed[0]["event_hash"]
+            else: changed.append(event(check.LIFECYCLE + "disconnect_fenced", {}, 76))
+            with self.subTest(case=case), self.assertRaises(check.CheckFailure):
+                check.require_leases_before_disconnect(changed)
+
+    def test_negative_orchestration_accepts_only_anchored_renewal_without_provider_arrival(self):
         # Explicit orchestration doubles: this does not prove a real refusal.
         instance = object.__new__(check.XPostCheck)
+        instance.scope = SCOPE; instance.credential_id = CREDENTIAL
+        instance.args = SimpleNamespace(expected_binary_sha256=BINARY)
+        prior = event(check.LEASE, lease(), 89)
+        instance.existing_scope_lease = check.existing_scope_lease_anchor([prior], SCOPE, CREDENTIAL, BINARY)
         instance.negative_controls = []
         instance.sdk = Mock()
         instance.observe = Mock(return_value=provider(disconnected=False))
@@ -496,9 +611,20 @@ checker.main()
         instance.settled_audit = Mock(side_effect=[[], [blocked]])
         instance.negative("node:wrong_app", {"id": APP}, "t" * 43, provider(disconnected=False))
         self.assertEqual(instance.negative_controls[0]["providerPostsAdded"], 0)
-        instance.settled_audit = Mock(side_effect=[[], [blocked,
-            event(check.LEASE, {"purpose": "dispatchSecret"}, 91)]])
-        with self.assertRaises(check.CheckFailure):
+        instance.settled_audit = Mock(side_effect=[[prior], [prior, blocked, event(check.LEASE, lease(), 91)]])
+        instance.negative("python:wrong_app", {"id": APP}, "t" * 43, provider(disconnected=False))
+        self.assertEqual(instance.negative_controls[-1]["auditIds"], [blocked["id"]])
+        self.assertEqual(instance.negative_controls[-1]["providerPostsAdded"], 0)
+        for extra in (event(check.LEASE, {"purpose": "dispatchSecret"}, 91),
+                event(check.LEASE, dict(lease(), principal_id="unassigned"), 91),
+                event(check.START, {}, 91), event(check.RELEASE, {}, 91), event(check.BLOCK, {}, 91),
+                event(check.CONNECT_DENIED, {"target": "api.x.com:443"}, 91)):
+            instance.settled_audit = Mock(side_effect=[[prior], [prior, blocked, extra]])
+            with self.assertRaises(check.CheckFailure):
+                instance.negative("node:wrong_app", {"id": APP}, "t" * 43, provider(disconnected=False))
+        changed = provider(disconnected=False); changed["counts"]["posts"] += 1
+        instance.observe = Mock(return_value=changed); instance.settled_audit = Mock(return_value=[prior])
+        with self.assertRaisesRegex(check.CheckFailure, "contacted provider"):
             instance.negative("node:wrong_app", {"id": APP}, "t" * 43, provider(disconnected=False))
 
     def test_fixed_process_argv_original_deadline_and_owned_cleanup_are_propagated(self):

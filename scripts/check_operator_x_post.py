@@ -57,6 +57,102 @@ AUDIT_EXACT = {START: 7, RELEASE: 6, BLOCK: 1, CONNECT: 10, CONNECT_DENIED: 6,
     "operator_catalog.application.created": 2, "operator_catalog.access_rule.x_post_created": 1,
     **{LIFECYCLE + suffix: 1 for suffix in ("configuration_saved", "consent_started", "exchange_claimed",
         "account_connected", "account_refreshed", "disconnect_fenced", "disconnected")}}
+LEASE_UNBOUND_FIELDS = frozenset(("release_attempt_id", "release_binding_digest", "release_kind",
+    "release_reservation_id", "release_request_digest", "release_operation_digest"))
+LEASE_FIELDS = LEASE_UNBOUND_FIELDS | {"outcome", "status_code", "reason", "recipient_key_id",
+    "recipient_nonce_sha256", "policy_hash", "data_plane_binary_digest", "purpose", "expected_credential_version",
+    "expected_metadata_sha256", "release_quota_claim_count", "principal_id", "route_id", "credential_id",
+    "requested_max_ttl_seconds", "recipient_attestation_present", "credential_count", "credential_ids",
+    "issued_at_epoch_ms", "expires_at_epoch_ms"}
+LEASE_STABLE_FIELDS = LEASE_FIELDS - {"recipient_key_id", "recipient_nonce_sha256",
+    "issued_at_epoch_ms", "expires_at_epoch_ms"}
+
+
+def validate_issued_lease(event, scope, credential_id, binary_digest):
+    """Shared exact ordinary lease audit shape; never infer its worker origin."""
+    require(type(event) is dict and set(event) == LEASE_FIELDS
+        and tuple(event[k] for k in ("principal_id", "route_id", "policy_hash")) == scope
+        and event["credential_id"] == credential_id and event["credential_ids"] == [credential_id]
+        and type(event["credential_count"]) is int and event["credential_count"] == 1
+        and event["outcome"] == "issued" and event["reason"] is None
+        and type(event["status_code"]) is int and event["status_code"] == 200
+        and event["data_plane_binary_digest"] == binary_digest
+        and type(event["purpose"]) is str and event["purpose"] in {"generationMetadata", "dispatchSecret"}
+        and type(event["requested_max_ttl_seconds"]) is int and event["requested_max_ttl_seconds"] == 5
+        and event["recipient_attestation_present"] is False
+        and type(event["release_quota_claim_count"]) is int and event["release_quota_claim_count"] == 0
+        and all(event[key] is None for key in LEASE_UNBOUND_FIELDS)
+        and all(type(event[key]) is str and SHA256.fullmatch(event[key])
+            for key in ("recipient_key_id", "recipient_nonce_sha256"))
+        and type(event["issued_at_epoch_ms"]) is int and event["issued_at_epoch_ms"] > 0
+        and type(event["expires_at_epoch_ms"]) is int
+        and 0 < event["expires_at_epoch_ms"] - event["issued_at_epoch_ms"] <= 5000,
+        "X real lease scope or structural binding differs")
+    generation = event["expected_credential_version"]
+    if event["purpose"] == "dispatchSecret":
+        require(type(generation) is int and generation in (1, 2)
+            and type(event["expected_metadata_sha256"]) is str and SHA256.fullmatch(event["expected_metadata_sha256"]),
+            "X encrypted dispatch generation differs")
+    else:
+        require(generation is None and event["expected_metadata_sha256"] is None,
+            "X generation metadata request differs")
+    return generation
+
+
+def existing_scope_lease_anchor(events, scope, credential_id, binary_digest):
+    """Pin a gen2 lease observed after real posts and BEFORE all denial controls."""
+    features.audit_cutoff(events)
+    candidates = []
+    for row in events:
+        if row.get("event_type") == LEASE:
+            value = row["event"]
+            if validate_issued_lease(value, scope, credential_id, binary_digest) == 2:
+                candidates.append(value)
+    require(candidates, "prior authorized X generation-two lease missing")
+    # Nonce/key and issue/expiry observations legitimately change per issuance.
+    # Every authority, generation, metadata and null request-binding field stays.
+    result = {key: candidates[0][key] for key in LEASE_STABLE_FIELDS}
+    require(all({key: value[key] for key in LEASE_STABLE_FIELDS} == result for value in candidates),
+        "prior authorized X lease anchors disagree")
+    return result
+
+
+def validate_negative_lease(event, anchor, scope, credential_id, binary_digest, *, disconnected):
+    require(disconnected is False, "X disconnected account received a lease")
+    generation = validate_issued_lease(event, scope, credential_id, binary_digest)
+    if generation is not None:
+        require(type(anchor) is dict and anchor.get("expected_credential_version") == 2
+            and set(anchor) == LEASE_STABLE_FIELDS
+            and all(event[key] == value for key, value in anchor.items()),
+            "X denial window lease does not match the prior authorized scope")
+
+
+def require_leases_before_disconnect(events):
+    """Use durable predecessor order, not audit list order or client windows.
+
+    The final real /api/audit/verify check must independently authenticate this
+    chain. A lease already present at a negative-window baseline is not exempt.
+    """
+    features.audit_cutoff(events)
+    by_hash = {row["event_hash"]: row for row in events}
+    require(len(by_hash) == len(events), "X durable audit hashes collide")
+    fences = [row for row in events if row["event_type"] == LIFECYCLE + "disconnect_fenced"]
+    require(len(fences) == 1, "X exact disconnect fence audit missing")
+    current = fences[0]
+    ancestors = set()
+    for _ in events:
+        require("prev_event_hash" in current, "X durable audit predecessor missing")
+        previous = current["prev_event_hash"]
+        if previous is None:
+            break
+        require(type(previous) is str and previous in by_hash and previous not in ancestors
+            and previous != fences[0]["event_hash"], "X durable audit ancestry differs")
+        ancestors.add(previous)
+        current = by_hash[previous]
+    else:
+        raise CheckFailure("X durable audit ancestry bound exceeded")
+    require(all(row["event_hash"] in ancestors for row in events if row["event_type"] == LEASE),
+        "X lease issuance is not before the committed disconnect fence")
 
 
 def encoded(value):
@@ -617,8 +713,10 @@ class XPostCheck(OperatorCatalogCheck):
             "X negative control tunnel boundary differs")
         require(all(row["event_type"] in {LEASE, CONNECT, CONNECT_DENIED} for row in rows),
             "X negative control produced unexpected audit")
-        require(not any(row["event_type"] == LEASE and row["event"].get("purpose") == "dispatchSecret"
-            for row in rows), "X denied SDK obtained a dispatch secret")
+        for row in rows:
+            if row["event_type"] == LEASE:
+                validate_negative_lease(row["event"], self.existing_scope_lease, self.scope, self.credential_id,
+                    self.args.expected_binary_sha256, disconnected=selected == "disconnected")
         self.negative_controls.append({"phase": phase, "providerPostsAdded": 0,
             "auditIds": [row["id"] for row in observed], "kind": expected})
 
@@ -665,6 +763,7 @@ class XPostCheck(OperatorCatalogCheck):
     def validate_audit(self, events, baseline):
         cutoff = features.audit_cutoff(events)
         require(all(cutoff.get(k) == value for k, value in baseline.items()), "X initial audit prefix changed")
+        require_leases_before_disconnect(events)
         rows = [row for row in events if row["id"] not in baseline]
         counts = Counter(row["event_type"] for row in rows)
         require(set(counts) <= set(AUDIT_EXACT) | {LEASE, LEASE_REJECT, RELOAD}
@@ -693,17 +792,12 @@ class XPostCheck(OperatorCatalogCheck):
                     "X persisted generation audit differs")
                 generation_rows[expected] = row["id"]
             elif kind == LEASE:
-                require(tuple(event.get(k) for k in ("principal_id", "route_id", "policy_hash")) == self.scope
-                    and event.get("credential_id") == self.credential_id and event.get("outcome") == "issued"
-                    and type(event.get("status_code")) is int and event["status_code"] == 200
-                    and event.get("data_plane_binary_digest") == self.args.expected_binary_sha256
-                    and event.get("purpose") in {"generationMetadata", "dispatchSecret"}, "X real lease scope differs")
-                generation = event.get("expected_credential_version")
-                if event["purpose"] == "dispatchSecret":
-                    require(type(generation) is int and generation in (1, 2), "X encrypted dispatch generation differs")
+                generation = validate_issued_lease(event, self.scope, self.credential_id, self.args.expected_binary_sha256)
+                if generation is not None:
                     dispatched.add(generation)
-                else:
-                    require(generation is None, "X generation metadata request differs")
+                    if generation == 2:
+                        validate_negative_lease(event, self.existing_scope_lease, self.scope, self.credential_id,
+                            self.args.expected_binary_sha256, disconnected=False)
             elif kind == LEASE_REJECT:
                 fixed = {"outcome": "rejected", "status_code": 409, "reason": "generationAdvancedBeforeEnvelope",
                     "purpose": "dispatchSecret", "expected_credential_version": 1,
@@ -789,6 +883,11 @@ class XPostCheck(OperatorCatalogCheck):
             "provider": "x", "credential_id": self.credential_id, "revision": refreshed["revision"]}
         self.sdk("node:reflected", app, token)
         provider = self.observe(7, refreshed=True, expired=True)
+        # Audit delivery being drained does not quiesce the independent OAuth
+        # renewal workers. Permit only compatible existing-scope lease evidence,
+        # not a claim that any particular audit row came from a background task.
+        self.existing_scope_lease = existing_scope_lease_anchor(self.settled_audit(), self.scope,
+            self.credential_id, self.args.expected_binary_sha256)
         for selected in NEGATIVES[:-1]:
             for client in profiles.CLIENTS:
                 self.negative(client + ":" + selected, *(apps[1] if selected == "wrong_app" else apps[0]), provider)

@@ -9,19 +9,23 @@ GitHub stores Wiki pages in a separate `serverware.wiki.git` repository. Its
 default branch supplies the live pages; the initial page must be created on
 GitHub before cloning. See [GitHub's publishing instructions](https://docs.github.com/en/communities/documenting-your-project-with-wikis/adding-or-editing-wiki-pages#adding-or-editing-wiki-pages-locally).
 
-## Recorded one-time initialization gate
+## Resolve the recorded publication blocker
 
 The [publication handoff](project-completion.md#current-checkpoint--october-13-access-continuation-and-operator-guide)
 records an enabled Wiki whose authenticated Git repository returned
-`Repository not found`. Its first Home page was still pending. This is the
-previously observed state, not a new remote check or a publication-success claim.
+`Repository not found`. The browser had no authenticated GitHub session, so
+missing initialization and an access problem were not distinguished. This is
+the previously observed state, not a new remote check or a publication-success
+claim.
 
-An authorized repository maintainer must open the Wiki in GitHub, choose
-**Create the first page**, keep the title **Home**, paste the reviewed contents
-of `docs/wiki/Home.md`, and save it. This is a one-time initialization action;
-do not repeat it if a Home page already exists. If Git access still fails after
-initialization, stop and investigate existing access rather than creating a new
-PAT, requesting a secret in chat, or expanding CI permissions.
+An authorized repository maintainer must open the Wiki while signed into
+GitHub. If it offers **Create the first page**, keep the title **Home**, paste
+the reviewed contents of `docs/wiki/Home.md`, and save it. This is a one-time
+initialization action; do not repeat it if a Home page already exists. If the
+Wiki already contains pages or Git access still fails after initialization,
+investigate existing access rather than creating a new PAT, requesting a
+secret in chat, or expanding CI permissions. Continue with publication only
+after the existing Wiki repository is accessible.
 
 ## Prepare an isolated publication checkout
 

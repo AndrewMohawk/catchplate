@@ -166,13 +166,26 @@ its result SHA-256 is
 The separate Rust batch at exact `aca8e74e` passed **30 freshly executed library
 tests, 170 binary tests and all 14 API checks**, with no test-result reuse.
 All 58 owned containers were removed and six maintenance locks released.
-Only test artifacts were built: no normal executable, native/provider admission
-or deployment follows. Durable evidence is
+That verification phase built test artifacts only; it establishes no
+native/provider admission or deployment. Durable evidence is
 `native-jit-submission-rust.skpaNdl9`; result SHA-256 is
 `96d8dea3a72065011d86c113a91e0ee434f952870e6162bc4aa02dddf7323601`,
 and its `phase-receipts.tar.gz` SHA-256 is
 `3ccacb0947a9adc6b3d11133ba044f14c9168ef8e63770c99c61f2f2bfc1537e`.
 The earlier failed Rust stages below remain historical evidence.
+
+A separate normal build at exact `aca8e74e` then passed in 239.302 seconds
+(`cargoFresh: false`), producing a 42,396,848-byte ELF with SHA-256
+`5d3803b24722b6e4f6683f824d50922360a4e5c381a3944fe710bf526cbe7867`.
+Independent audit joined all 526 compiler inputs to the selected source bytes
+and exact Git commit. The compiler container exited zero without OOM, was
+removed, and its scoped inventory was empty; the maintenance lock was released.
+The retained `normal-compiler-inputs.json` receipt has SHA-256
+`1f359a592ecc5be96e99effd34a9d05aa62c9bc5a4f1c98f29465eaca2bdcb3b`
+and `normal-cleanup-join.json` has SHA-256
+`5d661de26e79b8c38210c0e9be2d0a2668c78c6668925db14c67ec576f40fc8c`.
+The normal executable has not been run or deployed; the 30/170/14 checks used
+separate test artifacts.
 
 Separately, the [ordinary SQLite migration](operator-authority-contract-migration.md#verified-migration-controls)
 passed 12 synthetic tests with genuine old-source initialization, the actual

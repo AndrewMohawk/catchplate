@@ -23,10 +23,13 @@ compile the proxy or require a verification ceremony. Use the **Set up access**
 action to choose a credential, select a client and review its permission.
 Opening client setup does not execute a request or renew a token.
 
-The [operator wiki](https://github.com/AndrewMohawk/serverware/wiki) covers
+The guides prepared for the [GitHub Wiki](https://github.com/AndrewMohawk/serverware/wiki) cover
 first-time setup, provider credentials, client/SDK examples, permissions, proxy
 configuration, notifications and maintenance. Its [versioned source pages](docs/wiki/Home.md)
 are kept with the application so the guide can be reviewed alongside changes.
+Wiki publication is pending its initial Home page; the
+[publishing guide](docs/wiki-publishing.md) describes the one-time setup and
+subsequent reviewed updates to the separate Wiki repository.
 
 The canonical entrypoint serves this persistent instance directly. The old
 demo hostname is authenticated navigation compatibility, not another app.

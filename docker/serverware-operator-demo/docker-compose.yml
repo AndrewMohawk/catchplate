@@ -122,7 +122,6 @@ services:
         ipv4_address: 172.16.249.20
       outbound:
         ipv4_address: 172.16.249.34
-      traefik-v3-public: {}
     # Cached glibc 2.41 runtime can load the host-built glibc 2.39 executable.
     # The old pilot Rust runtime (glibc 2.36) cannot and is not used here.
     image: python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
@@ -203,14 +202,9 @@ services:
       start_period: 30s
 
     labels:
-      - traefik.enable=true
-      - traefik.docker.network=traefik-v3-public
-      - traefik.tcp.routers.serverware-operator-proxy.rule=HostSNI(`serverware-proxy.example.com`)
-      - traefik.tcp.routers.serverware-operator-proxy.entrypoints=websecure
-      - traefik.tcp.routers.serverware-operator-proxy.tls=true
-      - traefik.tcp.routers.serverware-operator-proxy.tls.options=mcp-http1@file
-      - traefik.tcp.routers.serverware-operator-proxy.service=serverware-operator-proxy
-      - traefik.tcp.services.serverware-operator-proxy.loadbalancer.server.port=9090
+      # The edge is the sole public console AND proxy ingress. Stopping it
+      # fences both paths while this internal gate is replaced or inspected.
+      - traefik.enable=false
       - com.centurylinklabs.watchtower.enable=false
 
   edge:
@@ -258,6 +252,12 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=traefik-v3-public
+      - traefik.tcp.routers.serverware-operator-proxy.rule=HostSNI(`serverware-proxy.example.com`)
+      - traefik.tcp.routers.serverware-operator-proxy.entrypoints=websecure
+      - traefik.tcp.routers.serverware-operator-proxy.tls=true
+      - traefik.tcp.routers.serverware-operator-proxy.tls.options=mcp-http1@file
+      - traefik.tcp.routers.serverware-operator-proxy.service=serverware-operator-proxy
+      - traefik.tcp.services.serverware-operator-proxy.loadbalancer.server.port=9090
       # Canonical UI and compatibility route use the existing authenticated edge.
       - traefik.http.routers.serverware-public.rule=Host(`serverware.example.com`)
       - traefik.http.routers.serverware-public.entrypoints=websecure

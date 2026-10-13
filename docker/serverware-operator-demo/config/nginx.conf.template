@@ -3,6 +3,28 @@ pid /tmp/nginx.pid;
 error_log /dev/null;
 events { worker_connections 128; }
 
+# Traefik keeps the existing outer TLS endpoint. This is an opaque TCP relay:
+# no HTTP parsing, admin-header injection, TLS termination or PROXY protocol.
+# Only the actual Traefik socket peer may reach the fixed internal gate.
+stream {
+    access_log off;
+    error_log /dev/null;
+    server {
+        listen 9090;
+        allow ${TRAEFIK_IPV4}/32;
+        deny all;
+        proxy_pass 172.16.249.20:9090;
+        proxy_connect_timeout 3s;
+        # Keep nginx's default idle ceiling; the gate enforces its own request
+        # budgets (120s body/write by default, configurable up to 600s).
+        proxy_timeout 10m;
+        proxy_half_close on;
+        proxy_next_upstream off;
+        proxy_protocol off;
+        proxy_ssl off;
+    }
+}
+
 http {
     access_log off;
     server_tokens off;

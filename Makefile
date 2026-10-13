@@ -11338,6 +11338,14 @@ verify-operator-gmail-sdk-choice:
 	node scripts/test_operator_example_links.cjs
 	node scripts/test_operator_examples_browser.cjs
 
+# Host-only Compose rendering and synthetic custody checks; no Docker daemon,
+# containers, real provider calls or deployment. Requires the Compose CLI.
+.PHONY: verify-operator-deployment-config
+verify-operator-deployment-config:
+	python3 -B scripts/test_operator_canonical_origin.py
+	python3 -B scripts/test_operator_proxy_ingress.py
+	python3 -B scripts/test_operator_managed_x_deployment.py
+
 verify-credential-ciphertext-codec:
 	$(TEST_PYTHON_RUN) -B scripts/test_credential_ciphertext_codec.py
 

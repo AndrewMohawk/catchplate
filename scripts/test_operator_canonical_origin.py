@@ -28,7 +28,10 @@ class CanonicalOriginTests(unittest.TestCase):
     def setUpClass(cls):
         stack = ROOT / 'docker/serverware-operator-demo'
         cls.nginx = (stack / 'config/nginx.conf.template').read_text()
-        cls.blocks = re.findall(r'(?ms)^    server \{\n.*?^    \}', cls.nginx)
+        # TCP ingress has its own stream/server block; these assertions cover
+        # only the existing console HTTP virtual hosts and their auth boundary.
+        http = cls.nginx.split('\nhttp {\n', 1)[1]
+        cls.blocks = re.findall(r'(?ms)^    server \{\n.*?^    \}', http)
         env = {k: v for k, v in os.environ.items() if k in {'PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR'}}
         env.update(GOMAXPROCS='2', DOCKER_HOST='unix:///serverware-canonical-test-no-daemon.sock',
             TRAEFIK_IPV4='127.0.0.1', OPERATOR_DEMO_UPSTREAMS='["https://demo-upstream:8443"]',

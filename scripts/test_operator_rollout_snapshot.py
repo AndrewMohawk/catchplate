@@ -588,5 +588,211 @@ class ManagedTransitionTests(unittest.TestCase):
             self.assertEqual(raised.exception.code, 2)
 
 
+class ManagedXTransitionTests(unittest.TestCase):
+    """Explicit first-X/retained-X copied-state profile, not startup proof."""
+
+    put = FileTests.put
+    public = ManagedTransitionTests.public
+
+    def setUp(self):
+        ManagedTransitionTests.setUp(self)
+        ManagedTransitionTests.publish(self)
+        self.x_custody = self.root / 'x-custody'
+        self.x_custody.mkdir(mode=0o700)
+        with sqlite3.connect(self.database) as connection:
+            connection.execute("ALTER TABLE audit_events ADD COLUMN event_type TEXT NOT NULL DEFAULT 'synthetic.retained'")
+            connection.execute("ALTER TABLE credentials ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
+
+    def receipt(self):
+        return observer.inventory(self.persistent, self.custody, managed_unconfigured=True,
+            provider_custody_root=self.provider, managed_x_unconfigured=True, x_custody_root=self.x_custody)
+
+    def x_public(self):
+        return {**self.public(), 'schema': 'serverware.operatorXGateConfiguration/v1'}
+
+    def publish_x(self, raw=None):
+        self.put(self.persistent / observer.GATE_X,
+            observer.canonical(self.x_public()).encode() if raw is None else raw)
+
+    def copies(self):
+        prior = ManagedTransitionTests.copies(self)
+        target = self.root / (str(self.serial) + '-x-custody')
+        shutil.copytree(self.x_custody, target)
+        return (*prior, target)
+
+    def compare(self, before, old_copies, *, phase='first'):
+        after, new_copies = self.receipt(), self.copies()
+        result = observer.compare(old_copies[0], new_copies[0], old_copies[1], new_copies[1], before, after,
+            managed_transition=phase, before_provider_custody=old_copies[2], after_provider_custody=new_copies[2],
+            managed_x_unconfigured=True, before_x_custody=old_copies[3], after_x_custody=new_copies[3])
+        self.assertEqual(self.receipt(), after)
+        return result
+
+    def test_first_x_adds_only_one_manifest_and_retained_restart_adds_nothing(self):
+        before, copies = self.receipt(), self.copies()
+        self.assertEqual(before['schema'], 'serverware.operatorRolloutInventory/v3')
+        self.assertEqual(observer.gate_members(before), observer.GATE_MEMBERS)
+        self.publish_x()
+        result = self.compare(before, copies)
+        self.assertEqual(result['schema'], 'serverware.operatorRolloutComparison/v3')
+        self.assertEqual(result['derived_gate_files_added'], [observer.GATE_X])
+        self.assertTrue(result['managed_x_unconfigured'] and result['x_custody_empty']
+            and result['x_custody_live_identity_preserved'])
+        self.assertEqual(result['managed_unconfigured']['x_public_sha256'],
+            observer.hashlib.sha256(observer.canonical(self.x_public()).encode()).hexdigest())
+        self.assertEqual(result['prior_audit_count'], result['current_audit_count'])
+        self.assertFalse(result['live_sqlite_opened'] or result['services_stopped_verified'])
+        self.assertEqual(result['notification_tables'], sorted(observer.NOTIFICATIONS))
+        retained = self.compare(self.receipt(), self.copies(), phase='retained')
+        self.assertEqual(retained['derived_gate_files_added'], [])
+        self.assertEqual(retained['managed_unconfigured'], result['managed_unconfigured'])
+        for left, right, phase in ((before, before, 'first'), (before, self.receipt(), 'retained'),
+                (self.receipt(), self.receipt(), 'first')):
+            with self.subTest(phase=phase), self.assertRaises(observer.SnapshotError):
+                observer.compare_files(left, right, identities=True, managed_transition=phase, managed_x_unconfigured=True)
+
+    def test_x_profile_is_explicit_and_does_not_widen_legacy_schema_or_gate_roster(self):
+        before = self.receipt()
+        filename = self.root / 'x-receipt.json'
+        self.put(filename, observer.canonical(before).encode())
+        self.assertEqual(observer.load_receipt(filename, managed_unconfigured=True, managed_x_unconfigured=True), before)
+        for options in ({}, {'managed_unconfigured': True}, {'managed_x_unconfigured': True}):
+            with self.subTest(options=options), self.assertRaises(observer.SnapshotError):
+                observer.load_receipt(filename, **options)
+        for options in ({'managed_x_unconfigured': True, 'x_custody_root': self.x_custody},
+                {'managed_unconfigured': True, 'provider_custody_root': self.provider, 'x_custody_root': self.x_custody},
+                {'managed_unconfigured': True, 'provider_custody_root': self.provider, 'managed_x_unconfigured': True}):
+            with self.subTest(options=list(options)), self.assertRaises(observer.SnapshotError):
+                observer.inventory(self.persistent, self.custody, **options)
+        legacy = observer.inventory(self.persistent, self.custody, managed_unconfigured=True, provider_custody_root=self.provider)
+        self.assertEqual(legacy['schema'], observer.MANAGED_SCHEMA)
+        self.assertNotIn('x_custody', legacy)
+        self.publish_x()
+        with self.assertRaises(observer.SnapshotError):
+            observer.inventory(self.persistent, self.custody, managed_unconfigured=True, provider_custody_root=self.provider)
+        with self.assertRaises(observer.SnapshotError):
+            observer.compare_files(before, self.receipt(), identities=True, managed_transition='first')
+
+    def test_x_manifest_matches_exact_sql_settings_not_caller_supplied_identity(self):
+        before, copies = self.receipt(), self.copies()
+        cases = []
+        for key, value in (('schema', 'serverware.operatorGoogleGateConfiguration/v1'), ('operation', {}),
+                ('profile_binding', {}), ('profile_binding_digest', 'sha256:' + '1' * 64),
+                ('effective_settings_digest', 'sha256:' + '2' * 64), ('extra', 'synthetic-forbidden')):
+            changed = self.x_public(); changed[key] = value
+            cases.append(observer.canonical(changed).encode())
+        changed = deepcopy(self.x_public())
+        changed['effective_settings']['allowed_upstreams'].append('https://api.x.com')
+        changed['effective_settings_digest'] = 'sha256:' + observer.digest(changed['effective_settings'])
+        valid = observer.canonical(self.x_public()).encode()
+        cases.extend((observer.canonical(changed).encode(), valid + b'\n', valid[:-1] + b',"operation":null}'))
+        for index, raw in enumerate(cases):
+            self.publish_x(raw)
+            with self.subTest(case=index), self.assertRaises(observer.SnapshotError) as raised:
+                self.compare(before, copies)
+            self.assertEqual(raised.exception.code, 'managed_x_public_not_authoritative')
+
+    def test_x_custody_is_empty_owned_disjoint_and_identity_pinned(self):
+        before, copies = self.receipt(), self.copies()
+        self.publish_x()
+        self.put(self.x_custody / 'provider-key.json', b'synthetic forbidden key')
+        with self.assertRaises(observer.SnapshotError): self.receipt()
+        (self.x_custody / 'provider-key.json').unlink()
+        self.x_custody.chmod(0o750)
+        with self.assertRaises(observer.SnapshotError): self.receipt()
+        self.x_custody.chmod(0o700)
+        for other in (self.persistent, self.persistent / 'app-data', self.custody, self.provider):
+            with self.subTest(overlap=other.name), self.assertRaises(observer.SnapshotError):
+                observer.inventory(self.persistent, self.custody, managed_unconfigured=True,
+                    provider_custody_root=self.provider, managed_x_unconfigured=True, x_custody_root=other)
+        original = observer.tree
+        for field in ('uid', 'gid'):
+            def changed_owner(root, **kwargs):
+                value = original(root, **kwargs)
+                if Path(root) == self.x_custody: value['.'][field] += 1
+                return value
+            with self.subTest(owner=field), patch.object(observer, 'tree', side_effect=changed_owner), \
+                    self.assertRaises(observer.SnapshotError): self.receipt()
+        google = original(self.provider)['.']
+        def alias(root, **kwargs):
+            value = original(root, **kwargs)
+            if Path(root) == self.x_custody:
+                value['.'].update(dev=google['dev'], ino=google['ino'])
+            return value
+        with patch.object(observer, 'tree', side_effect=alias), self.assertRaises(observer.SnapshotError): self.receipt()
+        after = self.receipt()
+        for namespace in ('custody', 'provider_custody', 'x_custody'):
+            changed = deepcopy(after); changed[namespace]['.']['ino'] += 1
+            with self.subTest(namespace=namespace), self.assertRaises(observer.SnapshotError):
+                observer.compare_files(before, changed, identities=True, managed_transition='first', managed_x_unconfigured=True)
+
+    def test_x_history_objects_audit_and_reserved_markers_are_not_first_configuration(self):
+        self.publish_x()
+        def check(connection):
+            return observer.managed_database_identity(connection, self.receipt(), managed_x_unconfigured=True)
+        with sqlite3.connect(self.database) as connection:
+            for name in ('operator_x_configuration', 'operator_x_provider_custody', 'operator_x_account_intents',
+                    'operator_x_account_work', 'operator_x_account_captures', 'OPERATOR_X_CONFIGURATION_shadow'):
+                connection.execute('CREATE TABLE ' + name + '(id TEXT)')
+                with self.subTest(table=name), self.assertRaises(observer.SnapshotError): check(connection)
+                connection.execute('DROP TABLE ' + name)
+            for identifier, kind in (('extra', 'operator_catalog.x_oauth.configuration_saved'),
+                    ('extra', 'operator_catalog.x_oauth.consent_started'), ('operator-x-configuration:orphan', 'other')):
+                connection.execute('INSERT INTO audit_events(id,event_type) VALUES(?,?)', (identifier, kind))
+                with self.subTest(audit=kind), self.assertRaises(observer.SnapshotError): check(connection)
+                connection.execute('DELETE FROM audit_events WHERE id=?', (identifier,))
+            for table, column, original in (('credentials', 'metadata', '{}'),
+                    ('operator_catalog_credentials', 'data_json', '{"auth_type":"bearer"}')):
+                for value in ({'auth_type': 'x_oauth'}, {'connection_type': 'x_user_oauth_v1'}, {'operator_x_account': None}):
+                    connection.execute('UPDATE ' + table + ' SET ' + column + '=?', (json.dumps(value),))
+                    with self.subTest(table=table, marker=list(value)), self.assertRaises(observer.SnapshotError): check(connection)
+                connection.execute('UPDATE ' + table + ' SET ' + column + '=?', (original,))
+            # Static X bearer credentials are not managed-X account history.
+            connection.execute('UPDATE credentials SET metadata=?', ('{"provider_id":"x","connection_type":"x_api_token_v1"}',))
+            self.assertIn('x_public_sha256', check(connection))
+
+    def test_x_profile_retains_exact_existing_files_rows_and_closed_gate_objects(self):
+        before, copies = self.receipt(), self.copies()
+        self.publish_x(); after = self.receipt()
+        for name in observer.GATE_MEMBERS:
+            changed = deepcopy(after); changed['persistent'][name]['ino'] += 1
+            with self.subTest(retained=name), self.assertRaises(observer.SnapshotError):
+                observer.compare_files(before, changed, identities=True, managed_transition='first', managed_x_unconfigured=True)
+        for field in ('mode', 'uid', 'gid'):
+            changed = deepcopy(after); changed['persistent'][observer.GATE_X][field] += 1
+            with self.subTest(x_field=field), self.assertRaises(observer.SnapshotError):
+                observer.managed_gate_inventory(changed, managed_x_unconfigured=True)
+        for name in (observer.GATE_X, observer.GATE_GOOGLE, observer.GATE_ROOT):
+            changed = deepcopy(after); changed['persistent'].pop(name)
+            if name == observer.GATE_X:
+                with self.assertRaises(observer.SnapshotError):
+                    observer.compare_files(before, changed, identities=True, managed_transition='first', managed_x_unconfigured=True)
+            else:
+                with self.assertRaises(observer.SnapshotError):
+                    observer.managed_gate_inventory(changed, managed_x_unconfigured=True)
+        extra = self.persistent / 'app-data/extra-private'; self.put(extra, b'forbidden')
+        with self.assertRaises(observer.SnapshotError): self.compare(before, copies)
+        extra.unlink()
+        with sqlite3.connect(self.database) as connection:
+            connection.execute("UPDATE proxy_token_verifiers SET expires_at=123456790")
+        with self.assertRaises(observer.SnapshotError) as raised: self.compare(before, copies)
+        self.assertEqual((raised.exception.code, raised.exception.table), ('authority_table_changed', 'proxy_token_verifiers'))
+
+    def test_x_cli_requires_explicit_base_profile_and_never_opens_inventory_sqlite(self):
+        argv = ['operator_rollout_snapshot.py', 'inventory', '--managed-unconfigured', '--managed-x-unconfigured',
+            '--persistent-root', str(self.persistent), '--custody-root', str(self.custody),
+            '--provider-custody-root', str(self.provider), '--x-custody-root', str(self.x_custody),
+            '--private-copies-acknowledged']
+        expected = self.receipt(); output = io.StringIO()
+        with patch.object(observer.sys, 'argv', argv), patch.object(observer.signal, 'alarm'), \
+                patch.object(observer.os, 'umask'), redirect_stdout(output), \
+                patch.object(observer.sqlite3, 'connect', side_effect=AssertionError('inventory opened SQLite')):
+            observer.main()
+        self.assertEqual(json.loads(output.getvalue()), expected)
+        with patch.object(observer.sys, 'argv', [part for part in argv if part != '--managed-unconfigured']), \
+                patch.object(observer.signal, 'alarm'), patch.object(observer.os, 'umask'), \
+                self.assertRaises(observer.SnapshotError): observer.main()
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -35,6 +35,7 @@ from scripts.check_operator_demo import AUTHORITY, CheckFailure, SHA256, require
 from scripts.check_operator_live_smoke import response_evidence
 from scripts.check_operator_ordinary_client import OrdinaryClientCheck, START, RELEASE, BLOCK, CONNECT, LEASE, RELOAD
 from scripts.run_ordinary_regression import child_exit_status, stop_group
+from scripts.run_operator_x_examples_fixture import failure_site
 
 SCHEMA = "serverware.privateGuidedCheck/v1"
 CONNECT_DENIED = "data_plane.connect.denied"
@@ -48,6 +49,12 @@ def sha(value):
 
 def emit(value):
     print(json.dumps(value, separators=(",", ":"), allow_nan=False), flush=True)
+
+
+def failure_result(error, stage):
+    return {"schema": SCHEMA, "ok": False, "error": "guided_check_failed", "stage": stage,
+        "exceptionType": type(error).__name__,
+        "failureSite": failure_site(error, Path(__file__).resolve().parents[1])}
 
 
 def read_frame(fd, selector, buffer, deadline):
@@ -162,6 +169,18 @@ def audit_pairs(rows, scope, credential, observation):
                 and validation.get("body_bytes_preserved") is True, "guided audit terminal differs")
     require(len(pairs) <= 1, "guided extra provider attempt refused")
     return {key: value for key, value in pairs.items() if set(value) == {START, RELEASE}}
+
+
+def validate_reload(event, initial_policy, granted_hash, revoked_hash):
+    # The real empty policy retains operator.empty, so both publications have
+    # one route. Authority identity, not route count, selects the transition.
+    expected = {granted_hash: (initial_policy["policy_hash"], initial_policy["sequence"] + 1),
+                revoked_hash: (granted_hash, initial_policy["sequence"] + 2)}
+    actual = expected.get(event.get("policy_hash"))
+    require(actual is not None and type(event.get("routes")) is int and event["routes"] == 1
+        and event.get("previous_policy_hash") == actual[0]
+        and type(event.get("policy_sequence")) is int and event["policy_sequence"] == actual[1],
+        "guided policy reload identity differs")
 
 
 class GuidedCheck(OperatorCatalogCheck):
@@ -335,14 +354,7 @@ class GuidedCheck(OperatorCatalogCheck):
                     and event.get("outcome") == ("established" if kind == CONNECT else "denied"),
                     "guided CONNECT audit differs")
             elif kind == RELOAD:
-                expected_policy = self.scope[2] if event.get("routes") == 1 else self.policy_hash
-                require(type(event.get("routes")) is int and event["routes"] in {0, 1}
-                    and event.get("policy_hash") == expected_policy
-                    and event.get("previous_policy_hash") == (self.initial["policy"]["policy_hash"]
-                        if event["routes"] == 1 else self.scope[2])
-                    and type(event.get("policy_sequence")) is int
-                    and event["policy_sequence"] == self.initial["policy"]["sequence"] + (1 if event["routes"] else 2),
-                    "guided policy reload identity differs")
+                validate_reload(event, self.initial["policy"], self.scope[2], self.policy_hash)
         require(leases["dispatchSecret"] >= 1 and sum(leases.values()) <= 32, "guided lease bounds differ")
         chain = self.control_json("/api/audit/verify?limit=1000", authenticated=True)
         require(chain.get("ok") is True and chain.get("complete") is True and chain.get("backend") == "sqlite",
@@ -411,7 +423,8 @@ class GuidedCheck(OperatorCatalogCheck):
     def run(self):
         self.health()
         self.admin_token = token_file(self.args.admin_token_file)
-        self.profile()
+        # The real separate-resource catalog deliberately refuses legacy status.
+        # catalog() independently validates the ordinary profile and destinations.
         self.initial = self.catalog()
         require(self.initial["revision"] == 1 and all(not self.initial[key] for key in wire.COLLECTIONS)
             and self.initial["proxy_url"] == wire.PROXY and self.count() == 0, "guided fixture is not fresh")
@@ -541,8 +554,7 @@ def main():
         check = GuidedCheck(args)
         result = check.run()
     except Exception as error:
-        result = {"schema": SCHEMA, "ok": False, "error": "guided_check_failed",
-            "stage": check.phase if check is not None else "preflight", "exceptionType": type(error).__name__}
+        result = failure_result(error, check.phase if check is not None else "preflight")
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
     emit({"kind": "result", "result": result})

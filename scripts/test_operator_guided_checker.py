@@ -7,7 +7,9 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from scripts import check_operator_guided as checker
 from scripts import operator_guided_browser as wire
@@ -108,6 +110,69 @@ class GuidedProtocolTests(unittest.TestCase):
             "response_fields": [], "request_body_mode": "preserve_json_v1", "response_mode": "unfiltered_json_or_empty_v2",
             "credential_input": "replace_exact", "placeholder": "Bearer SERVERWARE_DUMMY",
             "query_keys": ["expectedAuthorizationSha256"], "allowed_headers": ["accept", "user-agent"]})
+
+    def test_ready_preflight_uses_actual_catalog_validation_not_retired_status(self):
+        catalog = {**deepcopy(INITIAL), "schema": "serverware.operatorCatalog/v1",
+            "mode": "operator-development", "productionReady": False, "hardwareVerified": False,
+            "allowed_upstreams": ["https://demo-upstream:8443"], "proxy_url": wire.PROXY,
+            **{key: [] for key in wire.COLLECTIONS}}
+        class ReadyReached(Exception):
+            pass
+        def exercise(value):
+            check = object.__new__(checker.GuidedCheck)
+            check.args = SimpleNamespace(admin_token_file=Path("/unused-synthetic-token"))
+            check.protocol = self.protocol()
+            calls = []
+            check.health = lambda: calls.append("health")
+            def control(path, **kwargs):
+                self.assertEqual((path, kwargs), (wire.CATALOG, {"authenticated": True}))
+                calls.append("catalog")
+                return value
+            check.control_json = control  # Actual inherited catalog validator runs.
+            check.profile = lambda: self.fail("retired status endpoint must not be called")
+            check.count = lambda: 0
+            check.wait_catalog_loaded = lambda label: calls.append(label)
+            check.settled = lambda: []
+            def ready(frame):
+                self.assertEqual(frame, check.protocol.ready(value))
+                raise ReadyReached()
+            with patch.object(checker, "token_file", return_value=TOKEN), patch.object(checker, "emit", side_effect=ready):
+                check.run()
+            return calls
+        with self.assertRaises(ReadyReached):
+            exercise(catalog)
+        for key, value in (("schema", "serverware.operatorDemo/v1"), ("mode", "native"),
+                           ("productionReady", True), ("hardwareVerified", True),
+                           ("allowed_upstreams", ["https://outside.example.com"])):
+            with self.subTest(key=key), self.assertRaises(CheckFailure):
+                exercise({**catalog, key: value})
+
+    def test_reload_joins_exact_hash_chain_and_sequence_with_empty_sentinel(self):
+        create = {"routes": 1, "policy_hash": DIGESTS[2], "previous_policy_hash": DIGESTS[1], "policy_sequence": 2}
+        revoke = {"routes": 1, "policy_hash": DIGESTS[3], "previous_policy_hash": DIGESTS[2], "policy_sequence": 3}
+        for event in (create, revoke):
+            checker.validate_reload(event, INITIAL["policy"], DIGESTS[2], DIGESTS[3])
+            for key, value in (("routes", 0), ("routes", 2), ("routes", True),
+                               ("policy_hash", DIGESTS[4]), ("previous_policy_hash", DIGESTS[4]),
+                               ("policy_sequence", 4), ("policy_sequence", True)):
+                with self.subTest(event=event["policy_hash"], key=key, value=value), self.assertRaises(CheckFailure):
+                    checker.validate_reload({**event, key: value}, INITIAL["policy"], DIGESTS[2], DIGESTS[3])
+        for changed in ({**create, "policy_sequence": 3}, {**revoke, "policy_sequence": 2},
+                        {**revoke, "previous_policy_hash": DIGESTS[1]}):
+            with self.assertRaises(CheckFailure):
+                checker.validate_reload(changed, INITIAL["policy"], DIGESTS[2], DIGESTS[3])
+
+    def test_failure_receipt_retains_only_source_location_not_message_or_locals(self):
+        canary = "private-message-and-local-canary"
+        try:
+            exec(compile("raise RuntimeError(secret)", checker.__file__, "exec"), {"secret": canary})
+        except RuntimeError as error:
+            value = checker.failure_result(error, "preflight")
+        self.assertEqual(value, {"schema": checker.SCHEMA, "ok": False, "error": "guided_check_failed",
+            "stage": "preflight", "exceptionType": "RuntimeError",
+            "failureSite": {"module": "scripts.check_operator_guided", "line": 1}})
+        self.assertNotIn(canary.encode(), wire.encoded(value))
+        self.assertIsNone(checker.failure_result(ValueError(canary), "preflight")["failureSite"])
 
     def test_post_consumed_before_transport_cannot_be_replayed_after_lost_reply(self):
         protocol = self.protocol()

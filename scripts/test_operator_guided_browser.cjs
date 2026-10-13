@@ -2,10 +2,12 @@
 // Inert protocol/secret-handling tests only. Importing the real driver launches
 // no browser, Docker process, socket, DNS, provider, or application request.
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const {Readable} = require('node:stream');
 const groups = [];
 const test = (name, run) => groups.push({name, run});
-const {readyFrame, requestFrame, responseFrame, continueFrame, failureReceipt, downloadedBytes, validateChecker} =
+const {readyFrame, requestFrame, responseFrame, continueFrame, checkerFailureFrame, stderrCollector,
+  failureReceipt, downloadedBytes, validateChecker} =
   require('./check_operator_guided_browser.cjs');
 const origin = 'https://serverware-guided.example.com', prefix = '/api/operator-demo';
 const digest = 'sha256:' + 'a'.repeat(64), runId = 'operator-check-' + 'b'.repeat(32);
@@ -114,6 +116,39 @@ test('closed failure receipt never retains source errors or secret-bearing arbit
   const value = failureReceipt('private-canary', {postCount: 2, getCount: 'private-canary', pageErrors: 0,
     consoleErrors: 0, refusedRequests: 0, downloadCount: 1, error: 'private-canary'});
   assert.equal(value.stage, 'inputs'); assert.equal(value.getCount, null); assert(!JSON.stringify(value).includes('private-canary'));
+  // A terminal failure before ready has no request ID or pending checkpoint.
+  const frame = {kind: 'result', result: {schema: 'serverware.privateGuidedCheck/v1', ok: false,
+    error: 'guided_check_failed', stage: 'preflight', exceptionType: 'CheckFailure', failureSite: null}};
+  assert.deepEqual(checkerFailureFrame(frame), {stage: 'preflight', exceptionType: 'CheckFailure', failureSite: null});
+  const located = clone(frame); located.result.failureSite = {module: 'scripts.check_operator_guided', line: 200};
+  assert.deepEqual(checkerFailureFrame(located).failureSite, located.result.failureSite);
+  for (const change of [v => v.kind = 'ready', v => v.id = 1, v => v.result.ok = true,
+    v => v.result.schema += '-other', v => v.result.error = 'private-canary',
+    v => v.result.stage = 'private-canary', v => v.result.exceptionType = 'private-canary',
+    v => v.result.message = 'private-canary', v => v.result.sourceLocation = 'private-canary',
+    v => delete v.result.failureSite, v => v.result.failureSite = {module: 'scripts.private_canary', line: 1},
+    v => v.result.failureSite = {module: '/app/scripts/check_operator_guided.py', line: 1},
+    v => v.result.failureSite = {module: 'scripts.check_operator_guided', line: true},
+    v => v.result.failureSite = {module: 'scripts.check_operator_guided', line: 100001},
+    v => v.result.failureSite = {module: 'scripts.check_operator_guided', line: 1, message: 'private-canary'}]) {
+    const changed = clone(frame); change(changed); assert.throws(() => checkerFailureFrame(changed));
+  }
+  const stderr = stderrCollector(), secret = Buffer.from('private-canary');
+  assert(stderr.append(secret));
+  const before = stderr.snapshot();
+  assert.deepEqual(before, {capturedBytes: secret.length,
+    sha256: 'sha256:' + crypto.createHash('sha256').update(secret).digest('hex'), truncated: false});
+  assert(stderr.append(Buffer.alloc(65536 - secret.length, 42))); assert(!stderr.append(Buffer.from('not-retained')));
+  const full = stderr.snapshot();
+  assert.deepEqual(full, {capturedBytes: 65536, sha256: 'sha256:' + crypto.createHash('sha256')
+    .update(secret).update(Buffer.alloc(65536 - secret.length, 42)).digest('hex'), truncated: true});
+  const receipt = failureReceipt('ready', {}, checkerFailureFrame(frame), full);
+  assert.deepEqual(receipt.checkerFailure, {stage: 'preflight', exceptionType: 'CheckFailure', failureSite: null});
+  assert.deepEqual(receipt.checkerStderr, full); assert(!JSON.stringify(receipt).includes('private-canary'));
+  assert.throws(() => stderr.append('private-canary'));
+  assert.equal(failureReceipt('ready', {}, {...receipt.checkerFailure, extra: 'private-canary'}, full).checkerFailure, null);
+  for (const changed of [{...full, capturedBytes: true}, {...full, capturedBytes: 65537}, {...full, sha256: 'private-canary'},
+    {...full, truncated: 1}, {...full, content: 'private-canary'}]) assert.equal(failureReceipt('ready', {}, null, changed).checkerStderr, null);
 });
 test('terminal admits only exact public evidence and preserves no real-provider claim', () => {
   const value = result(); assert.equal(validateChecker(value, browser(), ids), value);

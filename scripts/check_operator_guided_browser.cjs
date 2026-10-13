@@ -21,6 +21,14 @@ const STEPS = ['credential', 'application', 'permission', 'download', 'proxy_suc
   'proxy_denied', 'application_revoked', 'credential_revoked'];
 const STAGES = ['inputs', 'launch', 'ready', 'open', 'credential', 'application', 'permission', 'download',
   'proxy_success', 'rule_revoked', 'proxy_denied', 'application_revoked', 'credential_revoked', 'result', 'close'];
+const CHECKER_STAGES = ['preflight', 'create', 'revoke_rule', 'revoke_rest', 'audit'];
+const CHECKER_ERRORS = ['CheckFailure', 'AssertionError', 'ValueError', 'TypeError', 'KeyError', 'RuntimeError',
+  'AttributeError', 'OSError', 'FileNotFoundError', 'PermissionError', 'TimeoutError', 'ConnectionError',
+  'ConnectionRefusedError', 'ConnectionResetError', 'BrokenPipeError', 'JSONDecodeError', 'UnicodeDecodeError',
+  'SSLError', 'SSLCertVerificationError', 'RemoteDisconnected', 'IncompleteRead', 'HTTPException'];
+const CHECKER_MODULES = ['scripts.check_operator_guided', 'scripts.operator_guided_browser',
+  'scripts.check_operator_catalog', 'scripts.check_operator_demo', 'scripts.check_operator_live_smoke',
+  'scripts.check_operator_ordinary_client', 'scripts.operator_catalog_feature_checks', 'scripts.run_ordinary_regression'];
 function need(value) { if (!value) throw new Error('Guided browser check refused'); }
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
   Object.keys(value).sort().join(',') === [...keys].sort().join(',');
@@ -73,9 +81,39 @@ function continueFrame(value, id, phase, ids) {
     exact(value.resourceIds, ['credential', 'application', 'rule']) &&
     Object.entries(ids).every(([key, item]) => UUID.test(item) && value.resourceIds[key] === item)); return value;
 }
-function failureReceipt(stage, observations) {
+const failureSiteValid = value => value === null || exact(value, ['module', 'line']) &&
+  CHECKER_MODULES.includes(value.module) && integer(value.line, 1, 100000);
+function checkerFailureFrame(frame) {
+  need(exact(frame, ['kind', 'result']) && frame.kind === 'result');
+  const value = frame.result;
+  need(exact(value, ['schema', 'ok', 'error', 'stage', 'exceptionType', 'failureSite']) &&
+    value.schema === 'serverware.privateGuidedCheck/v1' && value.ok === false && value.error === 'guided_check_failed' &&
+    CHECKER_STAGES.includes(value.stage) && CHECKER_ERRORS.includes(value.exceptionType) && failureSiteValid(value.failureSite));
+  return {stage: value.stage, exceptionType: value.exceptionType,
+    failureSite: value.failureSite === null ? null : {module: value.failureSite.module, line: value.failureSite.line}};
+}
+function stderrCollector() {
+  const hash = crypto.createHash('sha256'); let capturedBytes = 0, truncated = false;
+  return {
+    append(data) {
+      need(Buffer.isBuffer(data)); const size = Math.min(data.length, 65536 - capturedBytes);
+      hash.update(data.subarray(0, size)); capturedBytes += size; truncated ||= size !== data.length;
+      return !truncated;
+    },
+    snapshot() { return {capturedBytes, sha256: 'sha256:' + hash.copy().digest('hex'), truncated}; }
+  };
+}
+function failureReceipt(stage, observations, checkerFailure = null, stderr = null) {
+  const checker = exact(checkerFailure, ['stage', 'exceptionType', 'failureSite']) && CHECKER_STAGES.includes(checkerFailure.stage) &&
+    CHECKER_ERRORS.includes(checkerFailure.exceptionType) && failureSiteValid(checkerFailure.failureSite) ?
+    {stage: checkerFailure.stage, exceptionType: checkerFailure.exceptionType,
+      failureSite: checkerFailure.failureSite === null ? null : {module: checkerFailure.failureSite.module, line: checkerFailure.failureSite.line}} : null;
+  const diagnostic = exact(stderr, ['capturedBytes', 'sha256', 'truncated']) && integer(stderr.capturedBytes, 0, 65536) &&
+    typeof stderr.sha256 === 'string' && DIGEST.test(stderr.sha256) && typeof stderr.truncated === 'boolean' ?
+    {capturedBytes: stderr.capturedBytes, sha256: stderr.sha256, truncated: stderr.truncated} : null;
   return {schema: 'serverware.privateGuidedBrowserFailure/v1', ok: false,
     stage: STAGES.includes(stage) ? stage : 'inputs', error: 'guided_browser_refused',
+    checkerFailure: checker, checkerStderr: diagnostic,
     ...Object.fromEntries(['postCount', 'getCount', 'pageErrors', 'consoleErrors', 'refusedRequests', 'downloadCount'].map(key =>
       [key, integer(observations[key], 0, 100) ? observations[key] : null]))};
 }
@@ -130,7 +168,8 @@ async function main() {
   const out = {postCount: 0, getCount: 0, pageErrors: 0, consoleErrors: 0, refusedRequests: 0,
     downloadCount: 0, downloadDeleted: false, tokenCleared: false, steps: []};
   const ids = {}; let browser, child, pending, failed, stage = 'inputs', expectedPost = null, expectedDialog = null;
-  let sequence = 0, total = 0, stderrBytes = 0, input = Buffer.alloc(0), chain = Promise.resolve(), lastCatalog, readyValue;
+  let sequence = 0, total = 0, stderrBytes = 0, input = Buffer.alloc(0), chain = Promise.resolve(), lastCatalog, readyValue, checkerFailure = null;
+  const stderr = stderrCollector();
   let readyResolve, readyReject, downloadExpected = false;
   const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; }); ready.catch(() => {});
   const fail = () => { if (!failed) { failed = new Error('Guided browser check refused'); readyReject(failed); pending?.reject(failed); pending = null; } };
@@ -185,13 +224,15 @@ async function main() {
       env: {PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', GOMAXPROCS: '2', DOCKER_HOST: 'unix:///var/run/docker.sock'}});
     const exited = new Promise(resolve => child.once('exit', (code, sig) => resolve({code, signal: sig})));
     child.on('error', fail); child.stdin.on('error', fail);
-    child.stderr.on('data', data => { stderrBytes += data.length; if (stderrBytes > 65536) fail(); });
+    child.stderr.on('data', data => { stderrBytes += data.length; if (!stderr.append(data)) fail(); });
     child.stdout.on('data', data => {
       try {
         total += data.length; need(total <= 8 * 1024 ** 2); input = Buffer.concat([input, data]); need(input.length <= 3 * 1024 ** 2);
         while (input.includes(10)) {
           const end = input.indexOf(10), frame = JSON.parse(input.subarray(0, end)); input = input.subarray(end + 1);
-          if (frame.kind === 'ready') { need(!readyValue && !pending); readyValue = readyFrame(frame); readyResolve(readyValue); }
+          if (frame.kind === 'result' && frame.result?.ok === false) {
+            need(!checkerFailure); checkerFailure = checkerFailureFrame(frame); fail(); return;
+          } else if (frame.kind === 'ready') { need(!readyValue && !pending); readyValue = readyFrame(frame); readyResolve(readyValue); }
           else {
             need(pending && (frame.kind === 'result' ? pending.kind === 'checkpoint' && pending.phase === 'completed' : frame.id === pending.id));
             const next = pending; pending = null; next.resolve(frame);
@@ -200,7 +241,8 @@ async function main() {
       } catch (_) { fail(); }
     });
     child.stdout.on('end', () => { if (pending || input.length) fail(); });
-    child.once('exit', () => { if (!readyValue || pending) fail(); });
+    // Close follows stdio drain; do not lose an early terminal failure to exit ordering.
+    child.once('close', () => { if (!readyValue || pending) fail(); });
     const setup = await ready;
     const step = async name => { await page.locator('#connect-' + name + '-step').waitFor({state: 'visible'});
       await page.waitForFunction(() => !document.querySelector('#connect-status-refresh').disabled); need(!failed); };
@@ -267,7 +309,7 @@ async function main() {
     stage = 'close'; await browser.close(); browser = null;
     return {schema: 'serverware.privateGuidedBrowserJoined/v1', ok: true, browserClosed: true, browser: out, checker: result};
   } catch (_) {
-    fs.writeFileSync(path.join(evidence, 'guided-browser-failure.json'), JSON.stringify(failureReceipt(stage, out)) + '\n', {flag: 'wx', mode: 0o600});
+    fs.writeFileSync(path.join(evidence, 'guided-browser-failure.json'), JSON.stringify(failureReceipt(stage, out, checkerFailure, stderr.snapshot())) + '\n', {flag: 'wx', mode: 0o600});
     throw new Error('Guided browser check failed');
   } finally {
     clearTimeout(timer); process.removeListener('SIGTERM', signal); process.removeListener('SIGINT', signal);
@@ -276,7 +318,8 @@ async function main() {
     // Runner owns exact checker container cleanup and original cgroup teardown.
   }
 }
-module.exports = {readyFrame, requestFrame, responseFrame, continueFrame, failureReceipt, downloadedBytes, validateChecker};
+module.exports = {readyFrame, requestFrame, responseFrame, continueFrame, checkerFailureFrame, stderrCollector,
+  failureReceipt, downloadedBytes, validateChecker};
 if (require.main === module) main().then(value => process.stdout.write(JSON.stringify(value) + '\n')).catch(() => {
   process.stderr.write('Guided browser check failed; no private request, response or download details emitted\n'); process.exitCode = 1;
 });

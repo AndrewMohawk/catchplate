@@ -32,9 +32,11 @@ if __name__ == "__main__":
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from scripts import test_authority_jit_private_request as ingress
 from scripts import test_authority_jit_request as original
+from scripts import test_authority_release_private_request as release_fixture
 from serverware import authority_contract as contract
 from serverware import authority_jit_private_request as private
 from serverware import authority_planner as planner
+from serverware import authority_release_private_request as release_private
 from serverware import native_jit_review_material as material
 
 
@@ -87,6 +89,34 @@ def aad(scope, item, purpose, key_id=KEY_ID):
 
 class Cancelled(BaseException):
     pass
+
+
+def release_fixture_values(raw=None):
+    """Actual original codec, independently framed parent/child expectations."""
+    raw = release_fixture.native_raw_arguments() if raw is None else raw
+    envelope = release_private.prepare(raw)
+    expected = release_fixture.expected_envelope(raw)
+    if canonical(envelope) != canonical(expected):
+        raise AssertionError("release fixture original projection changed")
+    parent = release_fixture.native_request_oracle("release.reserve", expected["arguments"])
+    child = release_fixture.native_request_oracle("jit.request", expected["arguments"]["jit_approval_request"])
+    scope = {"schema": "serverware.nativeJitReviewScope/v2", "publicRequest": child,
+        "parentRequestSha256": original.sha(canonical(parent)),
+        "sourceContractDigest": contract.OPERATION_MANIFEST_DIGEST,
+        "controlPlaneConfigurationDigest": original.sha(b"synthetic JIT configuration"),
+        "ownerScopeDigest": original.sha(b"synthetic JIT owner scope"),
+        "issuedAtEpochNs": NOW, "sealExpiresAtEpochNs": NOW + 30 * SECOND,
+        "documentExpiresAtEpochNs": NOW + raw["jit_approval_request"]["pending_ttl_seconds"] * SECOND}
+    return scope, envelope["privateDocuments"], parent
+
+
+def release_aad(scope, item, purpose, key_id=KEY_ID):
+    # Independent literal v2 domain. A parent commitment is AAD, not evidence
+    # that the material leaf independently authenticated a release request.
+    return canonical({"schema": "serverware.nativeJitReviewAad/v2", "purpose": purpose,
+        "scope": scope, "keyId": key_id,
+        "approvalRequestId": original.identity(scope["publicRequest"]["requestDigest"], "jit-approval-request"),
+        **{name: item[name] for name in ("opaqueId", "valueKind", "plaintextSha256", "plaintextBytes")}})
 
 
 class NativeJitReviewMaterialTests(unittest.TestCase):
@@ -365,6 +395,131 @@ class NativeJitReviewMaterialTests(unittest.TestCase):
                 self.seal()
             self.assertIs(caught.exception, cancellation)
         self.assertEqual(self.documents, before)
+
+
+class NativeReleaseJitReviewMaterialTests(unittest.TestCase):
+    refused = NativeJitReviewMaterialTests.refused
+
+    def setUp(self):
+        self.scope, self.documents, self.parent = release_fixture_values()
+        self.kek = AESGCM(KEY)
+
+    def seal(self, scope=_UNSET, documents=_UNSET, **changes):
+        return material.seal_release_pair(self.scope if scope is _UNSET else scope,
+            self.documents if documents is _UNSET else documents,
+            **{"key_id": KEY_ID, "kek": self.kek, "now_epoch_ns": NOW, **changes})
+
+    def open(self, pair, **changes):
+        return material.open_release_pair(pair, **{"expected_scope": self.scope,
+            "key_id": KEY_ID, "kek": self.kek, "now_epoch_ns": NOW, **changes})
+
+    def test_release_actual_originals_independent_v2_aad_and_owned_roundtrip(self):
+        before = canonical([self.scope, self.documents, self.parent])
+        pair = self.seal()
+        self.assertEqual(pair["schema"], "serverware.nativeJitReviewPair/v2")
+        self.assertEqual(set(pair), {"schema", "scope", "keyId", "items"})
+        self.assertEqual(material.validate_release_scope(self.scope), self.scope)
+        self.assertEqual(self.scope["parentRequestSha256"], original.sha(canonical(self.parent)))
+        self.assertEqual(self.open(pair), self.documents)
+        plaintexts = (canonical({"schema": "serverware.jitCanonicalReviewPayload/v1",
+            "url": self.documents["url"], "canonical_request": self.documents["canonical_request"]}),
+            canonical(self.documents["redacted_display"]))
+        for index, (item, plaintext) in enumerate(zip(pair["items"], plaintexts)):
+            self.assertEqual(set(item), ITEM_FIELDS)
+            self.assertEqual(item["valueKind"], KINDS[index])
+            self.assertEqual(item["opaqueId"], original.identity(self.scope["publicRequest"]["requestDigest"], PURPOSES[index]))
+            self.assertEqual((item["plaintextSha256"], item["plaintextBytes"]), (original.sha(plaintext), len(plaintext)))
+            dek = self.kek.decrypt(decoded(item["wrappedKeyNonce"]), decoded(item["wrappedKey"]),
+                release_aad(self.scope, item, "wrap-dek"))
+            self.assertEqual(AESGCM(dek).decrypt(decoded(item["ciphertextNonce"]), decoded(item["ciphertext"]),
+                release_aad(self.scope, item, "encrypt-document")), plaintext)
+        for canary in release_fixture.CANARIES:
+            self.assertNotIn(canary.encode(), canonical(pair))
+        opened = self.open(pair)
+        opened["canonical_request"]["literal"]["base64Url"] = "mutated returned graph"
+        self.assertEqual(self.open(pair), self.documents)
+        self.assertEqual(canonical([self.scope, self.documents, self.parent]), before)
+        self.assertIsNot(pair["scope"], self.scope)
+
+    def test_v1_and_v2_are_explicit_and_relabeling_never_reencrypts(self):
+        v1_scope = {key: value for key, value in self.scope.items() if key != "parentRequestSha256"}
+        v1_scope["schema"] = "serverware.nativeJitReviewScope/v1"
+        kwargs = {"key_id": KEY_ID, "kek": self.kek, "now_epoch_ns": NOW}
+        v1 = material.seal_pair(v1_scope, self.documents, **kwargs)
+        v2 = self.seal()
+        self.refused(lambda: material.validate_scope(self.scope))
+        self.refused(lambda: material.validate_release_scope(v1_scope))
+        self.refused(lambda: material.seal_pair(self.scope, self.documents, **kwargs))
+        self.refused(lambda: self.seal(scope=v1_scope))
+        self.refused(lambda: material.open_pair(v2, expected_scope=self.scope, **kwargs))
+        self.refused(lambda: self.open(v1, expected_scope=v1_scope))
+        self.refused(lambda: self.open({**v1, "schema": "serverware.nativeJitReviewPair/v2", "scope": self.scope}))
+        self.refused(lambda: material.open_pair({**v2, "schema": "serverware.nativeJitReviewPair/v1", "scope": v1_scope},
+            expected_scope=v1_scope, **kwargs))
+        for index in range(2):
+            self.assertEqual(v1["items"][index]["opaqueId"], v2["items"][index]["opaqueId"])
+        self.assertEqual(material.open_pair(v1, expected_scope=v1_scope, **kwargs), self.documents)
+
+    def test_parent_hash_and_every_scope_pin_are_aead_bound_not_only_compared(self):
+        pair = self.seal()
+        changed_raw = release_fixture.native_raw_arguments()
+        changed_raw["actor_id"] = "oidc:other-real-parent"
+        other_scope, _, _ = release_fixture_values(changed_raw)
+        self.assertEqual(other_scope["publicRequest"], self.scope["publicRequest"])
+        self.assertNotEqual(other_scope["parentRequestSha256"], self.scope["parentRequestSha256"])
+        self.refused(lambda: self.open(pair, expected_scope=other_scope))
+        # Both external and embedded scope agree. Only authenticated AAD can
+        # distinguish these otherwise valid same-child release parents.
+        for field, value in (("parentRequestSha256", other_scope["parentRequestSha256"]),
+                ("ownerScopeDigest", original.sha(b"other owner")),
+                ("controlPlaneConfigurationDigest", original.sha(b"other config")),
+                ("documentExpiresAtEpochNs", self.scope["documentExpiresAtEpochNs"] - SECOND)):
+            with self.subTest(field=field):
+                scope = {**self.scope, field: value}
+                material.validate_release_scope(scope)
+                self.refused(lambda: self.open({**pair, "scope": scope}, expected_scope=scope))
+        for value in (None, True, "sha256:" + "A" * 64, "f" * 64, original.sha(b"x") + "x"):
+            self.refused(lambda: self.seal(scope={**self.scope, "parentRequestSha256": value}))
+
+    def test_release_scope_pair_items_are_closed_and_private_commitments_retained(self):
+        pair = self.seal()
+        for field in self.scope:
+            with self.subTest(scope_missing=field):
+                self.refused(lambda: self.seal(scope={k: v for k, v in self.scope.items() if k != field}))
+        self.refused(lambda: self.seal(scope={**self.scope, "parentRequest": self.parent}))
+        for field in pair:
+            with self.subTest(pair_missing=field):
+                self.refused(lambda: self.open({k: v for k, v in pair.items() if k != field}))
+        self.refused(lambda: self.open({**pair, "extra": None}))
+        for field in ITEM_FIELDS:
+            value = copy.deepcopy(pair); del value["items"][0][field]
+            with self.subTest(item_missing=field): self.refused(lambda: self.open(value))
+        for index in range(2):
+            for field in ("wrappedKeyNonce", "wrappedKey", "ciphertextNonce", "ciphertext"):
+                value = copy.deepcopy(pair); raw = decoded(value["items"][index][field])
+                value["items"][index][field] = encoded(bytes([raw[0] ^ 1]) + raw[1:])
+                with self.subTest(item=index, corrupted=field): self.refused(lambda: self.open(value))
+        self.refused(lambda: self.open({**pair, "items": list(reversed(pair["items"]))}))
+        for field in self.documents:
+            documents = {**self.documents, field: "changed" if field == "url" else {"changed": True}}
+            self.refused(lambda: self.seal(documents=documents))
+
+    def test_release_original_windows_bounds_and_authenticated_wrong_domain(self):
+        pair = self.seal()
+        seal_end, end = self.scope["sealExpiresAtEpochNs"], self.scope["documentExpiresAtEpochNs"]
+        self.seal(now_epoch_ns=seal_end - 1)
+        self.refused(lambda: self.seal(now_epoch_ns=seal_end))
+        self.assertEqual(self.open(pair, now_epoch_ns=end - 1), self.documents)
+        self.refused(lambda: self.open(pair, now_epoch_ns=end))
+        for now in (True, float(NOW), 0, NOW - 1, 2**63):
+            self.refused(lambda: self.open(pair, now_epoch_ns=now))
+        with patch.object(material, "MAX_PAIR_BYTES", len(canonical(pair)) - 1):
+            self.refused(lambda: self.open(pair))
+        for domain in ("serverware.nativeJitReviewAad/v1", "serverware.nativeJitReviewAad/v3"):
+            value = copy.deepcopy(pair); item = value["items"][0]
+            wrong_aad = json.loads(release_aad(self.scope, item, "wrap-dek")); wrong_aad["schema"] = domain
+            item["wrappedKey"] = encoded(self.kek.encrypt(decoded(item["wrappedKeyNonce"]), b"d" * 32, canonical(wrong_aad)))
+            self.refused(lambda: self.open(value))
 
 
 if __name__ == "__main__":

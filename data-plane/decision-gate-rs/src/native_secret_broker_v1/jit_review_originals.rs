@@ -32,11 +32,11 @@ impl<'de> Deserialize<'de> for RawObject<'de> {
         d.deserialize_map(ObjectVisitor)
     }
 }
-fn object(raw: &[u8]) -> Result<BTreeMap<String, &RawValue>, String> {
+pub(super) fn object(raw: &[u8]) -> Result<BTreeMap<String, &RawValue>, String> {
     serde_json::from_slice::<RawObject<'_>>(raw).map(|v| v.0)
         .map_err(|_| "JIT original object differs".to_owned())
 }
-fn keys(value: &BTreeMap<String, &RawValue>, expected: &[&str]) -> Result<(), String> {
+pub(super) fn keys(value: &BTreeMap<String, &RawValue>, expected: &[&str]) -> Result<(), String> {
     ensure(value.len() == expected.len() && expected.iter().all(|name| value.contains_key(*name)),
         "JIT original fields differ")
 }

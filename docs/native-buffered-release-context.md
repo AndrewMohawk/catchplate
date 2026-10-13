@@ -20,7 +20,7 @@ None of these component results is native workflow acceptance.
 The companion Python change at `7013967b` temporarily refuses raw nested JIT
 documents at five new-submission/retention boundaries. Its focused component
 tests passed as recorded below. Those changes are included in the subsequently
-deployed `6bf463c5` / normal `09087323` pair; see the
+deployed `35817cf5` / normal `09087323` pair; see the
 [live deployment checkpoint](../docker/serverware-operator-demo/README.md).
 The earlier `a3899a95` / `682d66d8` runtime is historical. Deployment of these
 guards and retained owners does not enable a native JIT workflow. The newer
@@ -371,3 +371,33 @@ notification source also remain incomplete. Notification delivery or receiver
 acknowledgement is not approval authority. Genuine measured end-to-end and
 deployment acceptance remains outstanding; no pilot or live change is part of
 this checkpoint.
+
+### Compound parent-bound review preparation
+
+The private broker protocol now has a separate `seal-release-pair` command.
+Its caller supplies the original private release envelope and both complete
+public requests. The Python owner reconstructs the originals and derives the
+parent `release.reserve` and child `jit.request` itself, then compares both
+supplied requests byte-for-byte with those derivations. Supplying a matching
+child alone, or a claimed parent digest, is insufficient.
+
+The explicit v2 material APIs bind the SHA-256 of the complete canonical parent
+request into both encrypted documents' key-wrapping and encryption associated
+data. Their scope, pair and AEAD domains are distinct from standalone v1; neither
+API accepts the other profile. The child still owns its original approval and
+opaque-document identities. A shared one-use fence prevents sealing the same
+child again through another parent or through the standalone command.
+
+The original broker lifetime, seal window, pending lifetime, attempt capacity
+and 512 KiB total-command limit remain in force. A larger request accepted by
+the pure derivation helper is not necessarily transportable through this bounded
+channel. Finite JSON numbers are preserved only in the existing private document
+slots and the release profile's three public JSON fields; control values and
+deadlines remain integer-only.
+
+This preparation is not an approval or an authorization to persist or disclose
+the documents. Genuine caller admission, signing, proof verification, atomic
+pending-request retention and authenticated review opening remain required.
+The service's private-release refusal remains in place until that complete
+path is implemented and verified. No live deployment is implied by this source
+change.

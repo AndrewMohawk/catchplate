@@ -130,11 +130,12 @@ def _document(original, *, allow_jit_seal=False):
         parse_float=finite if allow_jit_seal else invalid, parse_constant=invalid)
     _require(type(value) is dict)
     jit_seal = (value.get("apiVersion") == native_jit_review_owner.CHANNEL
-        and value.get("phase") == "seal-pair")
+        and value.get("phase") in ("seal-pair", "seal-release-pair"))
     _require(not has_float or jit_seal)
     if jit_seal:
         _require(allow_jit_seal and len(original) <= native_jit_review_owner.MAX_COMMAND_BYTES)
-        native_jit_review_owner._bounded_json(value, private_floats=True)
+        native_jit_review_owner._bounded_json(value, private_floats=True,
+            release_pair=value["phase"] == "seal-release-pair")
     _require(type(value) is dict and _canonical(value) == original)
     return value
 

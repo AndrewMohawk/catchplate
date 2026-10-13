@@ -55,6 +55,11 @@ SUITES = (
     Suite("backend", "test_authority_jit_denial.py", seconds=60),
     Suite("backend", "test_authority_jit_approval.py", seconds=60),
     Suite("backend", "test_authority_jit_request.py", seconds=60),
+    # Synthetic request/AEAD/owner components only; no native admission or
+    # real broker, hardware, protected approval, or provider is exercised.
+    Suite("backend", "test_authority_jit_private_request.py", seconds=60),
+    Suite("backend", "test_native_jit_review_material.py", seconds=60),
+    Suite("backend", "test_native_jit_review_owner.py", seconds=60),
     Suite("backend", "test_authority_release_private_input.py", seconds=60),
     Suite("backend", "test_authority_release_private_request.py", seconds=60),
     Suite("backend", "test_authority_release_private_ingress.py", seconds=60),

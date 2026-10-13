@@ -35,8 +35,10 @@ def no_external_io(event, _arguments):
 sys.addaudithook(no_external_io)
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from scripts import test_authority_jit_private_request as ingress
+from scripts import test_authority_release_private_request as release_fixture
 from serverware import authority_contract as contract
 from serverware import authority_jit_private_request as private
+from serverware import authority_release_private_request as release_private
 from serverware import native_jit_review_material as material
 from serverware import native_jit_review_owner as native
 
@@ -81,7 +83,7 @@ class Channel:
         self.check(deadline)
         self.messages.append(copy.deepcopy(value))
         self.deadlines.append(deadline)
-        if value.get("phase") == "prepared":
+        if value.get("phase") in {"prepared", "prepared-release-pair"}:
             if self.after_prepared is not None:
                 self.after_prepared()
             if self.prepared_failure is not None:
@@ -371,6 +373,262 @@ class NativeJitReviewOwnerTests(unittest.TestCase):
                 owner = f.configure()
                 self.refused(owner, {**f.command, "phase": phase})
                 self.assertEqual(len(f.channel.messages), 1)
+
+
+class ReleaseFixture(Fixture):
+    def __init__(self, raw=None, **kwargs):
+        super().__init__(**kwargs)
+        self.raw = release_fixture.native_raw_arguments() if raw is None else copy.deepcopy(raw)
+        self.envelope = release_private.prepare(self.raw)
+        expected = release_fixture.expected_envelope(self.raw)
+        if release_fixture.canonical(self.envelope) != release_fixture.canonical(expected):
+            raise AssertionError("release fixture original projection changed")
+        # Independent literal domains/handlers/adapters, not the owner's actual
+        # derive_native_requests call. Public synthetic originals only.
+        self.parent = release_fixture.native_request_oracle("release.reserve", expected["arguments"])
+        self.request = release_fixture.native_request_oracle("jit.request", expected["arguments"]["jit_approval_request"])
+        self.config["identity"]["policyHash"] = self.raw["policy_hash"]
+        self.command.update(phase="seal-release-pair", runtimeInput=self.envelope,
+            parentRequest=self.parent, publicRequest=self.request)
+
+    def standalone(self):
+        envelope = private.prepare(release_fixture.child_original(self.raw))
+        command = {key: value for key, value in self.command.items() if key != "parentRequest"}
+        return {**command, "phase": "seal-pair", "runtimeInput": envelope}
+
+
+class NativeReleaseJitReviewOwnerTests(unittest.TestCase):
+    def refused(self, owner, command):
+        before = set(owner._spent)
+        with patch.object(material, "seal_pair", wraps=material.seal_pair) as standalone, \
+                patch.object(material, "seal_release_pair", wraps=material.seal_release_pair) as compound:
+            with self.assertRaises(native.OwnerError) as caught:
+                owner.handle(command)
+            standalone.assert_not_called()
+            compound.assert_not_called()
+        self.assertTrue(owner._poisoned)
+        self.assertEqual(owner._spent, before)
+        self.assertEqual(str(caught.exception), "native JIT review owner unavailable")
+        self.assertIsNone(caught.exception.__cause__)
+        for canary in release_fixture.CANARIES:
+            self.assertNotIn(canary, str(caught.exception))
+
+    def test_compound_exact_literal_scope_response_bindings_and_real_aead(self):
+        f = ReleaseFixture(); owner = f.configure()
+        before = release_fixture.canonical(f.command)
+        with patch.object(material, "seal_pair", wraps=material.seal_pair) as standalone:
+            owner.handle(f.command)
+            standalone.assert_not_called()
+        result = f.channel.messages[-1]
+        self.assertEqual(set(result), {"apiVersion", "phase", "operation", "pair", "statementBindings"})
+        self.assertEqual((result["apiVersion"], result["phase"], result["operation"]),
+            (native.CHANNEL, "prepared-release-pair", "release.reserve"))
+        scope = {"schema": "serverware.nativeJitReviewScope/v2", "publicRequest": f.request,
+            "parentRequestSha256": release_fixture.sha(release_fixture.canonical(f.parent)),
+            "sourceContractDigest": contract.OPERATION_MANIFEST_DIGEST,
+            "controlPlaneConfigurationDigest": f.config["controlPlaneConfigurationDigest"],
+            "ownerScopeDigest": owner.owner_scope_digest,
+            **{name: f.command[name] for name in ("issuedAtEpochNs", "sealExpiresAtEpochNs", "documentExpiresAtEpochNs")}}
+        self.assertEqual(result["pair"]["scope"], scope)
+        self.assertEqual(result["pair"]["schema"], "serverware.nativeJitReviewPair/v2")
+        self.assertEqual(material.open_release_pair(result["pair"], expected_scope=scope,
+            key_id=f.broker.key_id, kek=f.broker.kek, now_epoch_ns=f.clock.wall), f.envelope["privateDocuments"])
+        expected = {"sourceContractDigest": contract.OPERATION_MANIFEST_DIGEST,
+            "controlPlaneConfigurationDigest": f.config["controlPlaneConfigurationDigest"],
+            "ownerScopeDigest": owner.owner_scope_digest, "deploymentId": f.config["deploymentId"],
+            "instanceId": f.config["instanceId"], "requestDigest": f.request["requestDigest"],
+            "operationId": f.request["operationId"], "publicRequestSha256": release_fixture.sha(release_fixture.canonical(f.request)),
+            "parentRequestSha256": scope["parentRequestSha256"], "parentRequestDigest": f.parent["requestDigest"],
+            "parentOperationId": f.parent["operationId"], "pairSha256": release_fixture.sha(release_fixture.canonical(result["pair"])),
+            "secretKekId": f.broker.key_id, "challenge": f.command["challenge"], "issuedAtEpochNs": f.clock.wall,
+            "expiresAtEpochNs": f.command["sealExpiresAtEpochNs"],
+            "documentExpiresAtEpochNs": f.command["documentExpiresAtEpochNs"], **f.config["identity"]}
+        self.assertEqual(len(expected), 27)
+        self.assertEqual(result["statementBindings"], expected)
+        for canary in release_fixture.CANARIES:
+            self.assertNotIn(canary.encode(), release_fixture.canonical(result))
+        self.assertEqual(release_fixture.canonical(f.command), before)
+        self.assertEqual(owner._spent, {f.request["requestDigest"]})
+        self.assertIsNone(owner.operation)
+
+    def test_compound_parent_child_private_source_policy_and_closed_fields(self):
+        changes = []
+        for root in ((), ("runtimeInput",), ("runtimeInput", "arguments"),
+                ("runtimeInput", "arguments", "jit_approval_request"), ("runtimeInput", "privateDocuments"),
+                ("parentRequest",), ("parentRequest", "arguments"),
+                ("parentRequest", "arguments", "businessIntent"), ("publicRequest",), ("publicRequest", "arguments")):
+            sample = ReleaseFixture().command
+            for part in root: sample = sample[part]
+            for field in (*sample, "unexpected"):
+                changes.append((root, field))
+        for root, field in changes:
+            with self.subTest(root=root, field=field):
+                f = ReleaseFixture(); owner = f.configure(); target = f.command
+                for part in root: target = target[part]
+                if field == "unexpected": target[field] = release_fixture.CANARIES[0]
+                else: del target[field]
+                self.refused(owner, f.command)
+                self.assertEqual(len(f.channel.messages), 1)
+        mutations = (
+            lambda f: f.parent.update(requestDigest=ingress.PIN),
+            lambda f: f.parent.update(operationId=ingress.PIN),
+            lambda f: f.parent.update(operationManifestDigest=ingress.PIN),
+            lambda f: f.parent.update(operation="release.v1.reserve"),
+            lambda f: f.request.update(requestDigest=ingress.PIN),
+            lambda f: f.envelope.update(operationManifestDigest=ingress.PIN),
+            lambda f: f.envelope["arguments"].update(original_arguments_digest=ingress.PIN),
+            lambda f: f.envelope["arguments"].update(expected_approver_policy_sha256=ingress.PIN),
+            lambda f: f.envelope["arguments"]["approver_credential_policy"].update(maxAssertionAgeSeconds=31),
+            lambda f: f.envelope["arguments"]["jit_approval_request"].update(canonical_request_digest=ingress.PIN),
+            lambda f: f.envelope["privateDocuments"].update(url="https://different.invalid/"),
+            lambda f: f.envelope["privateDocuments"].update(canonical_request={"different": True}),
+            lambda f: f.envelope["privateDocuments"].update(redacted_display={"different": True}),
+            lambda f: f.parent["arguments"].update(privateDocuments=f.envelope["privateDocuments"]),
+            lambda f: f.config["identity"].update(policyHash=ingress.PIN),
+        )
+        for index, mutate in enumerate(mutations):
+            with self.subTest(mutation=index):
+                f = ReleaseFixture(); mutate(f); owner = f.configure()
+                self.refused(owner, f.command)
+        # Coherent but unrelated parent, rather than only a broken outer hash.
+        f = ReleaseFixture(); owner = f.configure()
+        other = ReleaseFixture({**f.raw, "actor_id": "oidc:another-parent"})
+        self.assertEqual(other.request, f.request)
+        self.refused(owner, {**f.command, "parentRequest": other.parent})
+
+    def test_profiles_are_explicit_and_spent_child_is_shared_across_parents(self):
+        for compound_first in (False, True):
+            with self.subTest(compound_first=compound_first):
+                f = ReleaseFixture(); owner = f.configure()
+                first, second = (f.command, f.standalone()) if compound_first else (f.standalone(), f.command)
+                owner.handle(first)
+                self.assertEqual(owner._spent, {f.request["requestDigest"]})
+                self.refused(owner, second)
+                self.assertEqual(len(f.channel.messages), 2)
+        f = ReleaseFixture(); owner = f.configure(); owner.handle(f.command)
+        other = ReleaseFixture({**f.raw, "actor_id": "oidc:another-parent"})
+        self.assertEqual(other.request, f.request)
+        self.assertNotEqual(other.parent["requestDigest"], f.parent["requestDigest"])
+        self.refused(owner, other.command)
+        for phase in ("seal-pair", "prepared-release-pair", "release", "open-release-pair"):
+            f = ReleaseFixture(); owner = f.configure()
+            self.refused(owner, {**f.command, "phase": phase})
+        for raw in (release_fixture.raw_arguments(),
+                {**release_fixture.native_raw_arguments(), "native_profile": False, "policy_aware_profile": True}):
+            f = ReleaseFixture(raw); owner = f.configure()
+            self.refused(owner, f.command)
+        f = ReleaseFixture(capacity=1); owner = f.configure(); owner.handle(f.command)
+        other = ReleaseFixture({**f.raw, "route_id": "different-valid-child"})
+        self.assertNotEqual(other.request["requestDigest"], f.request["requestDigest"])
+        self.refused(owner, other.command)
+
+    def test_release_original_deadlines_clamp_and_never_renew(self):
+        f = ReleaseFixture(lifetime=12 * SECOND); owner = f.configure()
+        f.command["deadlineBoottimeNs"] = f.clock.boot + 5 * SECOND
+        owner.handle(f.command); result = f.channel.messages[-1]
+        self.assertEqual(result["pair"]["scope"]["sealExpiresAtEpochNs"], f.clock.wall + 5 * SECOND)
+        self.assertEqual(result["pair"]["scope"]["documentExpiresAtEpochNs"], f.clock.wall + 12 * SECOND)
+        self.assertEqual(f.channel.deadlines[-1], f.command["deadlineBoottimeNs"])
+        self.assertEqual(result["statementBindings"]["expiresAtEpochNs"], f.clock.wall + 5 * SECOND)
+        for field, value in (("issuedAtEpochNs", Clock.wall + 1),
+                ("sealExpiresAtEpochNs", Clock.wall), ("sealExpiresAtEpochNs", Clock.wall + 31 * SECOND),
+                ("documentExpiresAtEpochNs", Clock.wall + 301 * SECOND), ("deadlineBoottimeNs", Clock.boot)):
+            f = ReleaseFixture(); owner = f.configure()
+            self.refused(owner, {**f.command, field: value})
+
+    def test_release_uncertain_write_cancellation_and_both_clock_expiry_poison(self):
+        class Cancelled(BaseException): pass
+        for failure in (OSError("synthetic lost reply"), Cancelled("synthetic cancellation")):
+            f = ReleaseFixture(); owner = f.configure(); f.channel.prepared_failure = failure
+            with patch.object(material, "seal_release_pair", wraps=material.seal_release_pair) as sealing:
+                with self.assertRaises(native.OwnerError if isinstance(failure, Exception) else Cancelled):
+                    owner.handle(f.command)
+                self.assertEqual(sealing.call_count, 1)
+            self.assertEqual(f.channel.messages[-1]["phase"], "prepared-release-pair")
+            self.assertEqual(owner._spent, {f.request["requestDigest"]})
+            f.channel.prepared_failure = None
+            self.refused(owner, f.command)
+        real_seal = material.seal_release_pair
+        for clock in ("wall", "boot"):
+            with self.subTest(clock=clock):
+                f = ReleaseFixture(); owner = f.configure(); encrypted = []
+                def expires_after_encrypt(*args, **kwargs):
+                    encrypted.append(real_seal(*args, **kwargs))
+                    self.assertEqual(owner._spent, {f.request["requestDigest"]})
+                    if clock == "wall": f.clock.wall = f.command["sealExpiresAtEpochNs"]
+                    else: f.clock.boot += 20 * SECOND  # Actual seal-clamped original deadline.
+                    return encrypted[-1]
+                with patch.object(material, "seal_release_pair", side_effect=expires_after_encrypt):
+                    with self.assertRaises(native.OwnerError): owner.handle(f.command)
+                self.assertEqual(len(encrypted), 1)
+                self.assertEqual(len(f.channel.messages), 1)
+                self.refused(owner, f.standalone())
+
+    def test_compound_owns_deep_originals_before_encryption_and_response(self):
+        f = ReleaseFixture(); owner = f.configure(); before = copy.deepcopy(f.command)
+        real_seal = material.seal_release_pair
+        def mutate_caller_after_checked_copy(*args, **kwargs):
+            f.parent["arguments"]["jit_approval_request"]["approver_credential_policy"]["origins"].append("https://mutated.invalid")
+            f.envelope["privateDocuments"]["canonical_request"]["literal"]["base64Url"] = "mutated secret graph"
+            f.request["arguments"]["businessIntent"]["arguments"]["route_id"] = "mutated-child"
+            return real_seal(*args, **kwargs)
+        with patch.object(material, "seal_release_pair", side_effect=mutate_caller_after_checked_copy):
+            owner.handle(f.command)
+        result = f.channel.messages[-1]; scope = result["pair"]["scope"]
+        self.assertEqual(scope["publicRequest"], before["publicRequest"])
+        self.assertEqual(scope["parentRequestSha256"], release_fixture.sha(release_fixture.canonical(before["parentRequest"])))
+        self.assertEqual(material.open_release_pair(result["pair"], expected_scope=scope,
+            key_id=f.broker.key_id, kek=f.broker.kek, now_epoch_ns=f.clock.wall), before["runtimeInput"]["privateDocuments"])
+
+    def test_real_decoder_and_owner_preserve_allowed_floats_and_large_integers(self):
+        from serverware import native_secret_broker_helper as helper
+        raw = release_fixture.native_raw_arguments()
+        values = {"finite": [1.25, -0.0, 1e100], "large": 2**100, "negative": -(2**100)}
+        for field in ("operation_context", "durable_policy_binding"):
+            raw[field] = copy.deepcopy(values)
+        raw["shared_quotas"] = [copy.deepcopy(values)]
+        raw["jit_approval_request"]["canonical_request"]["numbers"] = copy.deepcopy(values)
+        raw["jit_approval_request"]["redacted_display"]["numbers"] = copy.deepcopy(values)
+        f = ReleaseFixture(raw); owner = f.configure(); wire = release_fixture.canonical(f.command)
+        self.assertLess(len(wire), 512 * 1024)
+        decoded = helper._document(wire, allow_jit_seal=True)
+        self.assertEqual(release_fixture.canonical(decoded), wire)
+        owner.handle(decoded)
+        result = f.channel.messages[-1]; scope = result["pair"]["scope"]
+        self.assertEqual(result["statementBindings"]["parentRequestSha256"], release_fixture.sha(release_fixture.canonical(f.parent)))
+        self.assertEqual(material.open_release_pair(result["pair"], expected_scope=scope,
+            key_id=f.broker.key_id, kek=f.broker.kek, now_epoch_ns=f.clock.wall), f.envelope["privateDocuments"])
+        with self.assertRaises(ValueError): helper._document(wire)
+        with self.assertRaises(ValueError):
+            helper._document(release_fixture.canonical({**f.command, "phase": "seal-pair"}), allow_jit_seal=True)
+        for token in (b"NaN", b"Infinity", b"-Infinity", b"1e999"):
+            malformed = wire.replace(b"1.25", token, 1)
+            with self.subTest(token=token), self.assertRaises(ValueError):
+                helper._document(malformed, allow_jit_seal=True)
+
+    def test_control_floats_and_full_command_size_stay_closed(self):
+        from serverware import native_secret_broker_helper as helper
+        paths = [(field,) for field in ("issuedAtEpochNs", "sealExpiresAtEpochNs", "documentExpiresAtEpochNs", "deadlineBoottimeNs")]
+        paths += [("runtimeInput", "arguments", field) for field in ("credential_version", "reservation_ttl_seconds", "now_epoch_ms", "approval_threshold")]
+        paths += [("parentRequest", "arguments", "native_profile"), ("publicRequest", "arguments", "credential_version"),
+            ("publicRequest", "arguments", "approver_credential_policy", "maxAssertionAgeSeconds")]
+        for path in paths:
+            with self.subTest(path=path):
+                f = ReleaseFixture(); owner = f.configure(); target = f.command
+                for name in path[:-1]: target = target[name]
+                target[path[-1]] = 1.0
+                with self.assertRaises(ValueError): helper._document(release_fixture.canonical(f.command), allow_jit_seal=True)
+                self.refused(owner, f.command)
+        raw = release_fixture.native_raw_arguments()
+        # Unlike the separately 64KiB-bounded operation_context, this original
+        # durable mapping fits its 4MiB parent bound; repeated public framing
+        # alone then exceeds the tighter 512KiB channel command limit.
+        raw["durable_policy_binding"] = {"padding": "x" * (180 * 1024)}
+        f = ReleaseFixture(raw); owner = f.configure(); wire = release_fixture.canonical(f.command)
+        self.assertEqual(native.MAX_COMMAND_BYTES, 512 * 1024)
+        self.assertGreater(len(wire), native.MAX_COMMAND_BYTES)
+        with self.assertRaises(ValueError): helper._document(wire, allow_jit_seal=True)
+        self.refused(owner, f.command)
 
 
 if __name__ == "__main__":

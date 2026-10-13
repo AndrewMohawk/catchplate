@@ -11,9 +11,14 @@ use std::collections::BTreeSet;
 
 #[path = "jit_review_originals.rs"]
 mod originals;
+#[path = "jit_review_release.rs"]
+mod release;
 #[cfg(test)]
 #[path = "jit_review_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "jit_review_release_tests.rs"]
+mod release_tests;
 
 const CHANNEL: &str = "serverware.nativeJitReviewChannel/v1";
 const CONFIG: &str = "serverware.nativeJitReviewConfiguration/v1";
@@ -74,6 +79,14 @@ pub(crate) struct Prepared {
 impl Prepared {
     pub(crate) fn pair(&self) -> &Value { &self.pair }
     pub(crate) fn statement_bindings(&self) -> &Value { &self.bindings }
+}
+
+/// Distinct compound storage preparation. Not a signature, caller admission,
+/// approval, writer capability or permission to open either private document.
+pub(crate) struct PreparedReleasePair { prepared: Prepared }
+impl PreparedReleasePair {
+    pub(crate) fn pair(&self) -> &Value { self.prepared.pair() }
+    pub(crate) fn statement_bindings(&self) -> &Value { self.prepared.statement_bindings() }
 }
 
 fn text(value: &Value) -> Result<&str, String> { value.as_str().ok_or_else(|| "JIT text field differs".to_owned()) }
@@ -146,10 +159,25 @@ fn request_scope(config: &Value, request: &Value) -> Result<(), String> {
 /// It cannot create Prepared or authenticate a child, caller, key or clock.
 fn validate_exchange(config: &Value, command: &[u8], response: &Value,
     now_wall: u64, now_boot: u64, broker_deadline: u64) -> Result<(), String> {
-    configuration_wire(config)?;
     let (original, control) = originals::command_inputs(command)?;
+    validate_correlations(config, &original, &control, None, response, now_wall, now_boot, broker_deadline)
+}
+
+// Shared child/plaintext/owner joins. The optional parent comes only from the
+// separate raw-original reconstruction, never from response-supplied claims.
+fn validate_correlations(config: &Value, original: &originals::Originals, control: &Value,
+    parent: Option<&release::ParentBindings>, response: &Value,
+    now_wall: u64, now_boot: u64, broker_deadline: u64) -> Result<(), String> {
+    configuration_wire(config)?;
     request_scope(config, &original.request)?;
-    ensure(control["apiVersion"] == CHANNEL && control["phase"] == "seal-pair", "JIT command purpose differs")?;
+    let (phase, response_phase, operation, pair_schema, scope_schema) = if parent.is_some() {
+        ("seal-release-pair", "prepared-release-pair", "release.reserve",
+            "serverware.nativeJitReviewPair/v2", "serverware.nativeJitReviewScope/v2")
+    } else {
+        ("seal-pair", "prepared", "jit.request",
+            "serverware.nativeJitReviewPair/v1", "serverware.nativeJitReviewScope/v1")
+    };
+    ensure(control["apiVersion"] == CHANNEL && control["phase"] == phase, "JIT command purpose differs")?;
     crate::native_currentness_v1::bytes32(text(&control["challenge"])?)?;
     let issued = integer(&control["issuedAtEpochNs"])?;
     let requested_seal = integer(&control["sealExpiresAtEpochNs"])?;
@@ -161,15 +189,17 @@ fn validate_exchange(config: &Value, command: &[u8], response: &Value,
         && requested_document <= issued.checked_add(ttl * 1_000_000_000).ok_or("JIT expiry overflow")?
         && now_boot < deadline && deadline <= broker_deadline, "JIT original interval differs")?;
     fields(response, &["apiVersion", "phase", "operation", "pair", "statementBindings"])?;
-    ensure(response["apiVersion"] == CHANNEL && response["phase"] == "prepared" && response["operation"] == "jit.request",
+    ensure(response["apiVersion"] == CHANNEL && response["phase"] == response_phase && response["operation"] == operation,
         "JIT helper response purpose differs")?;
     let pair = &response["pair"]; fields(pair, &["schema", "scope", "keyId", "items"])?;
-    ensure(pair["schema"] == "serverware.nativeJitReviewPair/v1" && pair["keyId"] == config["secretKekId"], "JIT pair profile differs")?;
+    ensure(pair["schema"] == pair_schema && pair["keyId"] == config["secretKekId"], "JIT pair profile differs")?;
     let scope = &pair["scope"];
-    fields(scope, &["schema", "publicRequest", "sourceContractDigest", "controlPlaneConfigurationDigest", "ownerScopeDigest",
-        "issuedAtEpochNs", "sealExpiresAtEpochNs", "documentExpiresAtEpochNs"])?;
+    let mut scope_fields = vec!["schema", "publicRequest", "sourceContractDigest", "controlPlaneConfigurationDigest", "ownerScopeDigest",
+        "issuedAtEpochNs", "sealExpiresAtEpochNs", "documentExpiresAtEpochNs"];
+    if parent.is_some() { scope_fields.push("parentRequestSha256"); }
+    fields(scope, &scope_fields)?;
     let scope_digest = sha(&canonical_ascii_bytes(config)?);
-    ensure(scope["schema"] == "serverware.nativeJitReviewScope/v1" && scope["publicRequest"] == original.request
+    ensure(scope["schema"] == scope_schema && scope["publicRequest"] == original.request
         && scope["sourceContractDigest"] == config["sourceContractDigest"]
         && scope["controlPlaneConfigurationDigest"] == config["controlPlaneConfigurationDigest"]
         && scope["ownerScopeDigest"] == scope_digest && scope["issuedAtEpochNs"] == issued, "JIT pair scope differs")?;
@@ -192,7 +222,16 @@ fn validate_exchange(config: &Value, command: &[u8], response: &Value,
         padded(&item["wrappedKeyNonce"], 12)?; padded(&item["wrappedKey"], 48)?;
         padded(&item["ciphertextNonce"], 12)?; padded(&item["ciphertext"], length + 16)?;
     }
-    let bindings = &response["statementBindings"]; fields(bindings, BINDINGS)?;
+    let bindings = &response["statementBindings"];
+    let mut binding_fields = BINDINGS.to_vec();
+    if let Some(parent) = parent {
+        binding_fields.extend(["parentRequestSha256", "parentRequestDigest", "parentOperationId"]);
+        ensure(scope["parentRequestSha256"] == parent.sha256
+            && bindings["parentRequestSha256"] == parent.sha256
+            && bindings["parentRequestDigest"] == parent.request_digest
+            && bindings["parentOperationId"] == parent.operation_id, "JIT prepared parent correlation differs")?;
+    }
+    fields(bindings, &binding_fields)?;
     for field in IDENTITY { ensure(bindings[*field] == config["identity"][*field], "JIT native identity binding differs")?; }
     for field in ["sourceContractDigest", "controlPlaneConfigurationDigest", "deploymentId", "instanceId", "secretKekId"] {
         ensure(bindings[field] == config[field], "JIT configured binding differs")?;
@@ -262,15 +301,31 @@ impl Owner {
     /// no public route or signer can turn this result into admitted evidence.
     pub(crate) fn prepare_jit_review(&mut self, identity: &mut EnclaveRuntimeIdentityV1,
         runtime_original: &[u8], public_original: &[u8], window: SealWindow, deadline: u64) -> Result<Prepared, String> {
+        self.prepare_jit_pair(identity, runtime_original, public_original, None, window, deadline)
+    }
+
+    pub(crate) fn prepare_release_jit_review(&mut self, identity: &mut EnclaveRuntimeIdentityV1,
+        runtime_original: &[u8], parent_original: &[u8], public_original: &[u8],
+        window: SealWindow, deadline: u64) -> Result<PreparedReleasePair, String> {
+        self.prepare_jit_pair(identity, runtime_original, public_original, Some(parent_original), window, deadline)
+            .map(|prepared| PreparedReleasePair { prepared })
+    }
+
+    fn prepare_jit_pair(&mut self, identity: &mut EnclaveRuntimeIdentityV1,
+        runtime_original: &[u8], public_original: &[u8], parent_original: Option<&[u8]>,
+        window: SealWindow, deadline: u64) -> Result<Prepared, String> {
         let result = (|| {
             let (config, marker, before_wall, before_boot) = self.check_jit_identity(identity, deadline)?;
-            let original = originals::read(runtime_original, public_original)?;
+            let original = if let Some(parent) = parent_original {
+                release::read(runtime_original, parent, public_original)?.child
+            } else { originals::read(runtime_original, public_original)? };
             request_scope(&config, &original.request)?;
             crate::native_currentness_v1::bytes32(&window.challenge)?;
             let request_digest = text(&original.request["requestDigest"])?.to_owned();
             let attempt_deadline = seal_deadline(before_wall, before_boot, window.seal_expires_at_epoch_ns,
                 deadline, self.deadline)?;
-            let control = json!({"apiVersion":CHANNEL, "phase":"seal-pair", "challenge":window.challenge,
+            let phase = if parent_original.is_some() { "seal-release-pair" } else { "seal-pair" };
+            let control = json!({"apiVersion":CHANNEL, "phase":phase, "challenge":window.challenge,
                 "issuedAtEpochNs":window.issued_at_epoch_ns, "sealExpiresAtEpochNs":window.seal_expires_at_epoch_ns,
                 "documentExpiresAtEpochNs":window.document_expires_at_epoch_ns, "deadlineBoottimeNs":attempt_deadline});
             let controls = control.as_object().ok_or("JIT control object")?.iter()
@@ -278,6 +333,7 @@ impl Owner {
                 .collect::<Result<BTreeMap<String, Vec<u8>>, String>>()?;
             let mut fields: BTreeMap<&str, &[u8]> = controls.iter().map(|(name, value)| (name.as_str(), value.as_slice())).collect();
             fields.insert("runtimeInput", runtime_original); fields.insert("publicRequest", public_original);
+            if let Some(parent) = parent_original { fields.insert("parentRequest", parent); }
             let command = originals::join(&fields)?;
             ensure(command.len() <= MAX_COMMAND && window.issued_at_epoch_ns <= before_wall
                 && before_wall < window.seal_expires_at_epoch_ns && before_boot < attempt_deadline, "JIT command bound or interval differs")?;
@@ -289,7 +345,9 @@ impl Owner {
             let response = document(&self.process.exchange(&command, attempt_deadline)?, MAX_FRAME)?;
             let (_, same_marker, after_wall, after_boot) = self.check_jit_identity(identity, attempt_deadline)?;
             ensure(Arc::ptr_eq(&marker, &same_marker), "JIT preparation owner changed")?;
-            validate_exchange(&config, &command, &response, after_wall, after_boot, self.deadline)?;
+            if parent_original.is_some() {
+                release::validate_release_exchange(&config, &command, &response, after_wall, after_boot, self.deadline)?;
+            } else { validate_exchange(&config, &command, &response, after_wall, after_boot, self.deadline)?; }
             let expires = integer(&response["statementBindings"]["expiresAtEpochNs"])?;
             let prepared_deadline = seal_deadline(before_wall, before_boot, expires, attempt_deadline, self.deadline)?;
             // Optional one-way tightening, never renewal. The helper has
@@ -318,5 +376,10 @@ impl Owner {
         })();
         if result.is_err() { self.poisoned = true; self.process.terminate(); }
         result
+    }
+
+    pub(crate) fn check_release_jit_review_prepared(&mut self, identity: &mut EnclaveRuntimeIdentityV1,
+        prepared: &PreparedReleasePair) -> Result<(), String> {
+        self.check_jit_review_prepared(identity, &prepared.prepared)
     }
 }

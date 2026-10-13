@@ -3,6 +3,10 @@
 The owner supplies its real KEK and independently validates the exact public
 request, configured policy, source, identity and original lifetime. This leaf
 checks byte commitments, not a signature, quote, current policy or permission.
+The separate release-pair APIs bind an owner-supplied full parent-request hash;
+only that owner validates the parent and independently derives the child. This
+hash binding is not authentication of either request. Standalone v1 and compound
+v2 scopes, pairs and AEAD domains are not interchangeable.
 It neither loads keys nor exposes a transport. ``open_pair`` is private material
 readback, NOT authorization to disclose a review. Randomized ciphertext must be
 retained by the owner; resealing is not recovery of an uncertain operation.
@@ -11,6 +15,7 @@ Python allocations do not provide a complete plaintext-erasure guarantee.
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
 from functools import wraps
 import hashlib
 import json
@@ -22,6 +27,8 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 SCOPE_SCHEMA = "serverware.nativeJitReviewScope/v1"
 PAIR_SCHEMA = "serverware.nativeJitReviewPair/v1"
+RELEASE_SCOPE_SCHEMA = "serverware.nativeJitReviewScope/v2"
+RELEASE_PAIR_SCHEMA = "serverware.nativeJitReviewPair/v2"
 CANONICAL_SCHEMA = "serverware.jitCanonicalReviewPayload/v1"
 MAX_PRIVATE_BYTES = 64 * 1024
 MAX_PLAINTEXT_BYTES = 4 * MAX_PRIVATE_BYTES  # ASCII escaping of the UTF-8 URL.
@@ -30,6 +37,7 @@ MAX_PAIR_BYTES = 5 * 1024 * 1024
 SCOPE_FIELDS = frozenset({"schema", "publicRequest", "sourceContractDigest",
     "controlPlaneConfigurationDigest", "ownerScopeDigest", "issuedAtEpochNs",
     "sealExpiresAtEpochNs", "documentExpiresAtEpochNs"})
+RELEASE_SCOPE_FIELDS = SCOPE_FIELDS | {"parentRequestSha256"}
 PAIR_FIELDS = frozenset({"schema", "scope", "keyId", "items"})
 ITEM_FIELDS = frozenset({"opaqueId", "valueKind", "plaintextSha256", "plaintextBytes",
     "wrappedKeyNonce", "wrappedKey", "ciphertextNonce", "ciphertext"})
@@ -45,6 +53,20 @@ _REQUEST_FIELDS = frozenset({"schema", "operation", "operationId", "requestDiges
     "handler", "operationManifestDigest", "arguments"})
 _KINDS = ("approval-secret-json/v1", "approval-review-json/v1")
 _PURPOSES = ("jit-canonical-request", "jit-redacted-display")
+
+
+@dataclass(frozen=True, slots=True)
+class _Profile:
+    scope_schema: str
+    pair_schema: str
+    aad_schema: str
+    scope_fields: frozenset[str]
+
+
+_STANDALONE_PROFILE = _Profile(SCOPE_SCHEMA, PAIR_SCHEMA,
+    "serverware.nativeJitReviewAad/v1", SCOPE_FIELDS)
+_RELEASE_PROFILE = _Profile(RELEASE_SCOPE_SCHEMA, RELEASE_PAIR_SCHEMA,
+    "serverware.nativeJitReviewAad/v2", RELEASE_SCOPE_FIELDS)
 
 
 class MaterialError(ValueError):
@@ -120,11 +142,12 @@ def _identity(request_digest, purpose):
     return "-".join((value[:8], value[8:12], value[12:16], value[16:20], value[20:]))
 
 
-@_checked
-def validate_scope(scope):
-    """Own and check commitment grammar; the caller still pins real authority."""
+def _validate_scope(scope, profile):
     scope = _copy(scope, MAX_SCOPE_BYTES)
-    _require(type(scope) is dict and set(scope) == SCOPE_FIELDS and scope["schema"] == SCOPE_SCHEMA)
+    _require(type(scope) is dict and set(scope) == profile.scope_fields
+        and scope["schema"] == profile.scope_schema)
+    if profile is _RELEASE_PROFILE:
+        _digest(scope["parentRequestSha256"])
     request = scope["publicRequest"]
     _require(type(request) is dict and set(request) == _REQUEST_FIELDS
         and request["schema"] == "serverware.policyAuthorityV9Request/v1"
@@ -161,6 +184,18 @@ def validate_scope(scope):
     _require(issued < seal <= expires <= issued + arguments["pending_ttl_seconds"] * 1_000_000_000
         and seal - issued <= 30_000_000_000)
     return scope
+
+
+@_checked
+def validate_scope(scope):
+    """Own and check v1 commitment grammar; the caller still pins real authority."""
+    return _validate_scope(scope, _STANDALONE_PROFILE)
+
+
+@_checked
+def validate_release_scope(scope):
+    """Check v2 grammar, not the claimed parent hash or either request's authority."""
+    return _validate_scope(scope, _RELEASE_PROFILE)
 
 
 def _private(scope, private):
@@ -206,17 +241,15 @@ def _decoded(value, maximum, exact=None):
     return raw
 
 
-def _aad(scope, key_id, item, purpose):
-    return canonical({"schema": "serverware.nativeJitReviewAad/v1", "purpose": purpose,
+def _aad(scope, key_id, item, purpose, profile):
+    return canonical({"schema": profile.aad_schema, "purpose": purpose,
         "scope": scope, "keyId": key_id,
         "approvalRequestId": _identity(scope["publicRequest"]["requestDigest"], "jit-approval-request"),
         **{key: item[key] for key in ("opaqueId", "valueKind", "plaintextSha256", "plaintextBytes")}})
 
 
-@_checked
-def seal_pair(scope, private_documents, *, key_id, kek, now_epoch_ns):
-    """Encrypt both actual originals with fresh keys/nonces, then read back both."""
-    scope = validate_scope(scope)
+def _seal_pair(scope, private_documents, *, key_id, kek, now_epoch_ns, profile):
+    scope = _validate_scope(scope, profile)
     _key(key_id, kek)
     _time(scope, now_epoch_ns, sealing=True)
     private, plaintexts = _private(scope, private_documents)
@@ -226,25 +259,24 @@ def seal_pair(scope, private_documents, *, key_id, kek, now_epoch_ns):
         item = {"opaqueId": _identity(scope["publicRequest"]["requestDigest"], _PURPOSES[index]),
             "valueKind": _KINDS[index], "plaintextSha256": sha256(raw), "plaintextBytes": len(raw)}
         dek, wrap_nonce, nonce = os.urandom(32), os.urandom(12), os.urandom(12)
-        wrapped = kek.encrypt(wrap_nonce, dek, _aad(scope, key_id, item, "wrap-dek"))
-        ciphertext = AESGCM(dek).encrypt(nonce, raw, _aad(scope, key_id, item, "encrypt-document"))
+        wrapped = kek.encrypt(wrap_nonce, dek, _aad(scope, key_id, item, "wrap-dek", profile))
+        ciphertext = AESGCM(dek).encrypt(nonce, raw,
+            _aad(scope, key_id, item, "encrypt-document", profile))
         item.update(wrappedKeyNonce=_encoded(wrap_nonce), wrappedKey=_encoded(wrapped),
             ciphertextNonce=_encoded(nonce), ciphertext=_encoded(ciphertext))
         items.append(item)
-    pair = {"schema": PAIR_SCHEMA, "scope": scope, "keyId": key_id, "items": items}
-    _require(canonical(open_pair(pair, expected_scope=scope, key_id=key_id,
-        kek=kek, now_epoch_ns=now_epoch_ns)) == canonical(private))
+    pair = {"schema": profile.pair_schema, "scope": scope, "keyId": key_id, "items": items}
+    _require(canonical(_open_pair(pair, expected_scope=scope, key_id=key_id,
+        kek=kek, now_epoch_ns=now_epoch_ns, profile=profile)) == canonical(private))
     return pair
 
 
-@_checked
-def open_pair(pair, *, expected_scope, key_id, kek, now_epoch_ns):
-    """Private readback only; no review session or release authority is implied."""
-    scope = validate_scope(expected_scope)
+def _open_pair(pair, *, expected_scope, key_id, kek, now_epoch_ns, profile):
+    scope = _validate_scope(expected_scope, profile)
     _key(key_id, kek)
     _time(scope, now_epoch_ns, sealing=False)
     pair = _copy(pair, MAX_PAIR_BYTES)
-    _require(type(pair) is dict and set(pair) == PAIR_FIELDS and pair["schema"] == PAIR_SCHEMA
+    _require(type(pair) is dict and set(pair) == PAIR_FIELDS and pair["schema"] == profile.pair_schema
         and canonical(pair["scope"]) == canonical(scope) and pair["keyId"] == key_id
         and type(pair["items"]) is list and len(pair["items"]) == 2)
     decoded = []
@@ -259,9 +291,10 @@ def open_pair(pair, *, expected_scope, key_id, kek, now_epoch_ns):
             _decoded(item["ciphertext"], MAX_PLAINTEXT_BYTES + 16, item["plaintextBytes"] + 16)))
     plaintexts = []
     for item, (wrap_nonce, wrapped, nonce, ciphertext) in zip(pair["items"], decoded):
-        dek = kek.decrypt(wrap_nonce, wrapped, _aad(scope, key_id, item, "wrap-dek"))
+        dek = kek.decrypt(wrap_nonce, wrapped, _aad(scope, key_id, item, "wrap-dek", profile))
         _require(len(dek) == 32)
-        raw = AESGCM(dek).decrypt(nonce, ciphertext, _aad(scope, key_id, item, "encrypt-document"))
+        raw = AESGCM(dek).decrypt(nonce, ciphertext,
+            _aad(scope, key_id, item, "encrypt-document", profile))
         _require(len(raw) == item["plaintextBytes"] and sha256(raw) == item["plaintextSha256"])
         value = json.loads(raw)
         _require(canonical(value) == raw)
@@ -272,3 +305,31 @@ def open_pair(pair, *, expected_scope, key_id, kek, now_epoch_ns):
     private, _ = _private(scope, {"url": first["url"], "canonical_request": first["canonical_request"],
         "redacted_display": display})
     return private
+
+
+@_checked
+def seal_pair(scope, private_documents, *, key_id, kek, now_epoch_ns):
+    """Encrypt standalone v1 originals with fresh keys/nonces and read back both."""
+    return _seal_pair(scope, private_documents, key_id=key_id, kek=kek,
+        now_epoch_ns=now_epoch_ns, profile=_STANDALONE_PROFILE)
+
+
+@_checked
+def open_pair(pair, *, expected_scope, key_id, kek, now_epoch_ns):
+    """Private v1 readback only; no review session or release authority is implied."""
+    return _open_pair(pair, expected_scope=expected_scope, key_id=key_id, kek=kek,
+        now_epoch_ns=now_epoch_ns, profile=_STANDALONE_PROFILE)
+
+
+@_checked
+def seal_release_pair(scope, private_documents, *, key_id, kek, now_epoch_ns):
+    """Encrypt v2 originals bound to the parent hash already checked by the owner."""
+    return _seal_pair(scope, private_documents, key_id=key_id, kek=kek,
+        now_epoch_ns=now_epoch_ns, profile=_RELEASE_PROFILE)
+
+
+@_checked
+def open_release_pair(pair, *, expected_scope, key_id, kek, now_epoch_ns):
+    """Private v2 readback; the parent hash grants no custody or review authority."""
+    return _open_pair(pair, expected_scope=expected_scope, key_id=key_id, kek=kek,
+        now_epoch_ns=now_epoch_ns, profile=_RELEASE_PROFILE)

@@ -370,6 +370,22 @@ class QuotaState(State):
             "expires_in": ttl, "scope": " ".join(SCOPES)})
 
 
+class FaultState(State):
+    """One consent and zero post arrivals for each fresh claim-ACK fault lane."""
+
+    def _view(self):
+        value = super()._view()
+        value["schema"] = "serverware.privateXQuotaFaultProvider/v1"
+        return value
+
+    def _issue(self, generation, ttl, wall, mono):
+        require(generation == 1 and ttl == INITIAL_TTL_SECONDS)
+        return super()._issue(generation, ttl, wall, mono)
+
+    def _post_selection(self, ordinal):
+        raise ValueError("private fault provider must not receive a post")
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -457,7 +473,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--setup", action="store_true")
     parser.add_argument("--lifetime-seconds", type=int, default=network.KEEPER_SECONDS)
-    parser.add_argument("--profile", choices=("sdk", "quota"), default="sdk")
+    parser.add_argument("--profile", choices=("sdk", "quota", "fault"), default="sdk")
     args = parser.parse_args()
     os.umask(0o077)
     require(args.lifetime_seconds == network.KEEPER_SECONDS)
@@ -472,7 +488,8 @@ def main():
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.set_alpn_protocols(["http/1.1"])
     context.load_cert_chain(str(PKI / "cert.pem"), str(PKI / "key.pem"))
-    state, stopped = (QuotaState if args.profile == "quota" else State)(directory=PKI), threading.Event()
+    selected = {"sdk": State, "quota": QuotaState, "fault": FaultState}[args.profile]
+    state, stopped = selected(directory=PKI), threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stopped.set())
     servers, threads = [], []

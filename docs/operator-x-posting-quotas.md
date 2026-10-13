@@ -3,6 +3,24 @@
 Implementation is being verified; this document is not a deployment or
 real-provider acceptance record.
 
+At the October 13 source checkpoint, `acd157de` passed 120 focused Rust tests
+across 16 filters and produced normal executable
+`fd951c487b04c0c0e4d7a43e0c406484c2efcaa75635c697b9f6a2df9da7de08`.
+Compilation and test-binary success do not establish execution of that normal
+binary. The first ordinary CI run, `38355568971`, passed 45 of 46 suites;
+its sole failure was an incomplete legacy route fixture. The test-only repair
+passed all seven affected controls, with the original failure retained. A
+fresh aggregate CI run, joined SDK/fault lanes and retained-data rollout are
+still required. The running instance has not received this feature yet.
+
+The rendered account/setup suite subsequently passed all ten groups with eight
+masked 1280/390-pixel screenshots and unchanged source. It verified default
+omission, exact limited grants, invalid input and capability withdrawal. The
+first run's stale-read test failure is retained; the correction waits for the
+actual catalog response and rendered refusal, without changing product code.
+All browser API/provider traffic was intercepted: this is UI evidence, not
+provider or proxy enforcement acceptance.
+
 An operator may optionally set `daily_post_attempt_limit` when granting an
 application permission to post to a connected X account. Omit the field for
 no limit; explicit null and non-integer values are invalid. Valid limits are

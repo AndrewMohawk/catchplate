@@ -6,6 +6,7 @@ The runner must start the actual app before creating the curated gate bind.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 import json
 import os
@@ -25,6 +26,9 @@ NODE_MODULES = profiles.NODE_MODULES
 CONTROL_ORIGIN = "https://serverware-x.example.com"
 CHECKER = "/app/scripts/check_operator_x_post.py"
 RUNTIME_SERVICES = {"network", "provider", "serverware", "decision-gate-rs", "edge", "check"}
+FAULT_MODES = ("drop-ack", "revoke-before-release")
+FAULT_RUNTIME_SERVICES = RUNTIME_SERVICES | {"quota-relay"}
+FAULT_RELAY_SECONDS = 240
 INITIAL_TOKEN_SECONDS, CHECKER_SECONDS = 120, 180
 KEEPER_SECONDS, EDGE_SECONDS = 300, 240
 CHECKER_OUTER_SECONDS, PRECHECK_SECONDS = 210, 75
@@ -123,8 +127,10 @@ def dependencies_sha256(value):
 
 
 def build(source, binary, initializer, root, node, node_modules, python_runtime, python_packages, go,
-          *, expected_binary_sha256, expected_go_sha256, expected_dependencies_sha256, quota=False):
+          *, expected_binary_sha256, expected_go_sha256, expected_dependencies_sha256, quota=False, fault_mode=None):
     require(type(quota) is bool, "closed quota profile required")
+    require(fault_mode is None or (type(fault_mode) is str and fault_mode in FAULT_MODES), "closed fault profile required")
+    require(not (quota and fault_mode is not None), "separate fresh quota and fault fixtures required")
     require(root.parent == base.SCRATCH and re.fullmatch(r"serverware-x-post-private\.[A-Za-z0-9]{6,32}", root.name),
         "fresh private X posting root required")
     for value in (expected_binary_sha256, expected_go_sha256, expected_dependencies_sha256):
@@ -192,14 +198,35 @@ def build(source, binary, initializer, root, node, node_modules, python_runtime,
         bind(python_packages, "/example-python/lib/python3.12/site-packages"), bind(go, "/example-go/x-post"),
         bind(LIBATOMIC, "/usr/lib/x86_64-linux-gnu/libatomic.so.1"),
         bind(runtime / "upstream-data/x/ca.pem", "/x-public/ca.pem"), bind(root / "dependencies.json", "/client-dependencies.json")]
-    if quota:
+    if quota or fault_mode is not None:
         # The one explicit feature flag is the only environment change.
         # Clocks, mounts, issuer and trust remain unchanged.
         for service in (app, gate):
             service["environment"]["SERVERWARE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED"] = "1"
+    if quota:
         provider["command"] += ["--profile", "quota"]
         check["command"][0] = "/app/scripts/check_operator_x_quota.py"
-    require(set(services) == RUNTIME_SERVICES | {"initialize", "x-post-pki", "basic-pki"}
+    if fault_mode is not None:
+        provider["command"] += ["--profile", "fault"]
+        check["command"][0] = "/app/scripts/check_operator_x_quota_fault.py"
+        check["command"] += ["--fault-mode", fault_mode]
+        gate["environment"]["SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL"] = "http://serverware:3001/api/data-plane/credential-leases"
+        relay = services["quota-relay"] = deepcopy(provider)
+        relay.update(command=["python", "-B", "-m", "scripts.operator_x_quota_fault_relay",
+            "--lifetime-seconds", str(FAULT_RELAY_SECONDS)],
+            depends_on={"serverware": {"condition": "service_healthy"}},
+            cpus=0.25, mem_limit="128m", memswap_limit="128m", pids_limit=32)
+        relay["volumes"] = [deepcopy(mount) for mount in provider["volumes"]
+            if mount["target"] in {"/app", "/etc/hosts", "/etc/resolv.conf"}]
+        relay["volumes"].append(bind(runtime / ".private-fixture.json", "/private-audit-fixture.json"))
+        relay["healthcheck"] = {"test": ["CMD", "python", "-c",
+            "import json,urllib.request; o=urllib.request.build_opener(urllib.request.ProxyHandler({})); "
+            "r=o.open('http://127.0.0.1:3001/__fault/status',timeout=2); raw=r.read(4097); "
+            "assert r.status==200 and len(raw)<=4096; d=json.loads(raw); "
+            "assert d['schema']=='serverware.privateXQuotaFaultStatus/v1'"],
+            "interval": "3s", "timeout": "3s", "retries": 3, "start_period": "1s"}
+    runtime_services = FAULT_RUNTIME_SERVICES if fault_mode is not None else RUNTIME_SERVICES
+    require(set(services) == runtime_services | {"initialize", "x-post-pki", "basic-pki"}
         and set(config) == {"name", "services"}, "closed X posting service roster required")
     for service in services.values():
         require(len(service["volumes"]) == len({mount["target"] for mount in service["volumes"]}), "duplicate fixture mount")

@@ -121,7 +121,7 @@ class Fixture:
             recipient_attestation=None, max_ttl_seconds=5, request_authority=None, release_authorization=None)
         self.request = SimpleNamespace(scope={DEADLINE_KEY: (self.payload, 110.0)})
         self.snapshot = SimpleNamespace(hash=POLICY)
-        self.route = SimpleNamespace(id=self.payload.route_id)
+        self.route = SimpleNamespace(id=self.payload.route_id, adapter_type="x.post.v1", constraints=[])
         self.credential_policy = SimpleNamespace(injection={"type": "bearer", "header": "Authorization", "field": "access_token"})
         self.prepare = Mock(side_effect=self._prepare)
         self.runtime_read = Mock(return_value=deepcopy(self.credential))

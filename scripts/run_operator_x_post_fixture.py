@@ -140,8 +140,11 @@ class XPostRun(NpmExampleRun):
 
     def inspect_runtime(self, config, image_ids, *, keeper_anchor):
         rows = self.container_rows("created")
-        require(len(rows) == 6 and {row["Config"]["Labels"]["com.docker.compose.service"]
-            for row in rows} == recipe.RUNTIME_SERVICES, "six exact runtime services required")
+        fault_mode = getattr(self.args, "quota_fault", None)
+        require(fault_mode is None or (type(fault_mode) is str and fault_mode in recipe.FAULT_MODES))
+        expected_services = recipe.FAULT_RUNTIME_SERVICES if fault_mode is not None else recipe.RUNTIME_SERVICES
+        require(len(rows) == len(expected_services) and {row["Config"]["Labels"]["com.docker.compose.service"]
+            for row in rows} == expected_services, "exact selected runtime services required")
         by_name = {row["Config"]["Labels"]["com.docker.compose.service"]: row for row in rows}
         network = by_name["network"]
         for name, row in by_name.items():
@@ -168,18 +171,21 @@ class XPostRun(NpmExampleRun):
             require(len(mounts) == len(service["volumes"]) and mounts == {
                 (mount["source"], mount["target"], mount["read_only"]) for mount in service["volumes"]})
             require(row["State"]["Status"] == ("created" if name == "check" else "running"))
-            if name in {"network", "provider", "serverware", "decision-gate-rs"}:
+            if name in {"network", "provider", "serverware", "decision-gate-rs", "quota-relay"}:
                 require(row["State"].get("Health", {}).get("Status") == "healthy")
-            if name in {"network", "provider", "edge"}:
+            if name in {"network", "provider", "edge", "quota-relay"}:
                 started = datetime.datetime.fromisoformat(row["State"]["StartedAt"].replace("Z", "+00:00"))
                 age = (datetime.datetime.now(datetime.timezone.utc) - started).total_seconds()
-                limit = recipe.PRECHECK_SECONDS if name != "edge" else recipe.EDGE_SECONDS - recipe.CHECKER_OUTER_SECONDS
+                limit = (recipe.EDGE_SECONDS - recipe.CHECKER_OUTER_SECONDS if name == "edge" else
+                    recipe.FAULT_RELAY_SECONDS - recipe.CHECKER_OUTER_SECONDS if name == "quota-relay" else recipe.PRECHECK_SECONDS)
                 require(0 <= age < limit, "original X fixture lifetime insufficient")
         require(time.monotonic() - keeper_anchor < recipe.PRECHECK_SECONDS)
         self.save("container-observations.json", [{"id": row["Id"], "service": name,
             "image": row["Image"], "state": row["State"]["Status"]} for name, row in sorted(by_name.items())])
         self.wait_edge_ready(by_name["edge"]["Id"])
         self.edge_started_at = by_name["edge"]["State"]["StartedAt"]
+        if fault_mode is not None:
+            self.fault_relay_started_at = by_name["quota-relay"]["State"]["StartedAt"]
         return {name: row["Id"] for name, row in by_name.items()}
 
     def admit_checker_window(self, edge, *, keeper_anchor, work_anchor):
@@ -203,8 +209,23 @@ class XPostRun(NpmExampleRun):
         names = {row["Config"]["Labels"]["com.docker.compose.service"]: row for row in rows}
         require(set(names) == {"network", "provider", "serverware"}, "gate must not exist before app publication")
         self.initial_view = self.public_view(names["serverware"]["Id"], "app", "before-gate", initial=True)
+        if getattr(self.args, "quota_fault", None) is not None:
+            self.command("fault-relay-start", compose + ["up", "-d", "--no-build", "--pull", "never", "--no-deps",
+                "--wait", "--wait-timeout", "6", "quota-relay"], 9)
         self.command("gate-start", compose + ["up", "-d", "--no-build", "--pull", "never", "--no-deps",
             "--wait", "--wait-timeout", "15", "decision-gate-rs"], 20)
+
+    def admit_fault_relay_window(self, relay):
+        require(re.fullmatch(r"[0-9a-f]{64}", relay))
+        state = json.loads(self.command("fault-relay-launch-state",
+            ["docker", "inspect", "--format", "{{json .State}}", relay], 3))
+        require(state["Status"] == "running" and not state["OOMKilled"]
+            and state.get("Health", {}).get("Status") == "healthy"
+            and state["StartedAt"] == self.fault_relay_started_at, "original fault relay identity changed")
+        started = datetime.datetime.fromisoformat(state["StartedAt"].replace("Z", "+00:00"))
+        age = (datetime.datetime.now(datetime.timezone.utc) - started).total_seconds()
+        require(0 <= age < recipe.FAULT_RELAY_SECONDS - recipe.CHECKER_OUTER_SECONDS,
+            "original fault relay lifetime insufficient")
 
     def quota_helper(self, container, operation, suffix, *arguments):
         require(re.fullmatch(r"[0-9a-f]{64}", container)
@@ -330,7 +351,9 @@ class XPostRun(NpmExampleRun):
     def execute(self):
         args = self.args
         quota = getattr(args, "quota", False)
-        require(type(quota) is bool)
+        fault_mode = getattr(args, "quota_fault", None)
+        require(type(quota) is bool and (fault_mode is None or (type(fault_mode) is str and fault_mode in recipe.FAULT_MODES))
+            and not (quota and fault_mode is not None))
         require(re.fullmatch(r"[0-9a-f]{40}", args.commit))
         for directory in (args.source, args.job_root, args.evidence):
             require(directory.is_dir() and directory.resolve() == directory and not directory.is_symlink())
@@ -350,7 +373,7 @@ class XPostRun(NpmExampleRun):
             config = recipe.build(args.source, args.binary, args.initializer, args.job_root, args.node,
                 args.node_modules, args.python_runtime, args.python_packages, args.go,
                 expected_binary_sha256=args.expected_binary_sha256, expected_go_sha256=args.expected_go_sha256,
-                expected_dependencies_sha256=args.expected_dependencies_sha256, quota=quota)
+                expected_dependencies_sha256=args.expected_dependencies_sha256, quota=quota, fault_mode=fault_mode)
             self.project, self.services = config["name"], config["services"]
             image_ids, self.image_environments = {}, {}
             for index, image in enumerate(sorted({service["image"] for service in self.services.values()})):
@@ -416,6 +439,8 @@ class XPostRun(NpmExampleRun):
                 "from scripts.operator_x_post_fixture_network import assert_isolated_network; assert_isolated_network()"], 5)
             # Same original keeper cutoff; no service or token timer is reset.
             self.deadline = self.admit_checker_window(identities["edge"], keeper_anchor=keeper_anchor, work_anchor=begun)
+            if fault_mode is not None:
+                self.admit_fault_relay_window(identities["quota-relay"])
             phase = "checker"
             checker = identities["check"]
             self.command("checker-start", ["docker", "start", checker], 10)
@@ -427,10 +452,14 @@ class XPostRun(NpmExampleRun):
             from scripts.check_operator_x_post import validate_success_result
             if quota:
                 from scripts.check_operator_x_quota import validate_success_result
+            if fault_mode is not None:
+                from scripts.check_operator_x_quota_fault import validate_success_result
             result = json.loads(raw); validate_success_result(result)
             require(result["dataPlaneBinaryDigest"] == "sha256:" + args.expected_binary_sha256
                 and result["goExampleSha256"] == args.expected_go_sha256
                 and result["dependenciesSha256"] == args.expected_dependencies_sha256)
+            if fault_mode is not None:
+                require(result["faultMode"] == fault_mode, "fault result lane differs")
             phase = "immutable-inputs"
             final_app = self.public_view(identities["serverware"], "app", "after", initial=False)
             final_gate = self.public_view(identities["decision-gate-rs"], "gate", "after", initial=False)
@@ -450,6 +479,7 @@ class XPostRun(NpmExampleRun):
                 "elapsedSeconds": round(time.monotonic() - begun, 3), "syntheticOnly": True,
                 "realXVerified": False, "productionReady": False,
                 **({"quotaProfile": True, "retainedRestart": hasattr(self, "quota_restart")} if quota else {}),
+                **({"quotaFaultMode": fault_mode} if fault_mode is not None else {}),
                 **({"failureSite": failure} if failure is not None else {})})
             print(json.dumps({"phase": phase, "success": success, "cleanup": clean}), flush=True)
         return 0 if success and clean else 1
@@ -460,7 +490,9 @@ def main():
     for name in ("source", "job-root", "evidence", "binary", "go", "node", "node-modules", "initializer", "python-runtime", "python-packages"):
         parser.add_argument("--" + name, type=absolute_path, required=True)
     parser.add_argument("--commit", required=True)
-    parser.add_argument("--quota", action="store_true", help="separate retained-restart, same-subject limit4 acceptance")
+    lane = parser.add_mutually_exclusive_group()
+    lane.add_argument("--quota", action="store_true", help="separate retained-restart, same-subject limit4 acceptance")
+    lane.add_argument("--quota-fault", choices=recipe.FAULT_MODES, help="one fresh process/claim-ACK fault per fixture")
     for name in ("expected-binary-sha256", "expected-go-sha256", "expected-dependencies-sha256"):
         parser.add_argument("--" + name, type=sha256, required=True)
     args = parser.parse_args()

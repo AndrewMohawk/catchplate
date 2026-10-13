@@ -643,6 +643,15 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_operator_x_post_profiles.py \
 	scripts/test_operator_x_post_fixture.py \
 	scripts/test_operator_x_post_checker.py \
+	scripts/test_operator_catalog_x_post.py \
+	scripts/test_operator_x_quota.py \
+	scripts/test_operator_x_quota_api.py \
+	scripts/test_operator_x_quota_checker.py \
+	scripts/test_operator_x_quota_fixture.py \
+	scripts/test_operator_x_quota_fault_relay.py \
+	scripts/test_operator_x_quota_fault_fixture.py \
+	scripts/test_operator_x_quota_fault_checker.py \
+	scripts/test_operator_rollout_x_quota.py \
 	scripts/test_prepare_operator_x_post_fixture.py \
 	scripts/test_run_operator_x_post_fixture.py \
 	scripts/test_agent_trust_import_identity.py \

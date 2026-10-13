@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // Rendered production assets with independent synthetic DTOs only. Every
 // request is fulfilled or refused; no real consent, account, grant, cleanup,
-// provider post, SDK, proxy or recipe is executed. No screenshots are captured.
+// provider post, SDK, proxy or recipe is executed. Quota screenshots contain
+// only synthetic public data; private inputs and app-token fields are masked.
 const assert = require('node:assert/strict');
 const {createHash} = require('node:crypto');
 const {execFileSync} = require('node:child_process');
-const {readFile, readdir} = require('node:fs/promises');
+const {readFile, readdir, mkdtemp} = require('node:fs/promises');
 const {resolve, join} = require('node:path');
 const {ready, view, credential, application, rule, IDS, NOW} = require('./test_operator_catalog_browser.cjs');
 const {fixture: ordinaryFixture, publicCatalog, pair, review, grant, digest} = require('./test_operator_ordinary_modes_browser.cjs');
@@ -29,10 +30,13 @@ const oauthCapability = () => ({schema: 'serverware.operatorXOAuth/v1', connecti
   auth_type: 'x_oauth', permission_preset: BUNDLE, start_path: START, operation_path_prefix: BASE + '/operations/',
   disconnect_review_path_template: BASE + '/accounts/{credential_id}/disconnect-review', disconnect_path: DISCONNECT,
   source_pair_required: true, automatic_refresh: true, daily_quota_available: false});
-const postCapability = () => ({schema: 'serverware.operatorXPost/v1', connection_type: 'x_user_oauth_v1',
+const quotaCapability = () => ({schema: 'serverware.operatorXPostAttemptQuota/v1', field: 'daily_post_attempt_limit',
+  period: 'utc_day', scope: 'verified_x_account', unit: 'posting_attempt', minimum: 1, maximum: 1000000000});
+const postCapability = (quotaReady = false) => ({schema: 'serverware.operatorXPost/v1', connection_type: 'x_user_oauth_v1',
   create_rule_path: GRANT, api_origin: API, destination_allowed: true, operation_bundles: [BUNDLE],
   sdk_auth_token: 'serverware-x-post-placeholder-v1', placeholder: 'Bearer serverware-x-post-placeholder-v1',
-  response_mode: 'x_post_json_v1', source_pair_required: true, daily_quota_available: false});
+  response_mode: 'x_post_json_v1', source_pair_required: true, daily_quota_available: quotaReady,
+  ...(quotaReady ? {daily_quota: quotaCapability()} : {})});
 const account = (changes = {}) => credential({name: 'My X account', auth_type: 'x_oauth',
   connection_type: 'x_user_oauth_v1', provider_id: 'x', provider_subject: '123456', provider_account: '@fixture_user',
   oauth_client_id: CLIENT, permission_preset: BUNDLE, scopes: [...SCOPES], credential_generation: 1, ...changes});
@@ -53,7 +57,7 @@ function configuration(state) {
 function catalog(state) {
   const result = publicCatalog(state);
   result.capabilities.x_oauth = state.gateReady ? oauthCapability() : null;
-  result.capabilities.x_post = state.gateReady ? postCapability() : null;
+  result.capabilities.x_post = state.gateReady ? postCapability(state.quotaReady) : null;
   result.capabilities.application_proxy_authentication = {schema: 'serverware.operatorProxyAuthentication/v1',
     modes: ['bearer', 'basic_and_bearer_v1'], path: '/api/operator-demo/applications/proxy-authentication'};
   return result;
@@ -82,12 +86,30 @@ async function responsive(page) {
     assert.equal(await page.locator('.page:visible').count(), 1);
   }
 }
+async function quotaScreenshots(page, artifacts, name, selectors) {
+  await privacy(page);
+  for (const viewport of [{width: 1280, height: 960}, {width: 390, height: 844}]) {
+    await page.setViewportSize(viewport);
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'quota viewport overflow');
+    for (const selector of selectors) {
+      const control = page.locator(selector); assert(await control.isVisible(), selector + ' visible');
+      const box = await control.boundingBox();
+      assert(box && box.width > 0 && box.height > 0 && box.x >= -1 && box.x + box.width <= viewport.width + 1,
+        selector + ' fits viewport');
+    }
+    const path = join(artifacts.directory, name + '-' + viewport.width + '.png');
+    await page.screenshot({path, fullPage: true,
+      mask: [page.locator('input[type="password"]'), page.locator('#client-token')]});
+    artifacts.paths.push(path);
+  }
+}
 async function fixture(browser, options, exercise) {
   return ordinaryFixture(browser, {credentials: options.empty ? [] : [account()],
     applications: [application({proxy_authentication: 'basic_and_bearer_v1'})], rules: options.rules || [],
     allowedUpstreams: [API], responseModes: ['projected_json', 'unfiltered_json_or_empty_v2'],
     credentialInputModes: ['insert', 'replace_exact'], requestBodyModes: ['preserve_json_v1']}, async (page, state, controls) => {
     state.gateReady = options.gateReady !== false;
+    state.quotaReady = options.quotaReady === true;
     const observed = {starts: [], grants: [], disconnects: [], reads: [], consentNavigations: 0};
     const operations = new Map();
     const answer = (route, value, status = 200) => route.fulfill({status, contentType: 'application/json',
@@ -134,11 +156,21 @@ async function fixture(browser, options, exercise) {
             expires_at_epoch_ms: NOW + 600000, profile_binding_digest: digest(22)}, 201);
         }
         if (url.pathname === GRANT) {
-          assert.deepEqual(Object.keys(body).sort(), ['application_id', 'credential_id', 'expected_policy_hash', 'expected_revision', 'name', 'operation_bundle']);
+          // Independent oracle: only the explicitly selected fixture may add
+          // this field. In particular, no limit is omission, never null or 0.
+          const limited = Object.hasOwn(options, 'expectedLimit');
+          assert.deepEqual(Object.keys(body).sort(), ['application_id', 'credential_id', 'expected_policy_hash',
+            'expected_revision', 'name', 'operation_bundle', ...(limited ? ['daily_post_attempt_limit'] : [])].sort());
+          if (limited) {
+            assert(state.quotaReady); assert(Number.isSafeInteger(body.daily_post_attempt_limit));
+            assert(body.daily_post_attempt_limit >= 1 && body.daily_post_attempt_limit <= 1000000000);
+            assert.equal(body.daily_post_attempt_limit, options.expectedLimit);
+          }
           assert.equal(body.application_id, IDS.application); assert.equal(body.credential_id, IDS.credential);
           assert.equal(body.operation_bundle, BUNDLE); assert.equal(body.name, 'Publish text · @fixture_user');
           assert(state.gateReady); assert.equal(observed.grants.length, 0); observed.grants.push(clone(body));
-          state.rules.push(postRule()); state.revision++; state.active = digest(++state.sequence); state.loaded = state.active;
+          state.rules.push(postRule(limited ? {daily_post_attempt_limit: options.expectedLimit} : {}));
+          state.revision++; state.active = digest(++state.sequence); state.loaded = state.active;
           const result = catalog(state); return await answer(route, {access_rule: result.access_rules[0], revision: result.revision, policy: result.policy}, 201);
         }
         assert.equal(url.pathname, DISCONNECT); assert.equal(observed.disconnects.length, 0);
@@ -183,8 +215,15 @@ async function fixture(browser, options, exercise) {
   });
 }
 async function refresh(page) {
+  // Reads do not set workspace.busy, so an enabled refresh button is not a
+  // completion signal. Join this GET's actual body; callers checking changed
+  // controls must additionally wait for the corresponding rendered state.
+  const received = page.waitForResponse(response => response.url() === ORIGIN + '/api/operator-demo/catalog'
+    && response.request().method() === 'GET');
   await page.locator('#connect-status-refresh').click();
+  const response = await received; assert.equal(response.status(), 200); await response.finished();
   await page.waitForFunction(() => !document.querySelector('#connect-status-refresh').disabled);
+  return response.json();
 }
 async function begin(page) {
   await view(page, 'credentials'); await page.locator('#x-account-name').fill('My X account');
@@ -220,13 +259,84 @@ const tests = [
     for (const id of ['connect-path', 'connect-response-fields', 'connect-request-fields', 'connect-query-keys', 'connect-credential-input']) {
       assert(await page.locator('#' + id).isHidden()); assert(await page.locator('#' + id).isDisabled());
     }
-    assert.match(await page.locator('#connect-x-post-summary').innerText(), /Daily quotas are unavailable/);
-    await review(page); assert.match(await page.locator('#connect-review-details').innerText(), /no daily posting limit/);
+    assert.match(await page.locator('#connect-x-post-summary').innerText(), /does not advertise daily limits/);
+    assert(await page.locator('#connect-x-post-quota-group').isHidden());
+    await review(page); assert.match(await page.locator('#connect-review-details').innerText(), /No daily posting-attempt limit is set/);
     await responsive(page); await grant(page); assert.equal(seen.grants.length, 1);
     assert.deepEqual(state.rules[0], postRule());
     const recipe = await page.locator('#client-command').innerText(); assert(recipe.includes('SERVERWARE_X_POST_CONFIRM=post-once'));
     assert(!recipe.includes(SECRET)); assert(!recipe.includes('fixture_user')); await privacy(page);
   })],
+  ['advertised quota defaults to no limit and omits the field, desktop/mobile', (browser, artifacts) => fixture(browser,
+    {quotaReady: true}, async (page, state, seen) => {
+      await pair(page);
+      assert(await page.locator('#connect-x-post-quota-group').isVisible());
+      assert.equal(await page.locator('#connect-x-post-quota').inputValue(), 'none');
+      assert(await page.locator('#connect-x-post-limit-group').isHidden());
+      assert(await page.locator('#connect-x-post-limit').isDisabled());
+      assert.equal(seen.grants.length, 0);
+      await quotaScreenshots(page, artifacts, 'x-quota-no-limit-form',
+        ['#connect-x-post-quota', 'label[for="connect-x-post-quota"]', '#connect-review']);
+      await review(page);
+      assert.match(await page.locator('#connect-review-details').innerText(), /No daily posting-attempt limit is set/);
+      await quotaScreenshots(page, artifacts, 'x-quota-no-limit-review', ['#connect-review-details', '#connect-grant']);
+      await grant(page); assert.equal(seen.grants.length, 1);
+      assert(!Object.hasOwn(seen.grants[0], 'daily_post_attempt_limit'));
+      assert(!Object.hasOwn(state.rules[0], 'daily_post_attempt_limit'));
+      await refresh(page); assert.equal(seen.grants.length, 1); await privacy(page);
+    })],
+  ['explicit shared limit is reviewed and submitted exactly once, desktop/mobile', (browser, artifacts) => fixture(browser,
+    {quotaReady: true, expectedLimit: 42}, async (page, state, seen) => {
+      await pair(page); await page.locator('#connect-x-post-quota').selectOption('daily');
+      await page.locator('#connect-x-post-limit').fill('42');
+      assert(!(await page.locator('#connect-review').isDisabled()));
+      const description = await page.locator('#connect-x-post-quota-group').innerText();
+      assert.match(description, /even across OAuth clients/); assert.match(description, /Uncertain attempts still count/);
+      assert.match(description, /Usage and reset observations are not available/);
+      await quotaScreenshots(page, artifacts, 'x-quota-limited-form', ['#connect-x-post-quota',
+        '#connect-x-post-limit', 'label[for="connect-x-post-limit"]', '#connect-review']);
+      await review(page); const text = await page.locator('#connect-review-details').innerText();
+      assert.match(text, /42 posting attempts per UTC day across all apps/);
+      assert.match(text, /Uncertain attempts still count/); assert.equal(seen.grants.length, 0);
+      await quotaScreenshots(page, artifacts, 'x-quota-limited-review', ['#connect-review-details', '#connect-grant']);
+      await grant(page); assert.equal(seen.grants.length, 1);
+      assert.equal(seen.grants[0].daily_post_attempt_limit, 42);
+      assert.equal(state.rules[0].daily_post_attempt_limit, 42);
+      assert.match(await page.locator('#client-guidance').innerText(), /42 posting attempts per UTC day/);
+      await refresh(page); assert.equal(seen.grants.length, 1); await privacy(page);
+    })],
+  ['invalid limits cannot reach review while the exact upper bound can', browser => fixture(browser,
+    {quotaReady: true}, async (page, state, seen) => {
+      await pair(page); await page.locator('#connect-x-post-quota').selectOption('daily');
+      for (const value of ['', '0', '-1', '1.5', '01', '1000000001']) {
+        await page.locator('#connect-x-post-limit').fill(value);
+        assert(await page.locator('#connect-review').isDisabled(), 'invalid limit blocks review');
+        assert.match(await page.locator('#connect-x-post-quota-status').innerText(), /whole number/);
+        assert(await page.locator('#connect-review-step').isHidden()); assert.equal(seen.grants.length, 0);
+      }
+      await page.locator('#connect-x-post-limit').fill('1000000000'); await review(page);
+      assert.match(await page.locator('#connect-review-details').innerText(), /1000000000 posting attempts/);
+      assert.equal(seen.grants.length, 0); assert.equal(state.rules.length, 0); await privacy(page);
+    })],
+  ['withdrawn quota capability invalidates review without unlimited fallback', browser => fixture(browser,
+    {quotaReady: true}, async (page, state, seen) => {
+      await pair(page); await page.locator('#connect-x-post-quota').selectOption('daily');
+      await page.locator('#connect-x-post-limit').fill('42'); await review(page);
+      state.quotaReady = false; const refreshed = await refresh(page);
+      assert.equal(refreshed.capabilities.x_post.daily_quota_available, false);
+      assert(!Object.hasOwn(refreshed.capabilities.x_post, 'daily_quota'));
+      await page.waitForFunction(() => document.querySelector('#connect-grant').disabled
+        && document.querySelector('#connect-review-context').textContent.includes('No grant was sent.'));
+      assert(await page.locator('#connect-grant').isDisabled());
+      await page.locator('#connect-back').click();
+      await page.locator('#connect-access-step').waitFor({state: 'visible'});
+      assert.equal(await page.locator('#connect-x-post-quota').inputValue(), 'daily');
+      assert.equal(await page.locator('#connect-x-post-limit').inputValue(), '42');
+      assert(await page.locator('#connect-x-post-quota').isDisabled());
+      assert(await page.locator('#connect-review').isDisabled());
+      assert.match(await page.locator('#connect-x-post-quota-status').innerText(), /no unlimited fallback/);
+      assert.equal(seen.grants.length, 0); assert.equal(state.rules.length, 0); await privacy(page);
+    })],
   ['unavailable gate blocks new posting without generic fallback', browser => fixture(browser, {gateReady: false}, async (page, state, seen) => {
     await pair(page); assert.equal(await page.locator('#connect-operation option:not([disabled])').count(), 0);
     assert.match(await page.locator('#connect-x-post-summary').innerText(), /Posting is unavailable/);
@@ -267,14 +377,17 @@ async function hashes() {
 }
 async function runSuite(browser) {
   const before = await hashes(); const contexts = new Set(); let timer; let finished = false; let passed = 0;
+  const artifacts = {directory: await mkdtemp('/tmp/serverware-x-quota-browser-'), paths: []};
+  console.log(JSON.stringify({phase: 'source-before', hashes: before, artifactDirectory: artifacts.directory}));
   const bounded = {async newContext(...args) { assert(!finished); const context = await browser.newContext(...args);
     if (finished) { await context.close(); throw new Error('suite finished'); }
     contexts.add(context); context.on('close', () => contexts.delete(context)); return context; }};
   try {
-    await Promise.race([(async () => { for (const [name, test] of tests) { await test(bounded); passed++; console.log('PASS ' + name); } })(),
+    await Promise.race([(async () => { for (const [name, test] of tests) { await test(bounded, artifacts); passed++; console.log('PASS ' + name); } })(),
       new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('X accounts browser deadline')), 120000); })]);
     return {ok: true, groups: passed, backendAcceptance: false, providerRequests: 0, proxyRequests: 0,
-      screenshots: 0, recipeExecuted: false, sameSource: true, sourceHashes: before};
+      screenshots: artifacts.paths.length, screenshotPaths: artifacts.paths, artifactDirectory: artifacts.directory,
+      recipeExecuted: false, sameSource: true, sourceHashes: before};
   } finally { finished = true; clearTimeout(timer); await Promise.all([...contexts].map(context => context.close()));
     assert.deepEqual(await hashes(), before, 'consumed frontend/fixture source changed during test'); }
 }

@@ -49,12 +49,16 @@ class RunnerTests(unittest.TestCase):
             "test_operator_x_quota_ui.cjs"}
         x_fixture = {"test_operator_x_post_profiles.py", "test_operator_x_post_fixture.py",
             "test_operator_x_quota_fixture.py", "test_operator_x_quota_checker.py",
+            "test_operator_x_quota_fault_fixture.py", "test_operator_x_quota_fault_checker.py",
             "test_operator_x_post_checker.py", "test_prepare_operator_x_post_fixture.py",
             "test_run_operator_x_post_fixture.py"}
+        relay = "test_operator_x_quota_fault_relay.py"
         self.assertTrue(x_fixture <= set(paths))
         self.assertEqual({row.script for row in runner.SUITES if row.script.startswith(
             ("test_operator_x_", "test_prepare_operator_x_", "test_run_operator_x_"))},
-            x_backend | x_ui | x_fixture)
+            x_backend | x_ui | x_fixture | {relay})
+        observers = {"test_operator_rollout_x_quota.py", "test_operator_rollout_snapshot.py"}
+        self.assertTrue(observers <= set(paths))
         for row in runner.SUITES:
             if row.script in x_backend:
                 self.assertEqual((row.category, row.runtime, row.arguments, row.seconds),
@@ -62,9 +66,12 @@ class RunnerTests(unittest.TestCase):
             elif row.script in x_ui:
                 self.assertEqual((row.category, row.runtime, row.arguments, row.seconds),
                     ("ui_contract", "node", (), 60))
-            elif row.script in x_fixture:
+            elif row.script in x_fixture | observers:
                 self.assertEqual((row.category, row.runtime, row.arguments, row.seconds),
                     ("backend", "python", (), 60))
+            elif row.script == relay:
+                self.assertEqual((row.category, row.runtime, row.arguments, row.seconds),
+                    ("backend", "python", ("--loopback",), 60))
         for excluded in ("test_operator_x_lifecycle_connected.py", "test_operator_x_configuration_connected.py",
                 "test_operator_x_browser.cjs"):
             self.assertNotIn(excluded, paths)
@@ -264,6 +271,36 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("stock_sdk", result["notExecuted"])
             with patch.object(runner, "require_offline_network"), self.assertRaises(runner.Refused):
                 runner.run(args)
+
+    def test_fault_and_observer_commands_preserve_exact_arguments_and_receipts(self):
+        expected = {
+            "test_operator_x_quota_fault_relay.py": ["--loopback"],
+            "test_operator_x_quota_fault_fixture.py": [],
+            "test_operator_x_quota_fault_checker.py": [],
+            "test_operator_rollout_x_quota.py": [],
+            "test_operator_rollout_snapshot.py": [],
+        }
+        selected = tuple(row for row in runner.SUITES if row.script in expected)
+        self.assertEqual(len(selected), len(expected))
+        # Exercise orchestration only, never the loopback/product test bodies.
+        synthetic = {"status": "passed", "exitCode": 0, "observedUnittestCounts": [1]}
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "results"
+            args = SimpleNamespace(python=sys.executable, node=sys.executable, dependency_root=None, output=output)
+            with patch.object(runner, "require_offline_network") as offline, \
+                    patch.object(runner, "SUITES", selected), \
+                    patch.object(runner, "run_process", return_value=synthetic) as run, patch("builtins.print"):
+                self.assertEqual(runner.run(args), 0)
+            offline.assert_called_once_with()
+            self.assertEqual(run.call_count, len(expected))
+            rows = json.loads((output / "result.json").read_text())["suites"]
+            for suite, call, receipt in zip(selected, run.call_args_list, rows):
+                self.assertEqual(call.args[0], [str(Path(sys.executable).resolve()), "-B",
+                    str(runner.ROOT / "scripts" / suite.script), *expected[suite.script]])
+                self.assertEqual(call.kwargs["seconds"], 60)
+                self.assertIsNone(call.kwargs["completion_script"])
+                self.assertEqual((receipt["script"], receipt["arguments"], receipt["category"]),
+                    (suite.script, expected[suite.script], "backend"))
 
     def test_workflow_has_no_live_credentials_build_or_privileged_test_mounts(self):
         value = (runner.ROOT / ".github/workflows/ordinary-regression.yml").read_text()

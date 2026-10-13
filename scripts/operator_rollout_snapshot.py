@@ -11,6 +11,9 @@ it never authorizes setup, custody creation, settings changes or schema repair.
 The separate managed-X-unconfigured profile starts with that retained Google
 tree and admits only its one unconfigured X manifest plus observation of an
 already-created empty X custody directory. It does not initialize that directory.
+Within retained managed-X-unconfigured files, --x-quota-transition separately
+checks the exact additive quota initialization or its unchanged empty state.
+It performs no initialization and preserves all preexisting comparison rules.
 Inventory requires an explicit private-copy or stopped-files acknowledgement.
 The latter records the caller's prerequisite, not proof from this tool: root
 must separately verify that the relevant services are stopped before capturing
@@ -277,7 +280,7 @@ def row_digest(columns, values):
     return digest([columns, sorted((canonical(row), count) for row, count in Counter(values).items())])
 
 
-def compare_databases(before, after):
+def compare_databases(before, after, *, x_quota_transition=None):
     schemas = []
     for connection in (before, after):
         connection.create_function("regexp", 2, lambda pattern, value: None if value is None else
@@ -288,7 +291,13 @@ def compare_databases(before, after):
         schema = connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name LIMIT ?", (MAX_OBJECTS + 1,)).fetchall()
         require(0 < len(schema) <= MAX_OBJECTS, "schema_bound")
         schemas.append(schema)
-    require(schemas[0] == schemas[1], "database_schema_changed")
+    require(x_quota_transition in {None, "first", "retained"}, "x_quota_options")
+    added_tables = frozenset()
+    if x_quota_transition:
+        import operator_rollout_x_quota as quota
+        added_tables = quota.schema_transition(*schemas, x_quota_transition, require)
+    else:
+        require(schemas[0] == schemas[1], "database_schema_changed")
     tables = sorted(row[1] for row in schemas[0] if row[0] == "table")
     require({"audit_events", "metadata_audit_outbox"} <= set(tables), "required_tables_missing")
     present = NOTIFICATIONS & set(tables)
@@ -316,10 +325,20 @@ def compare_databases(before, after):
     columns, old_audit = rows(before, "audit_events", audit=True)
     after_columns, new_audit = rows(after, "audit_events", audit=True)
     require(columns == after_columns and new_audit[:len(old_audit)] == old_audit, "audit_prefix_changed")
-    return {"schema_object_count": len(schemas[0]), "complete_schema_sha256": digest(schemas[0]),
+    quota_result = None
+    if x_quota_transition:
+        quota_result = quota.initialization(before, after, x_quota_transition,
+            len(old_audit), len(new_audit), require)
+        for table in sorted(added_tables):
+            columns_added, values_added = rows(after, table)
+            authority[table] = {"count": len(values_added), "sha256": row_digest(columns_added, values_added)}
+    return {"schema_object_count": len(schemas[1]), "complete_schema_sha256": digest(schemas[1]),
         "all_non_audit_tables": authority, "notification_tables": sorted(present), "migration_timestamps": migrations,
         "prior_audit_count": len(old_audit), "current_audit_count": len(new_audit),
-        "prior_audit_prefix_sha256": digest([columns, old_audit]), "database_schema_equal": True}
+        "prior_audit_prefix_sha256": digest([columns, old_audit]), "database_schema_equal": schemas[0] == schemas[1],
+        **({"x_quota_initialization": quota_result, "prior_complete_schema_sha256": digest(schemas[0]),
+            "prior_schema_object_count": len(schemas[0]), "preexisting_schema_preserved": True}
+            if quota_result is not None else {})}
 
 
 def managed_database_identity(connection, snapshot, *, managed_x_unconfigured=False):
@@ -437,7 +456,11 @@ def load_receipt(filename, *, managed_unconfigured=False, managed_x_unconfigured
 
 def compare(before_root, after_root, before_custody, after_custody, before_inventory, after_inventory,
         *, managed_transition=None, before_provider_custody=None, after_provider_custody=None,
-        managed_x_unconfigured=False, before_x_custody=None, after_x_custody=None):
+        managed_x_unconfigured=False, before_x_custody=None, after_x_custody=None,
+        x_quota_transition=None):
+    require(x_quota_transition in {None, "first", "retained"}
+        and (x_quota_transition is None or (managed_x_unconfigured and managed_transition == "retained")),
+        "x_quota_options")
     require(managed_transition in {None, "first", "retained"}, "managed_options")
     require((before_provider_custody is not None) == (after_provider_custody is not None) == bool(managed_transition), "managed_options")
     require((before_x_custody is not None) == (after_x_custody is not None) == managed_x_unconfigured
@@ -473,7 +496,7 @@ def compare(before_root, after_root, before_custody, after_custody, before_inven
             connection = private_database(root, snapshot, directory)
             stack.callback(connection.close)
             connections.append(connection)
-        database = compare_databases(*connections)
+        database = compare_databases(*connections, x_quota_transition=x_quota_transition)
         managed = None
         if managed_transition:
             managed = managed_database_identity(connections[0], before, managed_x_unconfigured=managed_x_unconfigured)
@@ -493,6 +516,8 @@ def compare(before_root, after_root, before_custody, after_custody, before_inven
     if managed_x_unconfigured:
         result.update(schema="serverware.operatorRolloutComparison/v3", managed_x_unconfigured=True,
             x_custody_empty=True, x_custody_live_identity_preserved=True)
+    if x_quota_transition:
+        result["schema"] = "serverware.operatorRolloutComparison/v4"
     return result
 
 
@@ -523,6 +548,9 @@ def main():
     comparison.add_argument("--managed-x-unconfigured", action="store_true")
     comparison.add_argument("--before-x-custody")
     comparison.add_argument("--after-x-custody")
+    comparison.add_argument("--x-quota-transition", choices=("first", "retained"),
+        help="Exact quota initialization only with retained managed-X-unconfigured files. "
+            "Existing migration timestamp exception still needs the caller's separately bounded check.")
     args = parser.parse_args()
     signal.alarm(120)
     os.umask(0o077)
@@ -541,7 +569,8 @@ def main():
                 managed_x_unconfigured=args.managed_x_unconfigured),
             managed_transition=args.managed_transition, before_provider_custody=args.before_provider_custody,
             after_provider_custody=args.after_provider_custody, managed_x_unconfigured=args.managed_x_unconfigured,
-            before_x_custody=args.before_x_custody, after_x_custody=args.after_x_custody)
+            before_x_custody=args.before_x_custody, after_x_custody=args.after_x_custody,
+            x_quota_transition=args.x_quota_transition)
     print(json.dumps(result, sort_keys=True))
 
 

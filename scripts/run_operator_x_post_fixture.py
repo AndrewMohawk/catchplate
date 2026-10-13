@@ -85,6 +85,36 @@ finally:
 '''
 
 
+# The curated gate has Python, but deliberately no application-source mount.
+# Carry only this fixed standard-library observation into its actual namespace;
+# constants come from the pinned fixture source, never a caller-selected host.
+FAULT_GATE_NETWORK_PROBE = r'''
+import socket
+from pathlib import Path
+def require(condition):
+    if not condition:
+        raise ValueError("isolated managed X namespace refused")
+require({name for _, name in socket.if_nameindex()} == {"lo"})
+routes = Path("/proc/net/route").read_text(encoding="ascii").splitlines()[1:]
+require(all(len(row.split()) >= 8 and row.split()[0] == "lo"
+    and row.split()[1] != "00000000" for row in routes))
+ipv6 = Path("/proc/net/ipv6_route").read_text(encoding="ascii").splitlines()
+require(all(row.split()[-1] == "lo" for row in ipv6 if row.strip()))
+require(Path("/proc/sys/net/ipv4/ip_nonlocal_bind").read_text().strip() == "0")
+require(Path("/etc/hosts").read_bytes() == %r
+    and Path("/etc/resolv.conf").read_bytes() == %r)
+for address in %r:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind((address, 0))
+for host, address in %r:
+    require({item[4][0] for item in socket.getaddrinfo(host, 443, socket.AF_INET,
+        socket.SOCK_STREAM)} == {address})
+''' % (network.FAULT_GATE_HOSTS, network.RESOLV, (network.FIXTURE_IP, network.FAULT_GATE_IP),
+    [(host, network.FIXTURE_IP) for host in network.PROVIDER_HOSTS]
+    + [(host, network.LOOPBACK) for host in (network.CONTROL_HOST, network.PROXY_HOST, "decision-gate-rs")]
+    + [("serverware", network.FAULT_GATE_IP)])
+
+
 class XPostRun(NpmExampleRun):
     """Existing exact-ID discovery/cleanup, with owned group cleanup on exit."""
 
@@ -471,7 +501,7 @@ class XPostRun(NpmExampleRun):
                 "from scripts.operator_x_post_fixture_network import assert_isolated_network; assert_isolated_network()"], 5)
             if fault_mode is not None:
                 self.command("fault-gate-network-proof", ["docker", "exec", identities["decision-gate-rs"], "python", "-B", "-c",
-                    "from scripts.operator_x_post_fixture_network import assert_isolated_network; assert_isolated_network(view='fault-gate')"], 5)
+                    FAULT_GATE_NETWORK_PROBE], 5)
             # Same original keeper cutoff; no service or token timer is reset.
             self.deadline = self.admit_checker_window(identities["edge"], keeper_anchor=keeper_anchor, work_anchor=begun)
             if fault_mode is not None:

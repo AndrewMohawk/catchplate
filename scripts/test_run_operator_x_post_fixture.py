@@ -17,7 +17,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 
 def forbid_runtime(event, args):
@@ -90,6 +90,77 @@ class RunnerTests(unittest.TestCase):
         value = runner.XPostRun(SimpleNamespace(source=self.root, evidence=self.root))
         value.save, value.wait_edge_ready = Mock(), Mock()
         return value
+
+    def test_fault_gate_probe_runs_without_local_imports_and_keeps_all_isolation_guards(self):
+        import pathlib
+        import socket
+        probe = runner.FAULT_GATE_NETWORK_PROBE
+        imports = [ast.unparse(node) for node in ast.parse(probe).body
+            if isinstance(node, (ast.Import, ast.ImportFrom))]
+        self.assertEqual(imports, ["import socket", "from pathlib import Path"])
+        self.assertNotIn("scripts", probe)
+        self.assertNotIn("sys.path", probe)
+        files = {"/proc/net/route": b"Iface Destination Gateway Flags RefCnt Use Metric Mask\n"
+            b"lo 22D8B85D 00000000 0001 0 0 0 FFFFFFFF\n",
+            "/proc/net/ipv6_route": b"00000000000000000000000000000001 80 00 lo\n",
+            "/proc/sys/net/ipv4/ip_nonlocal_bind": b"0\n",
+            "/etc/hosts": runner.network.FAULT_GATE_HOSTS, "/etc/resolv.conf": runner.network.RESOLV}
+        dns = {name: row[0] for row in (line.split() for line in files["/etc/hosts"].decode().splitlines())
+            for name in row[1:]}
+        def run(*, changed_files=None, interfaces=None, changed_dns=None, bind_failure=False):
+            selected = dict(files, **(changed_files or {}))
+            addresses = dict(dns, **(changed_dns or {}))
+            channel = MagicMock()
+            if bind_failure:
+                channel.__enter__.return_value.bind.side_effect = OSError("synthetic missing loopback address")
+            def path(value):
+                raw = selected[value]
+                return SimpleNamespace(read_bytes=lambda: raw, read_text=lambda **kwargs: raw.decode("ascii"))
+            with patch.object(pathlib, "Path", side_effect=path), \
+                    patch.object(socket, "if_nameindex", return_value=interfaces or [(1, "lo")]), \
+                    patch.object(socket, "socket", return_value=channel), \
+                    patch.object(socket, "getaddrinfo", side_effect=lambda host, *args:
+                        [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 443))
+                            for address in ([addresses[host]] if isinstance(addresses[host], str) else addresses[host])]) as resolve:
+                exec(compile(probe, "<fixed-gate-network-proof>", "exec"), {})
+                self.assertEqual([call.args for call in channel.__enter__.return_value.bind.call_args_list],
+                    [((runner.network.FIXTURE_IP, 0),), (("127.0.0.2", 0),)])
+                self.assertEqual({call.args[0] for call in resolve.call_args_list},
+                    {"x.com", "api.x.com", runner.network.CONTROL_HOST, runner.network.PROXY_HOST,
+                        "decision-gate-rs", "serverware"})
+        run()
+        controls = [dict(interfaces=[(1, "lo"), (2, "eth0")]),
+            dict(changed_files={"/proc/net/route": files["/proc/net/route"] + b"lo 00000000 0 0 0 0 0 0\n"}),
+            dict(changed_files={"/proc/net/route": files["/proc/net/route"] + b"eth0 22D8B85D 0 0 0 0 0 0\n"}),
+            dict(changed_files={"/proc/net/route": b"header\nlo short\n"}),
+            dict(changed_files={"/proc/net/ipv6_route": b"00 00 eth0\n"}),
+            dict(changed_files={"/proc/sys/net/ipv4/ip_nonlocal_bind": b"1\n"}),
+            dict(changed_files={"/etc/hosts": runner.network.HOSTS}),
+            dict(changed_files={"/etc/resolv.conf": b"nameserver 8.8.8.8\n"}),
+            dict(changed_dns={"serverware": "127.0.0.1"}),
+            dict(changed_dns={"api.x.com": [runner.network.FIXTURE_IP, "127.0.0.1"]}),
+            dict(bind_failure=True)]
+        for index, control in enumerate(controls):
+            with self.subTest(index=index), self.assertRaises((ValueError, OSError)):
+                run(**control)
+
+    def test_fault_gate_probe_keeps_exact_gate_id_command_deadline_and_provider_proof(self):
+        tree = ast.parse(Path(runner.__file__).read_text())
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute) and node.func.attr == "command"
+            and node.args and isinstance(node.args[0], ast.Constant)]
+        gate = next(node for node in calls if node.args[0].value == "fault-gate-network-proof")
+        command = Mock()
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[ast.Expr(gate)], type_ignores=[])),
+            runner.__file__, "exec"), {"self": SimpleNamespace(command=command), "identities": IDS,
+                "FAULT_GATE_NETWORK_PROBE": runner.FAULT_GATE_NETWORK_PROBE})
+        command.assert_called_once_with("fault-gate-network-proof", ["docker", "exec",
+            IDS["decision-gate-rs"], "python", "-B", "-c", runner.FAULT_GATE_NETWORK_PROBE], 5)
+        provider = next(node for node in calls if node.args[0].value == "network-proof")
+        self.assertIn("assert_isolated_network()", ast.unparse(provider))
+        self.assertIn("identities['provider']", ast.unparse(provider))
+        self.assertFalse(any(mount["target"] == "/app" or mount["target"].startswith("/app/")
+            for mount in configuration()["services"]["decision-gate-rs"]["volumes"]))
 
     def test_original_fixed_budgets_and_dispatch_time_edge_identity(self):
         self.assertEqual((runner.WORK_SECONDS, runner.CLEANUP_SECONDS, runner.recipe.KEEPER_SECONDS,

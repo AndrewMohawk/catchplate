@@ -135,9 +135,9 @@ command, resources and normalized mounts match the successful A+B app; only
 the fault profile's loopback bind differs, and binding happens after imports.
 This is a pre-listen startup failure, not demonstrated quota or relay failure.
 Host I/O pressure and earlier import/compilation stacks are compatible with a
-delay but do not prove its cause. Further joined fault runs are paused pending
-a bounded startup comparison; live services and the successful A+B evidence
-are unchanged.
+delay but do not prove its cause. The bounded startup comparison below preceded
+the next joined fault run; live services and the successful A+B evidence are
+unchanged.
 
 The optional startup optimization prepares checked-hash Python bytecode once,
 outside the source tree, using the exact app image's CPython 3.11.15. The
@@ -161,6 +161,18 @@ explicit cache mounts before adopting them on the live app.
 The initial source batch passed 59 focused cache/recipe/runner/quota controls
 and 12 ordinary-orchestration controls; the new cache suite is included in the
 52-suite ordinary CI inventory. These component results are not startup timing.
+
+At `415faeb4`, actual pinned-image compilation and non-executing consumption of
+all 1,745 cached modules passed. The matched startup samples reached their first
+retained successful health probe in 11.390 seconds without the artifact and
+11.437 seconds with it (`x-quota-startup-comparison.QlUWMT71`). This single pair
+showed no startup-time improvement; the cache remains optional and is not selected
+for the live rollout. The following joined dropped-ACK run reached healthy app,
+relay, gate and edge, then failed in the test-only gate namespace probe because
+the curated gate deliberately has no source mount
+(`x-quota-fault-drop-cached.5yDO3CDa`, 56.261 seconds, cleanup successful).
+The probe now carries only its fixed standard-library checks into that same
+container; no mount, production guard or deadline changes.
 
 The rendered account/setup suite subsequently passed all ten groups with eight
 masked 1280/390-pixel screenshots and unchanged source. It verified default

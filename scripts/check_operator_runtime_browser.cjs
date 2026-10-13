@@ -4,7 +4,7 @@
 // provider, proxy, CA, notification delivery, restart or mutation acceptance.
 // Usage: node scripts/check_operator_runtime_browser.cjs FULL_APP_ID SOURCE_COMMIT FRESH_OUTPUT_DIRECTORY
 //   [--managed-google-unconfigured] [--expected-upstreams JSON_ARRAY] [--expected-catalog-revision INTEGER] [--canonical-origin]
-//   [--source-directory FULL_IMMUTABLE_SNAPSHOT]
+//   [--source-directory FULL_IMMUTABLE_SNAPSHOT] [--managed-x-unconfigured]
 const {readFileSync, realpathSync, lstatSync, mkdirSync, writeFileSync} = require('node:fs');
 const {join, dirname, basename, resolve, isAbsolute} = require('node:path');
 const {createHash} = require('node:crypto');
@@ -18,6 +18,7 @@ const PATHS = ['/', CATALOG, NOTIFICATIONS, UPSTREAMS], FIXTURE = 'https://demo-
 const GOOGLE = '/api/operator-demo/oauth/google/configuration/v2', GMAIL = 'https://gmail.googleapis.com';
 const X_CONFIGURATION = '/api/operator-demo/oauth/x/configuration/v1';
 const X_CONFIGURATION_DISABLED_DETAIL = 'X configuration is not supported by this deployment';
+const X_SCOPES = ['offline.access', 'tweet.read', 'tweet.write', 'users.read'];
 const REVIEWED_UPSTREAMS = [[FIXTURE], [FIXTURE, GMAIL],
   [FIXTURE, 'https://api.github.com', 'https://registry.npmjs.org', GMAIL]];
 const GOOGLE_SCOPES = ['email', 'https://www.googleapis.com/auth/gmail.readonly', 'openid'];
@@ -38,25 +39,27 @@ const serial = value => JSON.stringify(stable(value));
 class Refusal extends Error {}
 function need(value, reason) { if (!value) throw new Refusal(reason); }
 let appId, commit, output, source, manifest, expectedHtml, bridgeCode, browser, context, phase = 'parameters', claimed = false, stopped = false, timer;
-let managedGoogle = false;
+let managedGoogle = false, managedX = false;
 let xConfigurationDisabled = false, xConfigurationBrowserReadComplete = false;
 let expectedUpstreams = [FIXTURE], expectedRevision = null;
-const paths = () => [...PATHS, ...(managedGoogle ? [GOOGLE] : []), ...(xConfigurationDisabled ? [X_CONFIGURATION] : [])];
+const observesX = () => managedX || xConfigurationDisabled;
+const paths = () => [...PATHS, ...(managedGoogle ? [GOOGLE] : []), ...(observesX() ? [X_CONFIGURATION] : [])];
 const children = new Set(), before = {}, seen = {};
 const receipt = {schema: 'serverware.operatorRuntimeReadonlyBrowser/v1', ok: false, gets: [], screenshots: [], refused_requests: 0,
   page_errors: 0, console_errors: 0, boundary: 'Actual internal app HTML/APIs only. No external SSO, provider, proxy, CA, delivery or mutation acceptance.'};
 function parseRuntimeOptions(args) {
-  need(Array.isArray(args) && args.length >= 3 && args.length <= 11 && args.every(value => typeof value === 'string'),
+  need(Array.isArray(args) && args.length >= 3 && args.length <= 12 && args.every(value => typeof value === 'string'),
     'usage_full_app_id_commit_fresh_output');
-  const selected = {appId: args[0], commit: args[1], output: args[2], managedGoogle: false,
+  const selected = {appId: args[0], commit: args[1], output: args[2], managedGoogle: false, managedX: false,
     expectedUpstreams: [FIXTURE], expectedRevision: null, explicitUpstreams: false, publicOrigin: LEGACY_PUBLIC, sourceDirectory: null};
   const used = new Set();
   for (let index = 3; index < args.length; index++) {
     const flag = args[index];
-    need(['--managed-google-unconfigured', '--expected-upstreams', '--expected-catalog-revision', '--canonical-origin', '--source-directory'].includes(flag) && !used.has(flag),
+    need(['--managed-google-unconfigured', '--managed-x-unconfigured', '--expected-upstreams', '--expected-catalog-revision', '--canonical-origin', '--source-directory'].includes(flag) && !used.has(flag),
       'runtime_option_refused');
     used.add(flag);
     if (flag === '--managed-google-unconfigured') selected.managedGoogle = true;
+    else if (flag === '--managed-x-unconfigured') selected.managedX = true;
     else if (flag === '--canonical-origin') selected.publicOrigin = CANONICAL_PUBLIC;
     else {
       const value = args[++index];
@@ -73,6 +76,8 @@ function parseRuntimeOptions(args) {
       }
     }
   }
+  need(!selected.managedX || selected.publicOrigin === CANONICAL_PUBLIC && selected.expectedRevision !== null,
+    'managed_x_profile_parameters_refused');
   return selected;
 }
 function sourceDirectory(commit, explicit = null) {
@@ -167,6 +172,10 @@ function disabledXConfigurationForSource() {
   const selected = serial(sourceScriptFiles());
   return selected === serial(X_CONFIGURATION_SCRIPTS) || selected === serial(X_ACCOUNTS_SCRIPTS);
 }
+function selectXConfigurationProfile() {
+  if (managedX) need(serial(sourceScriptFiles()) === serial(X_ACCOUNTS_SCRIPTS), 'managed_x_source_profile_refused');
+  xConfigurationDisabled = !managedX && disabledXConfigurationForSource();
+}
 function documentBytes() {
   const names = sourceScriptFiles();
   const asset = name => readFileSync(join(source, 'serverware/operator_demo_web', name), 'utf8');
@@ -186,8 +195,19 @@ function snapshot(path, value) {
 }
 function validate(path, value) {
   if (path === X_CONFIGURATION) {
-    need(xConfigurationDisabled && exactKeys(value, ['detail']) && value.detail === X_CONFIGURATION_DISABLED_DETAIL,
-      'disabled_x_configuration_mismatch');
+    if (managedX) {
+      need(!xConfigurationDisabled && exactKeys(value, ['schema', 'state', 'revision', 'policy_hash', 'redirect_uri',
+        'permission_preset', 'scopes', 'configuration', 'operation', 'review', 'blocked_reason', 'consent_ready']) &&
+        value.schema === 'serverware.operatorXConfiguration/v1' && value.state === 'unconfigured' &&
+        value.revision === expectedRevision && value.revision === before[CATALOG].revision &&
+        value.policy_hash === before[CATALOG].policy.policy_hash && PUBLIC === CANONICAL_PUBLIC &&
+        value.redirect_uri === PUBLIC + '/api/oauth/callback/x' && value.permission_preset === 'x_text_post_v1' &&
+        serial(value.scopes) === serial(X_SCOPES) && value.configuration === null && value.operation === null &&
+        value.blocked_reason === null && value.consent_ready === false &&
+        serial(value.review) === serial({expected_revision: expectedRevision, expected_policy_hash: value.policy_hash}),
+        'managed_x_configuration_mismatch');
+    } else need(xConfigurationDisabled && exactKeys(value, ['detail']) && value.detail === X_CONFIGURATION_DISABLED_DETAIL,
+        'disabled_x_configuration_mismatch');
   } else if (path === CATALOG) {
     need(value.schema === 'serverware.operatorCatalog/v1' && value.mode === 'operator-development' && value.productionReady === false &&
       value.hardwareVerified === false && serial(value.allowed_upstreams) === serial(expectedUpstreams), 'catalog_profile_or_destination_changed');
@@ -200,6 +220,10 @@ function validate(path, value) {
     }
     if (managedGoogle) need(value.revision === expectedGoogleRevision() && value.capabilities?.oauth === false && value.capabilities.google_oauth === null,
       'managed_unconfigured_catalog_mismatch');
+    if (managedX) need(!xConfigurationDisabled && expectedRevision !== null && value.capabilities?.x_oauth === null &&
+      value.capabilities.x_post === null && value.policy.activation === 'active' &&
+      /^sha256:[0-9a-f]{64}$/.test(value.policy.policy_hash) && value.policy.loaded_policy_hash === value.policy.policy_hash,
+      'managed_x_catalog_mismatch');
   } else if (path === NOTIFICATIONS) {
     need(value.schema === 'serverware.operatorNotifications/v1' && value.available === true && Array.isArray(value.slots) &&
       serial(value.slots.map(slot => slot.slot).sort()) === serial([...SLOTS].sort()), 'notification_slots_missing');
@@ -246,12 +270,14 @@ function exactKeys(value, keys) {
   return value !== null && typeof value === 'object' && !Array.isArray(value) && serial(Object.keys(value).sort()) === serial([...keys].sort());
 }
 async function get(path) {
-  need(paths().includes(path) && receipt.gets.length < (managedGoogle ? 17 : 16) + (xConfigurationDisabled ? 3 : 0) &&
+  need(!(managedX && xConfigurationDisabled), 'contradictory_x_profile');
+  need(paths().includes(path) && receipt.gets.length < (managedGoogle ? 17 : 16) + (observesX() ? 3 : 0) + (managedX ? 1 : 0) &&
     (path !== X_CONFIGURATION || receipt.gets.filter(item => item.path === path).length < 3), 'get_route_or_bound');
   receipt.gets.push({path, method: 'GET'}); const response = await bridge({op: 'get', path,
-    ...(path === X_CONFIGURATION ? {x_configuration_disabled: true} : managedGoogle ? {managed_google_unconfigured: true} : {})});
+    ...(path === X_CONFIGURATION ? managedX ? {managed_x_unconfigured: true} : {x_configuration_disabled: true} :
+      managedGoogle ? {managed_google_unconfigured: true} : {})});
   const body = Buffer.from(response.body_base64, 'base64');
-  need(response.status === (path === X_CONFIGURATION ? 404 : 200) && body.length > 0 && body.length <= 2 * 1024 * 1024 &&
+  need(response.status === (path === X_CONFIGURATION && xConfigurationDisabled ? 404 : 200) && body.length > 0 && body.length <= 2 * 1024 * 1024 &&
     Array.isArray(response.headers), 'response_invalid');
   if (path === X_CONFIGURATION) need(serial(response.headers.filter(pair => pair[0].toLowerCase() === 'cache-control')
     .map(pair => pair[1])) === serial(['no-store']), 'disabled_x_configuration_cache_mismatch');
@@ -304,10 +330,30 @@ async function verifyXConfigurationDisabled(page) {
     !await page.locator('#credential-fields').isDisabled() && await page.locator('#mutation-review').isHidden(),
     'disabled_x_configuration_panel_or_hold_mismatch');
 }
+async function verifyXConfigurationUnconfigured(page) {
+  if (!managedX) return;
+  need(!xConfigurationDisabled && xConfigurationBrowserReadComplete && seen[X_CONFIGURATION] === 1 && seen[CATALOG] === 2 &&
+    await page.locator('#x-configuration-panel').isVisible() && await page.locator('#x-configuration-form').isVisible() &&
+    !await page.locator('#x-configuration-review').isDisabled() && !await page.locator('#credential-fields').isDisabled() &&
+    await page.locator('#mutation-review').isHidden() &&
+    await page.locator('#x-configuration-callback').innerText() === PUBLIC + '/api/oauth/callback/x' &&
+    (await page.locator('#x-configuration-status').innerText()).startsWith('Not configured.') &&
+    await page.locator('#x-configuration-client-id').inputValue() === '' &&
+    await page.locator('#x-configuration-client-secret').inputValue() === '' &&
+    await page.locator('#x-configuration-save').isDisabled() && await page.locator('#x-configuration-operation').isHidden() &&
+    await page.locator('#x-configuration-account-link').isHidden() &&
+    await page.locator('#x-configuration-scopes').textContent() === X_SCOPES.join('\n'), 'managed_x_panel_or_hold_mismatch');
+}
+function catalogBrowserReadAllowed() {
+  return phase === 'render' && seen[CATALOG] === 1 ||
+    managedX && xConfigurationBrowserReadComplete && seen[X_CONFIGURATION] === 1 && phase === 'proxy' && seen[CATALOG] === 2 ||
+    phase === 'review' && seen[CATALOG] === 2 + (managedX ? 1 : 0) ||
+    managedGoogle && phase === 'google_review' && seen[CATALOG] === 3 + (managedX ? 1 : 0);
+}
 async function run() {
   const selected = parseRuntimeOptions(process.argv.slice(2));
   PUBLIC = new URL(selected.publicOrigin).origin;
-  ({appId, commit, output, managedGoogle, expectedUpstreams, expectedRevision} = selected);
+  ({appId, commit, output, managedGoogle, managedX, expectedUpstreams, expectedRevision} = selected);
   need(/^[0-9a-f]{64}$/.test(appId) && /^[0-9a-f]{40}$/.test(commit) && isAbsolute(output) && resolve(output) === output &&
     realpathSync(dirname(output)) === dirname(output), 'exact_parameters_required');
   source = sourceDirectory(commit, selected.sourceDirectory);
@@ -315,6 +361,7 @@ async function run() {
   mkdirSync(output, {mode: 0o700}); claimed = true; // A used directory can never be replayed.
   receipt.app_container_id = appId; receipt.source_commit = commit; receipt.started_at = new Date().toISOString();
   if (managedGoogle) receipt.mode = 'managed-google-unconfigured';
+  if (managedX) receipt.x_profile = 'managed-x-unconfigured';
   if (selected.explicitUpstreams || expectedRevision !== null) receipt.expected_upstreams = [...expectedUpstreams];
   if (expectedRevision !== null) receipt.expected_catalog_revision = expectedRevision;
   receipt.checker_sha256 = sha(readFileSync(__filename)); receipt.bridge_sha256 = sha(bridgeCode);
@@ -322,7 +369,7 @@ async function run() {
     ...(receipt.expected_upstreams ? {expected_upstreams: receipt.expected_upstreams} : {}),
     ...(expectedRevision !== null ? {expected_catalog_revision: expectedRevision} : {})}) + '\n', {flag: 'wx', mode: 0o600});
   phase = 'identity_before'; await identity();
-  xConfigurationDisabled = disabledXConfigurationForSource();
+  selectXConfigurationProfile();
   if (xConfigurationDisabled) receipt.expected_disabled_x_console_errors = 0;
   expectedHtml = documentBytes();
   phase = 'public_before'; for (const path of paths()) await get(path);
@@ -343,11 +390,10 @@ async function run() {
         !headers['transfer-encoding'] && (!headers['content-length'] || headers['content-length'] === '0'), 'browser_request_refused');
       seen[path] = (seen[path] || 0) + 1;
       need(path === '/' ? phase === 'render' && seen[path] === 1 && request.isNavigationRequest() && request.resourceType() === 'document' :
-        request.resourceType() === 'fetch' && (path === CATALOG ? seen[path] <= (managedGoogle ? 3 : 2) &&
-          ['render', 'review', ...(managedGoogle ? ['google_review'] : [])].includes(phase) :
+        request.resourceType() === 'fetch' && (path === CATALOG ? catalogBrowserReadAllowed() :
           path === UPSTREAMS ? phase === 'review' && seen[path] === 1 : path === GOOGLE ?
             managedGoogle && phase === 'google_review' && seen[path] === 1 : path === X_CONFIGURATION ?
-              xConfigurationDisabled && phase === 'proxy' && seen[path] === 1 :
+              observesX() && phase === 'proxy' && seen[path] === 1 :
               phase === 'notifications' && seen[path] === 1), 'browser_request_phase_refused');
       const response = await get(path);
       if (path === X_CONFIGURATION) xConfigurationBrowserReadComplete = true;
@@ -367,20 +413,22 @@ async function run() {
   await page.waitForFunction(() => !document.getElementById('credential-fields').disabled && document.getElementById('load-error').hidden);
   need(await page.title() === 'Overview - Serverware operator workspace' && seen[CATALOG] === 1, 'landing_failed');
   phase = 'proxy';
-  const xResponse = xConfigurationDisabled ? page.waitForResponse(value =>
+  const xResponse = observesX() ? page.waitForResponse(value =>
     value.url() === PUBLIC + X_CONFIGURATION && value.request().method() === 'GET') : null;
   await navigateSection(page, 'proxy');
   if (xResponse) {
     await (await xResponse).finished();
-    await page.waitForFunction(() => !document.getElementById('credential-fields').disabled &&
-      document.getElementById('mutation-review').hidden && document.getElementById('x-configuration-panel').hidden);
-    await verifyXConfigurationDisabled(page);
+    await page.waitForFunction(enabled => !document.getElementById('credential-fields').disabled &&
+      document.getElementById('mutation-review').hidden && (enabled ?
+        !document.getElementById('x-configuration-review').disabled && !document.getElementById('x-configuration-form').hidden :
+        document.getElementById('x-configuration-panel').hidden), managedX);
+    if (managedX) await verifyXConfigurationUnconfigured(page); else await verifyXConfigurationDisabled(page);
   }
   await verifyProxyDefault(page);
   phase = 'review'; await page.locator('#upstreams-review').click();
   await page.waitForFunction(() => !document.getElementById('upstreams-review').disabled && !document.getElementById('upstreams-form').hidden);
   await page.waitForLoadState('networkidle');
-  need(seen[UPSTREAMS] === 1 && seen[CATALOG] === 2 && await page.locator('#upstreams-proposed').inputValue() === expectedUpstreams.join('\n') &&
+  need(seen[UPSTREAMS] === 1 && seen[CATALOG] === 2 + (managedX ? 1 : 0) && await page.locator('#upstreams-proposed').inputValue() === expectedUpstreams.join('\n') &&
     await page.locator('#upstreams-effective').innerText() === expectedUpstreams.join('\n') && await page.locator('#upstreams-prepare').isDisabled() &&
     await page.locator('#upstreams-operation').isHidden() && (await page.locator('#upstreams-form').innerText()).includes('cold restart before it takes effect'), 'review_not_readonly');
   for (const width of [1280, 390]) { await page.setViewportSize({width, height: width === 1280 ? 960 : 844}); await capture(page, '#proxy', 'proxy-review-' + width + '.png'); }
@@ -392,7 +440,7 @@ async function run() {
     await page.locator('#google-configuration-review').click(); await (await response).finished();
     await page.waitForFunction(() => !document.getElementById('google-configuration-review').disabled &&
       !document.getElementById('google-configuration-form').hidden);
-    need(seen[GOOGLE] === 1 && seen[CATALOG] === 3 &&
+    need(seen[GOOGLE] === 1 && seen[CATALOG] === 3 + (managedX ? 1 : 0) &&
       await page.locator('#google-configuration-callback').innerText() === PUBLIC + '/api/oauth/callback/google' &&
       (await page.locator('#google-configuration-discovery-state').innerText()).startsWith('Not configured.') &&
       await page.locator('#google-configuration-client-id').inputValue() === '' &&
@@ -432,9 +480,9 @@ async function run() {
   await context.close(); context = null; await browser.close(); need(!browser.isConnected(), 'browser_close_unconfirmed'); browser = null;
   phase = 'public_after'; for (const path of paths()) await get(path);
   phase = 'identity_after'; await identity();
-  need(receipt.gets.length === (managedGoogle ? 17 : 13) + (xConfigurationDisabled ? 3 : 0) &&
-    (!xConfigurationDisabled || receipt.gets.filter(item => item.path === X_CONFIGURATION).length === 3 &&
-      receipt.expected_disabled_x_console_errors <= 1) &&
+  need(receipt.gets.length === (managedGoogle ? 17 : 13) + (observesX() ? 3 : 0) + (managedX ? 1 : 0) &&
+    (!observesX() || receipt.gets.filter(item => item.path === X_CONFIGURATION).length === 3) &&
+    (!xConfigurationDisabled || receipt.expected_disabled_x_console_errors <= 1) &&
     receipt.refused_requests === 0 && receipt.page_errors === 0 && receipt.console_errors === 0 && children.size === 0, 'final_boundary_check_failed');
   receipt.source = manifest; receipt.html_sha256 = sha(expectedHtml);
   receipt.unchanged_public_sha256 = Object.fromEntries(Object.entries(before).map(([path, value]) => [path, sha(serial(value))]));
@@ -446,6 +494,7 @@ async function run() {
   if (managedGoogle) receipt.checks.push(expectedRevision === null ? 'managed_unconfigured_exact_GET_review_revision13_pair_ready_no_consent' :
     'managed_unconfigured_exact_reviewed_revision_pair_ready_no_consent', 'empty_writeonly_provider_form_no_prepare');
   if (xConfigurationDisabled) receipt.checks.push('exact_disabled_x_discovery_panel_hidden_no_hold');
+  if (managedX) receipt.checks.push('exact_enabled_x_unconfigured_GET_profile_no_consent_or_write', 'one_X_discovery_catalog_refresh');
   receipt.ok = true; phase = 'complete';
 }
 (async () => {

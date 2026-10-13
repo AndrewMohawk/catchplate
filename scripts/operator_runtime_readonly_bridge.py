@@ -21,6 +21,7 @@ PATHS = {"/", "/api/operator-demo/catalog", "/api/operator-demo/notifications", 
 GOOGLE_CONFIGURATION = "/api/operator-demo/oauth/google/configuration/v2"
 X_CONFIGURATION = "/api/operator-demo/oauth/x/configuration/v1"
 X_DISABLED_DETAIL = "X configuration is not supported by this deployment"
+X_SCOPES = ["offline.access", "tweet.read", "tweet.write", "users.read"]
 PRIVATE = {"secret", "client_token", "access_token", "refresh_token", "id_token", "admin_token", "encrypted_secret",
            "token_hash", "secret_nonce", "encrypted_dek", "client_secret", "provider_secret", "password",
            "proxy_password", "proxy_authorization", "authorization", "cookie", "set_cookie", "private_key"}
@@ -38,8 +39,16 @@ def public_origin():
     return value
 
 
+def unique(pairs):
+    value = {}
+    for key, item in pairs:
+        require(key not in value)
+        value[key] = item
+    return value
+
+
 def public_json(body, token):
-    pending, seen = [(json.loads(body), 0)], 0
+    pending, seen = [(json.loads(body, object_pairs_hook=unique), 0)], 0
     while pending:
         item, depth = pending.pop()
         seen += 1
@@ -84,6 +93,12 @@ def get_path(command):
             and command["x_configuration_disabled"] is True and command["path"] == X_CONFIGURATION
             and os.environ.get("SERVERWARE_OPERATOR_MANAGED_X_ENABLED", "0") == "0")
         return command["path"]
+    if "managed_x_unconfigured" in command:
+        require(set(command) == {"op", "path", "managed_x_unconfigured"}
+            and command["managed_x_unconfigured"] is True and command["path"] == X_CONFIGURATION
+            and os.environ.get("SERVERWARE_OPERATOR_MANAGED_X_ENABLED") == "1"
+            and public_origin() == CANONICAL_PUBLIC)
+        return command["path"]
     managed = "managed_google_unconfigured" in command
     require(set(command) == ({"op", "path", "managed_google_unconfigured"} if managed else {"op", "path"}))
     if managed:
@@ -91,6 +106,21 @@ def get_path(command):
             and os.environ.get("SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED") == "1")
     require(command["path"] in PATHS or managed and command["path"] == GOOGLE_CONFIGURATION)
     return command["path"]
+
+
+def x_unconfigured(value, origin):
+    require(type(value) is dict and set(value) == {"schema", "state", "revision", "policy_hash", "redirect_uri",
+        "permission_preset", "scopes", "configuration", "operation", "review", "blocked_reason", "consent_ready"})
+    require(value["schema"] == "serverware.operatorXConfiguration/v1" and value["state"] == "unconfigured"
+        and type(value["revision"]) is int and 0 < value["revision"] <= 2**53 - 1
+        and type(value["policy_hash"]) is str and re.fullmatch(r"sha256:[0-9a-f]{64}", value["policy_hash"])
+        and origin == CANONICAL_PUBLIC and value["redirect_uri"] == origin + "/api/oauth/callback/x"
+        and value["permission_preset"] == "x_text_post_v1" and value["scopes"] == X_SCOPES
+        and value["configuration"] is None and value["operation"] is None
+        and value["blocked_reason"] is None and value["consent_ready"] is False)
+    require(type(value["review"]) is dict and set(value["review"]) == {"expected_revision", "expected_policy_hash"}
+        and type(value["review"]["expected_revision"]) is int
+        and value["review"] == {"expected_revision": value["revision"], "expected_policy_hash": value["policy_hash"]})
 
 
 def get(command):
@@ -112,7 +142,7 @@ def get(command):
             "X-Serverware-Admin-Token": token, "Accept-Encoding": "identity", "Accept": media, "Connection": "close"})
         response = connection.getresponse()
         headers = response.getheaders()
-        require(response.status == (404 if path == X_CONFIGURATION else 200)
+        require(response.status == (404 if command.get("x_configuration_disabled") is True else 200)
             and len(headers) <= 64 and len({key.lower() for key, _ in headers}) == len(headers))
         require(all(token not in key and token not in value and len(key) + len(value) <= 8192 and
                     key.lower() not in {"location", "set-cookie", "content-encoding", "transfer-encoding", "www-authenticate"} for key, value in headers))
@@ -126,9 +156,11 @@ def get(command):
         if path != "/":
             public_json(body, token)
         if path == X_CONFIGURATION:
-            # Exactly this public disabled response, including duplicate-field
-            # refusal. No generic 404 acceptance or error-body forwarding.
-            require(json.loads(body, object_pairs_hook=tuple) == (("detail", X_DISABLED_DETAIL),))
+            if command.get("managed_x_unconfigured") is True:
+                x_unconfigured(json.loads(body, object_pairs_hook=unique), origin)
+            else:
+                # No generic 404 acceptance or error-body forwarding.
+                require(json.loads(body, object_pairs_hook=tuple) == (("detail", X_DISABLED_DETAIL),))
         return {"ok": True, "status": response.status, "headers": headers, "body_base64": base64.b64encode(body).decode("ascii")}
     finally:
         connection.close()

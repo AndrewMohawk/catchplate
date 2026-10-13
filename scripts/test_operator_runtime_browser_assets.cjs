@@ -143,6 +143,19 @@ function disabledX(managed = false, variantIndex = 5) {
     body_base64: Buffer.from(JSON.stringify(X_DISABLED)).toString('base64')};
   return f;
 }
+function enabledX(managed = false) {
+  const sample = reviewed(UPSTREAM_LISTS[2], 81, managed), {f, catalog} = sample;
+  f.run('managedX = true; PUBLIC = CANONICAL_PUBLIC; selectXConfigurationProfile();');
+  Object.assign(catalog.capabilities, {x_oauth: null, x_post: null});
+  const configuration = {schema: 'serverware.operatorXConfiguration/v1', state: 'unconfigured', revision: 81,
+    policy_hash: POLICY, redirect_uri: 'https://serverware.example.com/api/oauth/callback/x',
+    permission_preset: 'x_text_post_v1', scopes: ['offline.access', 'tweet.read', 'tweet.write', 'users.read'],
+    configuration: null, operation: null, blocked_reason: null, consent_ready: false,
+    review: {expected_revision: 81, expected_policy_hash: POLICY}};
+  f.context.fixtureReply = {status: 200, headers: [['content-type', 'application/json'], ['cache-control', 'no-store']],
+    body_base64: Buffer.from(JSON.stringify(configuration)).toString('base64')};
+  return {...sample, configuration};
+}
 
 const tests = [
   ['only the exact Docker CLI receives a bounded Go scheduler in its clean child environment', () => {
@@ -299,9 +312,9 @@ const tests = [
       assert.equal(bounded.context.fixtureRequests.length, 1, 'total GET bound still enforced');
     }
     const runSource = source.slice(source.indexOf('async function run()'), source.indexOf(entrypoint));
-    assert(runSource.indexOf('await identity();') < runSource.indexOf('xConfigurationDisabled = disabledXConfigurationForSource()'));
+    assert(runSource.indexOf('await identity();') < runSource.indexOf('selectXConfigurationProfile()'));
     assert(runSource.indexOf('xConfigurationBrowserReadComplete = true;') < runSource.indexOf('await route.fulfill(response)'));
-    assert(runSource.includes("xConfigurationDisabled && phase === 'proxy' && seen[path] === 1"));
+    assert(runSource.includes("observesX() && phase === 'proxy' && seen[path] === 1"));
     assert.equal(forbiddenCalls, 0);
   }],
   ['X accounts roster permits no consent, operation, disconnect, posting or alternate configuration requests', async () => {
@@ -512,7 +525,7 @@ const tests = [
   ['runtime options accept only the three exact reviewed rosters and positive safe revisions', () => {
     const f = fixture(), base = ['a'.repeat(64), 'b'.repeat(40), '/synthetic/fresh'];
     const parse = args => { f.context.args = args; return JSON.parse(f.run('JSON.stringify(parseRuntimeOptions(args))')); };
-    assert.deepEqual(parse(base), {appId: base[0], commit: base[1], output: base[2], managedGoogle: false,
+    assert.deepEqual(parse(base), {appId: base[0], commit: base[1], output: base[2], managedGoogle: false, managedX: false,
       expectedUpstreams: [FIXTURE], expectedRevision: null, explicitUpstreams: false, publicOrigin: PUBLIC, sourceDirectory: null});
     assert.equal(parse([...base, '--managed-google-unconfigured']).managedGoogle, true);
     for (const origins of UPSTREAM_LISTS) {
@@ -719,6 +732,124 @@ const tests = [
       else await assert.rejects(f.run('verifyProxyDefault(fixturePage)'), error => error.message === 'proxy_default_mismatch');
       assert.equal(f.context.fixtureRequests.length, 0);
     }
+  }],
+  ['managed-X selection is explicit canonical and revision-bound, never inferred from source or an enabled response', () => {
+    const f = fixture(), base = ['a'.repeat(64), 'b'.repeat(40), '/synthetic/fresh'];
+    const parse = args => { f.context.args = args; return JSON.parse(f.run('JSON.stringify(parseRuntimeOptions(args))')); };
+    assert.equal(parse(base).managedX, false);
+    const selected = [...base, '--managed-x-unconfigured', '--canonical-origin', '--expected-catalog-revision', '81'];
+    assert.equal(parse(selected).managedX, true);
+    assert.equal(parse([...selected, '--managed-google-unconfigured', '--expected-upstreams', JSON.stringify(UPSTREAM_LISTS[2]),
+      '--source-directory', '/immutable/source-' + base[1]]).managedGoogle, true);
+    for (const args of [[...base, '--managed-x-unconfigured'], [...base, '--managed-x-unconfigured', '--canonical-origin'],
+      [...base, '--managed-x-unconfigured', '--expected-catalog-revision', '81'],
+      [...selected, '--managed-x-unconfigured'], [...selected, '--x-configuration-disabled'],
+      [...base, '--managed-x-unconfigured=true']]) assert.throws(() => parse(args));
+    for (const [index, variant] of reference.variants.entries()) {
+      const sample = fixture({'operator_demo_portal.py': 'SCRIPT_FILES = (' + variant.scripts.map(JSON.stringify).join(', ') + ')\n'});
+      sample.run('selectXConfigurationProfile()');
+      assert.equal(sample.run('managedX'), false);
+      assert.equal(sample.run('xConfigurationDisabled'), index >= 5);
+      sample.run('managedX = true');
+      if (index === 6) { sample.run('selectXConfigurationProfile()'); assert.equal(sample.run('xConfigurationDisabled'), false); }
+      else assert.throws(() => sample.run('selectXConfigurationProfile()'), error => error.message === 'managed_x_source_profile_refused');
+    }
+    assert.equal(forbiddenCalls, 0);
+  }],
+  ['enabled-X joins exact null catalog capabilities and closed unconfigured configuration to the current policy', async () => {
+    for (const managed of [false, true]) {
+      const {f, catalog, configuration} = enabledX(managed); validate(f, CATALOG, catalog);
+      for (let i = 0; i < 3; i++) {
+        const reply = await f.run('get(X_CONFIGURATION)'); assert.equal(reply.status, 200);
+        assert.deepEqual(JSON.parse(reply.body), configuration);
+      }
+      assert.deepEqual(JSON.parse(JSON.stringify(f.context.fixtureRequests)), Array.from({length: 3}, () =>
+        ({op: 'get', path: X_CONFIGURATION, managed_x_unconfigured: true})));
+      await assert.rejects(f.run('get(X_CONFIGURATION)'), error => error.message === 'get_route_or_bound');
+      assert.equal(f.context.fixtureRequests.length, 3);
+    }
+    for (const mutate of [v => delete v.capabilities.x_oauth, v => delete v.capabilities.x_post,
+      v => v.capabilities.x_oauth = {}, v => v.capabilities.x_post = {}, v => v.policy.activation = 'pending',
+      v => v.policy.loaded_policy_hash = 'sha256:' + 'b'.repeat(64)]) {
+      const sample = enabledX(); mutate(sample.catalog);
+      assert.throws(() => validate(sample.f, CATALOG, sample.catalog));
+    }
+    for (const mutate of [v => v.state = 'configured', v => v.schema = 'other', v => v.extra = true,
+      v => v.revision++, v => v.policy_hash = 'sha256:' + 'b'.repeat(64), v => v.redirect_uri = PUBLIC + '/api/oauth/callback/x',
+      v => v.permission_preset = 'x_readonly', v => v.scopes.reverse(), v => v.scopes.push('extra'),
+      v => v.configuration = {}, v => v.operation = {}, v => v.blocked_reason = 'pending_google_configuration',
+      v => v.consent_ready = true, v => v.review.expected_revision++, v => v.review.extra = true,
+      v => v.review.expected_policy_hash = 'sha256:' + 'b'.repeat(64)]) {
+      const sample = enabledX(); validate(sample.f, CATALOG, sample.catalog); mutate(sample.configuration);
+      assert.throws(() => validate(sample.f, X_CONFIGURATION, sample.configuration), error => error.message === 'managed_x_configuration_mismatch');
+    }
+    for (const mutate of [r => r.status = 404, r => r.status = 503, r => r.headers.pop(),
+      r => r.headers.push(['Cache-Control', 'no-store']), r => r.body_base64 = Buffer.from(JSON.stringify(X_DISABLED)).toString('base64')]) {
+      const sample = enabledX(); validate(sample.f, CATALOG, sample.catalog); mutate(sample.f.context.fixtureReply);
+      await assert.rejects(sample.f.run('get(X_CONFIGURATION)')); assert.equal(sample.f.context.fixtureRequests.length, 1);
+    }
+    const sample = enabledX(); validate(sample.f, CATALOG, sample.catalog);
+    sample.f.run('xConfigurationDisabled = true');
+    await assert.rejects(sample.f.run('get(X_CONFIGURATION)'), error => error.message === 'contradictory_x_profile');
+    assert.equal(sample.f.context.fixtureRequests.length, 0);
+    const historical = disabledX(); historical.context.fixtureReply = enabledX().f.context.fixtureReply;
+    await assert.rejects(historical.run('get(X_CONFIGURATION)'), error => error.message === 'response_invalid');
+    assert.equal(historical.run('managedX'), false, 'no disabled-to-enabled fallback');
+  }],
+  ['only successful enabled-X discovery permits its one additional proxy-phase catalog GET', async () => {
+    for (const managed of [false, true]) {
+      const {f, catalog} = enabledX(managed); validate(f, CATALOG, catalog);
+      f.run('phase = "proxy"; seen[CATALOG] = 2; seen[X_CONFIGURATION] = 1;');
+      assert.equal(f.run('catalogBrowserReadAllowed()'), false, 'no extra read before successful discovery');
+      f.run('xConfigurationBrowserReadComplete = true'); assert.equal(f.run('catalogBrowserReadAllowed()'), true);
+      for (const count of [0, 2]) { f.context.count = count; f.run('seen[X_CONFIGURATION] = count'); assert.equal(f.run('catalogBrowserReadAllowed()'), false); }
+      f.run('seen[X_CONFIGURATION] = 1; seen[CATALOG] = 3'); assert.equal(f.run('catalogBrowserReadAllowed()'), false);
+      f.run('phase = "review"'); assert.equal(f.run('catalogBrowserReadAllowed()'), true);
+      f.run('phase = "google_review"; seen[CATALOG] = 4'); assert.equal(f.run('catalogBrowserReadAllowed()'), managed);
+      f.context.cap = (managed ? 17 : 16) + 4;
+      f.run('receipt.gets = Array.from({length: cap - 1}, () => ({path: "/", method: "GET"}));');
+      await f.run('get(X_CONFIGURATION)');
+      await assert.rejects(f.run('get(X_CONFIGURATION)'), error => error.message === 'get_route_or_bound');
+      assert.equal(f.context.fixtureRequests.length, 1);
+      const disabled = disabledX(managed);
+      disabled.run('phase = "proxy"; seen[CATALOG] = 2; seen[X_CONFIGURATION] = 1; xConfigurationBrowserReadComplete = true;');
+      assert.equal(disabled.run('catalogBrowserReadAllowed()'), false);
+      disabled.run('phase = "review"'); assert.equal(disabled.run('catalogBrowserReadAllowed()'), true);
+    }
+    const runSource = source.slice(source.indexOf('async function run()'), source.indexOf(entrypoint));
+    assert(runSource.includes("receipt.gets.length === (managedGoogle ? 17 : 13) + (observesX() ? 3 : 0) + (managedX ? 1 : 0)"));
+    assert.equal(forbiddenCalls, 0);
+  }],
+  ['enabled-X DOM requires empty first-save controls and no consent, mutation hold, or replay', async () => {
+    const visible = ['#x-configuration-panel', '#x-configuration-form'];
+    const hidden = ['#mutation-review', '#x-configuration-operation', '#x-configuration-account-link'];
+    for (const failed of [null, 'completion', 'catalog', ...visible, ...hidden, '#x-configuration-review', '#credential-fields',
+      '#x-configuration-save', '#x-configuration-callback', '#x-configuration-status', '#x-configuration-client-id',
+      '#x-configuration-client-secret', '#x-configuration-scopes']) {
+      const {f} = enabledX();
+      f.run('xConfigurationBrowserReadComplete = true; seen[X_CONFIGURATION] = 1; seen[CATALOG] = 2;');
+      if (failed === 'completion') f.run('xConfigurationBrowserReadComplete = false');
+      if (failed === 'catalog') f.run('seen[CATALOG] = 1');
+      f.context.fixturePage = {locator(selector) { return {
+        async isVisible() { assert(visible.includes(selector)); return failed !== selector; },
+        async isHidden() { assert(hidden.includes(selector)); return failed !== selector; },
+        async isDisabled() { return selector === '#x-configuration-save' ? failed !== selector : failed === selector; },
+        async inputValue() { return failed === selector ? 'synthetic-input-canary' : ''; },
+        async innerText() { return failed === selector ? 'wrong' : selector === '#x-configuration-callback' ?
+          'https://serverware.example.com/api/oauth/callback/x' : 'Not configured. Enter settings.'; },
+        async textContent() { return failed === selector ? 'wrong' : ['offline.access', 'tweet.read', 'tweet.write', 'users.read'].join('\n'); }
+      }; }};
+      if (failed === null) await f.run('verifyXConfigurationUnconfigured(fixturePage)');
+      else await assert.rejects(f.run('verifyXConfigurationUnconfigured(fixturePage)'), error => error.message === 'managed_x_panel_or_hold_mismatch');
+      assert.equal(f.context.fixtureRequests.length, 0);
+    }
+    const disabled = disabledX(); disabled.context.fixturePage = {locator: forbidden};
+    await disabled.run('verifyXConfigurationUnconfigured(fixturePage)');
+    const {f} = enabledX(); f.run('xConfigurationBrowserReadComplete = true; seen[X_CONFIGURATION] = 1;');
+    f.context.fixtureMessage = {type: () => 'error', location: () => ({url: 'https://serverware.example.com' + X_CONFIGURATION}),
+      text: () => 'Failed to load resource: the server responded with a status of 404 (Not Found)'};
+    f.run('recordConsole(fixtureMessage)'); assert.equal(f.run('receipt.console_errors'), 1, 'enabled mode has no 404 exception');
+    assert.equal(forbiddenCalls, 0);
   }],
 ];
 

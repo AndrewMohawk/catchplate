@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+from copy import deepcopy
 import io
 import json
 import os
@@ -63,6 +64,17 @@ class RuntimeReadonlyBridgeTests(unittest.TestCase):
 
     def x_command(self):
         return {"op": "get", "path": bridge.X_CONFIGURATION, "x_configuration_disabled": True}
+
+    def x_enabled_command(self):
+        return {"op": "get", "path": bridge.X_CONFIGURATION, "managed_x_unconfigured": True}
+
+    def x_unconfigured(self):
+        return {"schema": "serverware.operatorXConfiguration/v1", "state": "unconfigured", "revision": 81,
+            "policy_hash": "sha256:" + "a" * 64,
+            "redirect_uri": bridge.CANONICAL_PUBLIC + "/api/oauth/callback/x", "permission_preset": "x_text_post_v1",
+            "scopes": ["offline.access", "tweet.read", "tweet.write", "users.read"],
+            "configuration": None, "operation": None, "blocked_reason": None, "consent_ready": False,
+            "review": {"expected_revision": 81, "expected_policy_hash": "sha256:" + "a" * 64}}
 
     def fake_get(self, *, command=None, status=404, headers=None, body=None):
         """Exercise actual get() with only private-file and HTTP edges replaced."""
@@ -239,6 +251,89 @@ class RuntimeReadonlyBridgeTests(unittest.TestCase):
                     self.assertEqual(result["status"], 200)
                     with self.assertRaises(ValueError):
                         self.fake_get(command=command)
+
+    def test_x_enabled_profile_is_explicit_exact_and_refuses_contradictions_before_io(self):
+        environment = {"SERVERWARE_PUBLIC_URL": bridge.CANONICAL_PUBLIC, "SERVERWARE_OPERATOR_MANAGED_X_ENABLED": "1"}
+        command = self.x_enabled_command()
+        with patch.dict(os.environ, environment, clear=True):
+            self.assertEqual(bridge.get_path(command), bridge.X_CONFIGURATION)
+        environments = [{**environment, "SERVERWARE_OPERATOR_MANAGED_X_ENABLED": flag}
+            for flag in ("0", "", "true", "01", "1 ")]
+        environments += [{"SERVERWARE_PUBLIC_URL": bridge.CANONICAL_PUBLIC},
+            {"SERVERWARE_OPERATOR_MANAGED_X_ENABLED": "1"}, {**environment, "SERVERWARE_PUBLIC_URL": bridge.PUBLIC}]
+        commands = [{**command, "managed_x_unconfigured": value} for value in (False, 1, "true", None)]
+        commands += [{**command, "path": path} for path in bridge.PATHS | {bridge.GOOGLE_CONFIGURATION,
+            bridge.X_CONFIGURATION + "/", bridge.X_CONFIGURATION + "?x=1", "/api/operator-demo/oauth/x/start"}]
+        commands += [{"op": "get", "path": bridge.X_CONFIGURATION}, self.x_command(),
+            {**command, "x_configuration_disabled": True}, {**command, "managed_google_unconfigured": True},
+            {**command, "headers": {}}, {**command, "body": ""}, {**command, "op": "post"}]
+        with patch.object(bridge.os, "open") as opened, patch.object(bridge.http.client, "HTTPConnection") as connected:
+            for changed in environments:
+                with self.subTest(environment=changed), patch.dict(os.environ, changed, clear=True), self.assertRaises(ValueError):
+                    bridge.get(command)
+            with patch.dict(os.environ, environment, clear=True):
+                for changed in commands:
+                    with self.subTest(command=changed), self.assertRaises(ValueError):
+                        bridge.get(changed)
+            opened.assert_not_called(); connected.assert_not_called()
+
+    def test_x_enabled_exact_unconfigured_200_preserves_original_bytes_and_private_token_boundary(self):
+        body = json.dumps(self.x_unconfigured(), indent=2).encode()
+        with patch.dict(os.environ, {"SERVERWARE_PUBLIC_URL": bridge.CANONICAL_PUBLIC,
+                "SERVERWARE_OPERATOR_MANAGED_X_ENABLED": "1"}, clear=True):
+            result, connection, response = self.fake_get(command=self.x_enabled_command(), status=200, body=body)
+        self.assertEqual(result["status"], 200)
+        self.assertEqual(base64.b64decode(result["body_base64"]), body)
+        self.assertNotIn("TEST-ONLY-ADMIN", json.dumps(result))
+        self.assertIn(("Cache-Control", "no-store"), result["headers"])
+        response.read.assert_called_once_with(32769)
+        args, kwargs = connection.request.call_args
+        self.assertEqual(args, ("GET", bridge.X_CONFIGURATION))
+        self.assertEqual(kwargs["headers"]["Origin"], bridge.CANONICAL_PUBLIC)
+        self.assertEqual(kwargs["headers"]["Accept-Encoding"], "identity")
+
+    def test_x_enabled_never_accepts_configured_pending_mixed_or_unbound_discovery(self):
+        changes = [{"state": "configured"}, {"schema": "other"}, {"revision": True}, {"revision": 0},
+            {"revision": 2**53}, {"policy_hash": "sha256:" + "A" * 64},
+            {"redirect_uri": bridge.PUBLIC + "/api/oauth/callback/x"}, {"permission_preset": "x_readonly"},
+            {"scopes": list(reversed(bridge.X_SCOPES))}, {"scopes": bridge.X_SCOPES + ["extra"]},
+            {"configuration": {}}, {"operation": {}}, {"blocked_reason": "pending_google_configuration"},
+            {"consent_ready": True}, {"extra": None}, {"review": None},
+            {"review": {"expected_revision": 80, "expected_policy_hash": "sha256:" + "a" * 64}},
+            {"review": {"expected_revision": 81, "expected_policy_hash": "sha256:" + "b" * 64}},
+            {"review": {"expected_revision": 81, "expected_policy_hash": "sha256:" + "a" * 64, "extra": True}}]
+        raw = json.dumps(self.x_unconfigured()).encode()
+        bodies = [json.dumps({**self.x_unconfigured(), **change}).encode() for change in changes]
+        bodies += [b'{}', b'[]', b'{"detail":"X configuration is not supported by this deployment"}',
+            raw.replace(b'"unconfigured"', b'"configured", "state":"unconfigured"'),
+            raw.replace(b'"configuration": null', b'"configuration":{"client_secret":"private-canary"},"configuration":null')]
+        with patch.dict(os.environ, {"SERVERWARE_PUBLIC_URL": bridge.CANONICAL_PUBLIC,
+                "SERVERWARE_OPERATOR_MANAGED_X_ENABLED": "1"}, clear=True):
+            for body in bodies:
+                with self.subTest(size=len(body)), self.assertRaises(ValueError):
+                    self.fake_get(command=self.x_enabled_command(), status=200, body=body)
+            boolean_review = deepcopy(self.x_unconfigured())
+            boolean_review["revision"] = 1; boolean_review["review"]["expected_revision"] = True
+            with self.assertRaises(ValueError):
+                self.fake_get(command=self.x_enabled_command(), status=200, body=json.dumps(boolean_review).encode())
+
+    def test_x_enabled_keeps_status_headers_bounds_and_redaction_fail_closed(self):
+        body = json.dumps(self.x_unconfigured()).encode()
+        with patch.dict(os.environ, {"SERVERWARE_PUBLIC_URL": bridge.CANONICAL_PUBLIC,
+                "SERVERWARE_OPERATOR_MANAGED_X_ENABLED": "1"}, clear=True):
+            for status in (201, 204, 302, 404, 503):
+                with self.subTest(status=status), self.assertRaises(ValueError):
+                    self.fake_get(command=self.x_enabled_command(), status=status, body=body)
+            baseline = [("Content-Type", "application/json"), ("Cache-Control", "no-store")]
+            for headers in (baseline[:1], baseline + [("Set-Cookie", "synthetic=1")],
+                    baseline + [("Location", "/")], baseline + [("Content-Encoding", "gzip")],
+                    baseline + [("Transfer-Encoding", "chunked")], baseline + [("Content-Length", "1")]):
+                with self.subTest(headers=headers), self.assertRaises(ValueError):
+                    self.fake_get(command=self.x_enabled_command(), status=200, headers=headers, body=body)
+            for invalid in (b'x' * 32769, body.replace(b'unconfigured', b'TEST-ONLY-ADMIN-CANARY-DO-NOT-EXPORT-123456789'),
+                    body.replace(b'unconfigured', b'-----BEGIN PRIVATE KEY-----')):
+                with self.subTest(size=len(invalid)), self.assertRaises(ValueError):
+                    self.fake_get(command=self.x_enabled_command(), status=200, body=invalid)
 
 
 if __name__ == "__main__":

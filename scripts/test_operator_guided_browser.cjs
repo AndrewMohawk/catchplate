@@ -7,7 +7,7 @@ const {Readable} = require('node:stream');
 const groups = [];
 const test = (name, run) => groups.push({name, run});
 const {readyFrame, requestFrame, responseFrame, continueFrame, checkerFailureFrame, stderrCollector,
-  failureReceipt, publicFailureReceipt, downloadedBytes, validateChecker} =
+  failureReceipt, publicFailureReceipt, applicationRevocationDialog, downloadedBytes, validateChecker} =
   require('./check_operator_guided_browser.cjs');
 const origin = 'https://serverware-guided.example.com', prefix = '/api/operator-demo';
 const digest = 'sha256:' + 'a'.repeat(64), runId = 'operator-check-' + 'b'.repeat(32);
@@ -199,9 +199,22 @@ test('terminal admits only exact public evidence and preserves no real-provider 
     const changed = result(); change(changed); assert.throws(() => validateChecker(changed, browser(), ids));
   }
 });
+test('client revocation retains the full current renewal warning and exact confirmation', () => {
+  const prompt = applicationRevocationDialog(runId + '-app', ids.application);
+  assert.equal(prompt, `Revoke application "${runId}-app" (${ids.application}) and its 0 active access rules? This also cancels workload renewal and previous-token overlap. Shared provider credentials and other applications remain. Enforcement begins after the proxy loads the new policy; already-dispatched requests cannot be recalled.`);
+  // Read source as text only; do not import or evaluate the UI. A future product
+  // confirmation change must update this exact joined-journey expectation.
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname,
+    '../serverware/operator_demo_web/workspace_applications.js'), 'utf8');
+  const confirmations = [...source.matchAll(/window\.confirm\(`(Revoke application [^`]+)`\)/g)];
+  assert.equal(confirmations.length, 1);
+  const rendered = confirmations[0][1].replaceAll('${application.name}', runId + '-app')
+    .replaceAll('${application.id}', ids.application).replaceAll('${application.active_rule_count}', '0');
+  assert.equal(prompt, rendered);
+});
 
 async function main() {
-  assert.equal(groups.length, 10);
+  assert.equal(groups.length, 11);
   for (const {name, run} of groups) {
     await run();
     process.stdout.write('PASS ' + name + '\n');

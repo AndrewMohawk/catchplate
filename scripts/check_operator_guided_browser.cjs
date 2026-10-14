@@ -35,6 +35,9 @@ const CHECKER_MODULES = ['scripts.check_operator_guided', 'scripts.operator_guid
   'scripts.check_operator_catalog', 'scripts.check_operator_demo', 'scripts.check_operator_live_smoke',
   'scripts.check_operator_ordinary_client', 'scripts.operator_catalog_feature_checks', 'scripts.run_ordinary_regression'];
 function need(value) { if (!value) throw new Error('Guided browser check refused'); }
+function applicationRevocationDialog(name, id) {
+  return `Revoke application "${name}" (${id}) and its 0 active access rules? This also cancels workload renewal and previous-token overlap. Shared provider credentials and other applications remain. Enforcement begins after the proxy loads the new policy; already-dispatched requests cannot be recalled.`;
+}
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
   Object.keys(value).sort().join(',') === [...keys].sort().join(',');
 const ordered = value => Array.isArray(value) ? value.map(ordered) : value && typeof value === 'object' ?
@@ -321,7 +324,7 @@ async function main() {
     await revoke('rule', 'access-rules', ROUTES[3], `Revoke rule "${setup.names.rule}" (${ids.rule})? The application and saved credential remain. New requests are denied after the proxy loads the updated policy; already-dispatched requests cannot be recalled.`, '#rules-refresh');
     stage = 'proxy_denied'; await chain; const secondId = sequence + 1;
     continueFrame(await send({kind: 'checkpoint', id: secondId, phase: 'rule_revoked'}), secondId, 'revoke_rest', ids); out.steps.push(stage);
-    await revoke('application', 'applications', ROUTES[4], `Revoke application "${setup.names.application}" (${ids.application}) and its 0 active access rules? Shared provider credentials and other applications remain. Enforcement begins after the proxy loads the new policy; already-dispatched requests cannot be recalled.`, '#applications-refresh');
+    await revoke('application', 'applications', ROUTES[4], applicationRevocationDialog(setup.names.application, ids.application), '#applications-refresh');
     await revoke('credential', 'credentials', ROUTES[5], `Revoke locally stored credential "${setup.names.credential}" (${ids.credential})? This does not revoke the key at its provider.`, '#credentials-refresh');
     stage = 'result'; need(same(out.steps, STEPS) && out.postCount === 6 && out.downloadCount === 1 && !failed); await chain;
     const terminal = await send({kind: 'checkpoint', id: sequence + 1, phase: 'completed', browser: out});
@@ -340,7 +343,7 @@ async function main() {
   }
 }
 module.exports = {readyFrame, requestFrame, responseFrame, continueFrame, checkerFailureFrame, stderrCollector,
-  failureReceipt, publicFailureReceipt, downloadedBytes, validateChecker};
+  failureReceipt, publicFailureReceipt, applicationRevocationDialog, downloadedBytes, validateChecker};
 if (require.main === module) main().then(value => process.stdout.write(JSON.stringify(value) + '\n')).catch(() => {
   process.stderr.write('Guided browser check failed; no private request, response or download details emitted\n'); process.exitCode = 1;
 });

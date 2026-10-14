@@ -91,10 +91,11 @@ async function fixture(options = {}) {
         assert.equal(payload.id, IDS.credential); assert.equal(payload.expected_credential_generation, raw.credentials[0].credential_generation);
         assert.equal(payload.private_key_pem, PEM); delete payload.private_key_pem;
       } else if (path === '/api/operator-demo/credentials/github-app') {
-        assert.deepEqual(Object.keys(payload).sort(), ['app_id', 'expected_policy_hash', 'expected_revision', 'installation_id',
-          'issues_permission', 'name', 'private_key_pem', 'repository']);
+        assert.deepEqual(Object.keys(payload).sort(), ['app_id', 'expected_policy_hash', 'expected_revision',
+          ...(options.explicitInstallation ? ['installation_id'] : []), 'issues_permission', 'name', 'private_key_pem', 'repository']);
         assert.equal(payload.private_key_pem, PEM); delete payload.private_key_pem;
-        for (const [key, value] of Object.entries(submitted())) assert.deepEqual(payload[key], value);
+        const expected = submitted(); if (!options.explicitInstallation) delete expected.installation_id;
+        for (const [key, value] of Object.entries(expected)) assert.deepEqual(payload[key], value);
       } else if (path === '/api/operator-demo/credentials/github-token') {
         assert.deepEqual(Object.keys(payload).sort(), ['expected_policy_hash', 'expected_revision', 'name', 'secret']);
         assert.equal(payload.secret, PAT); delete payload.secret;
@@ -161,11 +162,11 @@ async function fixture(options = {}) {
     release: () => { assert(held); held(); },
     fire: async name => { for (const handler of events.get(name) || []) await handler(); }};
 }
-async function newApp(f) {
+async function newApp(f, installationId = '') {
   await f.event('connect-use-github'); f.node('connect-github-type').value = 'github_app_v1';
   await f.event('connect-github-type', 'change');
   for (const [id, value] of Object.entries({'connect-credential-name': NAME, 'connect-github-app-id': '12345',
-    'connect-github-installation-id': '23456', 'connect-github-app-owner': REPOSITORY.owner,
+    'connect-github-installation-id': installationId, 'connect-github-app-owner': REPOSITORY.owner,
     'connect-github-app-repo': REPOSITORY.name, 'connect-github-app-permission': 'read', 'connect-github-private-key': PEM})) f.node(id).value = value;
 }
 async function savedPair(f) {
@@ -229,6 +230,14 @@ const tests = [
     const receipt = clone(plain.run('githubAppCredentialReceipt(input.row, input.submitted)', {row: appCredential(), submitted: submitted()}));
     assert.deepEqual(Object.keys(receipt).sort(), ['auth_type', 'connection_type', 'created_at', 'github_app', 'header_name', 'id', 'name', 'provider_id', 'status']);
     assert.equal(plain.run('githubAppCredentialReceiptMatches(input.row, input.receipt)', {row: appCredential(), receipt}), true);
+    for (const installationId of [undefined, null]) {
+      const discovery = submitted();
+      if (installationId === undefined) delete discovery.installation_id; else discovery.installation_id = installationId;
+      assert.deepEqual(clone(plain.run('githubAppCredentialReceipt(input.row, input.submitted)', {row: appCredential(), submitted: discovery})), receipt);
+      for (const invalid of ['', null, undefined, '01', '9007199254740992'])
+        assert.throws(() => plain.run('githubAppCredentialReceipt(input.row, input.submitted)',
+          {row: appCredential({github_app: binding({installation_id: invalid})}), submitted: discovery}));
+    }
     for (const change of [{name: 'Different'}, {app_id: '2'}, {installation_id: '2'}, {issues_permission: 'write'},
       {repository: {...REPOSITORY, name: 'Other'}}])
       assert.throws(() => plain.run('githubAppCredentialReceipt(input.row, input.submitted)', {row: appCredential(), submitted: {...submitted(), ...change}}));
@@ -247,15 +256,20 @@ const tests = [
     assert(actions().includes('replace-key')); f.clean();
   }],
   ['save uses one App POST with exact CAS and clears PEM before held reply', async () => {
-    const f = await fixture({credentials: [], mode: 'hold'}); await newApp(f);
-    assert(f.node('connect-provider-secret-group').hidden); assert(f.node('connect-credential-secret').disabled);
-    assert(!f.node('connect-github-app-fields').hidden);
-    const pending = f.event('connect-credential-form', 'submit');
-    assert.equal(f.posts().length, 1); assert.equal(f.node('connect-github-private-key').value, '');
-    assert.equal(f.bodies[0].private_key_pem, ''); assert.equal(f.workspace.writeInFlight(), true); f.clean();
-    f.release(); await pending;
-    assert.equal(f.posts().length, 1); assert.equal(f.raw.access_rules.length, 0);
-    assert(!f.node('connect-application-step').hidden); assert.equal(f.workspace.state.uncertain, false); f.clean();
+    for (const explicitInstallation of [false, true]) {
+      const f = await fixture({credentials: [], mode: 'hold', explicitInstallation}); await newApp(f, explicitInstallation ? '23456' : '');
+      assert(f.node('connect-provider-secret-group').hidden); assert(f.node('connect-credential-secret').disabled);
+      assert(!f.node('connect-github-app-fields').hidden);
+      const pending = f.event('connect-credential-form', 'submit');
+      assert.equal(f.posts().length, 1); assert.equal(f.node('connect-github-private-key').value, '');
+      assert.equal(Object.hasOwn(f.posts()[0].payload, 'installation_id'), explicitInstallation);
+      assert.equal(f.bodies[0].private_key_pem, ''); assert.equal(f.workspace.writeInFlight(), true); f.clean();
+      await f.event('connect-credential-form', 'submit'); assert.equal(f.posts().length, 1);
+      f.release(); await pending;
+      assert.equal(f.posts().length, 1); assert.equal(f.raw.access_rules.length, 0);
+      assert.equal(f.raw.credentials[0].github_app.installation_id, '23456');
+      assert(!f.node('connect-application-step').hidden); assert.equal(f.workspace.state.uncertain, false); f.clean();
+    }
   }],
   ['PAT and manual credential choices remain separate and available', async () => {
     const f = await fixture({credentials: [], app: null}); await f.event('connect-use-github');
@@ -312,6 +326,7 @@ const tests = [
   ['mismatched creation or refreshed identity never advances or repeats save', async () => {
     for (const options of [
       {receiptChange: result => { result.credential.github_app.app_id = '999'; }},
+      {catalogChange: raw => { raw.credentials[0].github_app.installation_id = '999'; }},
       {catalogChange: raw => { raw.credentials[0].github_app.repository_id = '999'; }},
       {catalogChange: raw => { raw.credentials[0] = patCredential({name: NAME}); }}
     ]) {
@@ -328,8 +343,8 @@ const tests = [
       const f = await fixture({credentials: []}); await newApp(f); await action(f);
       assert.equal(f.node('connect-github-private-key').value, ''); assert.equal(f.posts().length, 0); f.clean();
     }
-    for (const invalid of ['01', '9007199254740992', '+1']) {
-      const f = await fixture({credentials: []}); await newApp(f); f.node('connect-github-app-id').value = invalid;
+    for (const field of ['connect-github-app-id', 'connect-github-installation-id']) for (const invalid of ['01', '9007199254740992', '+1', ' ']) {
+      const f = await fixture({credentials: []}); await newApp(f); f.node(field).value = invalid;
       await f.event('connect-credential-form', 'submit');
       assert.equal(f.posts().length, 0); assert.equal(f.node('connect-github-private-key').value, ''); f.clean();
     }

@@ -229,7 +229,7 @@ def save_and_policy():
             name="Retained PAT", secret=legacy.TOKEN), ACTOR)["credential"]
         pat_before = f.db.get_credential(pat["id"], include_secret=True)
         policy_before = f.snapshot()[1:]
-        created = f.create()
+        created = f.create(installation_id=None)
         credential = created["credential"]
         require(created["revision"] == 3 and credential["connection_type"] == "github_app_v1"
             and credential["auth_type"] == "bearer" and credential["provider_id"] == "github"
@@ -326,6 +326,13 @@ def input_and_cas():
         before = f.snapshot()
         for changes in ({"app_id": value} for value in (0, True, "0", "01", "-1", "9007199254740992")):
             refused(lambda: f.inputs.GithubAppInput(**f.fields(**changes)), ValueError)
+        for value in (0, True, "", "0", "01", "-1", "9007199254740992"):
+            refused(lambda: f.inputs.GithubAppInput(**f.fields(installation_id=value)), ValueError)
+        omitted = f.fields()
+        omitted.pop("installation_id")
+        require(f.inputs.GithubAppInput(**omitted).installation_id is None
+            and f.inputs.GithubAppInput(**f.fields(installation_id=None)).installation_id is None,
+            "optional installation ID setup input")
         for changes in ({"installation_id": "01"}, {"issues_permission": "admin"},
                 {"repository": {**REPOSITORY, "id": REPOSITORY_ID}}, {"private_key_pem": ""},
                 {"private_key_pem": "x" * 8193}, {"secret": legacy.TOKEN}, {"expected_revision": True}):
@@ -357,7 +364,7 @@ def provider_refusal():
         f.provider.installation_changes = {"app_id": APP_ID + 1}
         before = f.snapshot()
         from serverware.operator_github_app import GitHubAppUnavailable
-        refused(lambda: f.create(), GitHubAppUnavailable)
+        refused(lambda: f.create(installation_id=None), GitHubAppUnavailable)
         require(f.snapshot() == before and f.provider.calls == ["installation"] and not f.provider.tokens,
             "wrong App installation was persisted or minted")
         f.clean(f.mutations.catalog_status())
@@ -462,6 +469,7 @@ async def api_story():
             await call("POST", PATH, body={}, origin="https://foreign.example.com", status=403)
             await call("POST", PATH, body=f.fields(), media="text/plain", status=415)
             await call("POST", PATH, body=f.fields(private_key_pem="not-a-private-key"), status=422)
+            await call("POST", PATH, body=f.fields(installation_id=""), status=422)
             await call("POST", PATH, body=b"x" * 32769, status=413)
             initial = await call("GET", "/api/operator-demo/catalog")
             require(initial["capabilities"]["github_app"]["connection_type"] == "github_app_v1"
@@ -469,10 +477,12 @@ async def api_story():
                 "real GitHub App capability route")
             require(f.snapshot() == before and not f.provider.calls, "API admission or catalog GET had effects")
             payload = f.fields()
+            payload.pop("installation_id")
             saved = await call("POST", PATH, body=payload, status=201)
             credential = saved["credential"]
             require(credential["connection_type"] == "github_app_v1"
                 and credential["github_app"]["repository"] == REPOSITORY
+                and credential["github_app"]["installation_id"] == str(INSTALLATION_ID)
                 and saved["revision"] == initial["revision"] + 1
                 and saved["policy"]["policy_hash"] == initial["policy"]["policy_hash"], "actual API save receipt")
             committed = f.snapshot()

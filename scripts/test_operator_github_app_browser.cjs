@@ -120,13 +120,13 @@ async function fixture(browser, config, exercise) {
           assert.equal(observed.creates.length, 0, 'a credential POST is never automatically repeated');
           const isApp = url.pathname === CREATE;
           assert.deepEqual(Object.keys(body).sort(), isApp ? ['app_id', 'expected_policy_hash', 'expected_revision',
-            'installation_id', 'issues_permission', 'name', 'private_key_pem', 'repository'] :
+            ...(config.explicitInstallation ? ['installation_id'] : []), 'issues_permission', 'name', 'private_key_pem', 'repository'] :
             ['expected_policy_hash', 'expected_revision', 'name', 'secret']);
           assert.equal(body.name, isApp ? 'My GitHub App' : 'My GitHub PAT');
           assert.equal(isApp ? body.private_key_pem === pem : body.secret === PAT, true, 'synthetic private input must match');
           if (isApp) {
             assert.deepEqual(catalog(state, config).capabilities.github_app, appCapability());
-            assert.equal(body.app_id, '123456'); assert.equal(body.installation_id, '234567');
+            assert.equal(body.app_id, '123456'); assert.equal(body.installation_id, config.explicitInstallation ? '234567' : undefined);
             assert.deepEqual(body.repository, REPOSITORY); assert.equal(body.issues_permission, config.permission || 'read');
           }
           observed.creates.push({path: url.pathname, name: body.name, privateInputMatched: true,
@@ -174,18 +174,25 @@ async function fixture(browser, config, exercise) {
     } finally { release?.(); }
   });
 }
-async function appForm(page, permission = 'read') {
+async function appForm(page, permission = 'read', explicitInstallation = false) {
   activeStep = 'app-form'; await ready(page); await view(page, 'connect');
   await page.locator('#connect-use-github').click(); await page.locator('#connect-github-type').selectOption('github_app_v1');
   assert(await page.locator('#connect-provider-secret-group').isHidden());
   assert(await page.locator('#connect-credential-secret').isDisabled());
   await page.locator('#connect-credential-name').fill('My GitHub App');
   await page.locator('#connect-github-app-id').fill('123456');
-  await page.locator('#connect-github-installation-id').fill('234567');
+  assert(await page.locator('#connect-github-installation-id').isHidden());
+  assert.equal(await page.locator('#connect-github-installation-id').getAttribute('required'), null);
+  if (explicitInstallation) {
+    await page.locator('#connect-github-installation-advanced > summary').click();
+    await page.locator('#connect-github-installation-id').fill('234567');
+  }
   await page.locator('#connect-github-app-owner').fill(REPOSITORY.owner);
   await page.locator('#connect-github-app-repo').fill(REPOSITORY.name);
   await page.locator('#connect-github-app-permission').selectOption(permission);
   await page.locator('#connect-github-private-key').fill(pem);
+  assert(await page.locator('#connect-credential-form').evaluate(form => form.checkValidity()));
+  assert((await page.locator('#connect-github-app-fields').innerText()).includes('must already be installed on this repository'));
   assert.equal(await page.locator('#connect-credential-next').innerText(), 'Save and verify GitHub App');
   await noMaterial(page, true);
 }
@@ -265,8 +272,8 @@ const tests = [
     assert.equal(state.credentials[0].connection_type, 'github_token_v1'); await noMaterial(page);
   })],
   ['App save selects its exact repository once, bounds permissions and copies the rendered SDK setup', async (browser, directory) => {
-    for (const permission of ['read', 'write']) await fixture(browser, {permission, autoLoad: false}, async (page, state, observed) => {
-      await appForm(page, permission); await page.locator('#connect-credential-next').click(); await useExistingApplication(page);
+    for (const permission of ['read', 'write']) await fixture(browser, {permission, autoLoad: false, explicitInstallation: permission === 'write'}, async (page, state, observed) => {
+      await appForm(page, permission, permission === 'write'); await page.locator('#connect-credential-next').click(); await useExistingApplication(page);
       await fixedRepository(page); await noMaterial(page);
       const choices = await page.locator('#connect-operation option').evaluateAll(nodes => nodes.filter(node => !node.disabled).map(node => node.value));
       assert.deepEqual(choices, permission === 'read' ? [READ] : [READ, WRITE]);

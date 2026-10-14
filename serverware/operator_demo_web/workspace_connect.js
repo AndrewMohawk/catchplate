@@ -567,13 +567,14 @@ function createConnectView(workspace, applications, proxy) {
       try {
         if (step !== 0 || !writable() || checkpoint || !workspace.ready('credentials') ||
             !githubCreationAvailable() || !event.currentTarget.reportValidity()) return;
+        const installationId = element('connect-github-installation-id').value;
         const submitted = {name: element('connect-credential-name').value.trim(), app_id: element('connect-github-app-id').value,
-          installation_id: element('connect-github-installation-id').value,
+          ...(installationId === '' ? {} : {installation_id: installationId}),
           repository: {owner: element('connect-github-app-owner').value.trim(), name: element('connect-github-app-repo').value.trim()},
           issues_permission: element('connect-github-app-permission').value};
-        if (!githubIdValid(submitted.app_id) || !githubIdValid(submitted.installation_id) ||
+        if (!githubIdValid(submitted.app_id) || installationId !== '' && !githubIdValid(installationId) ||
             !githubRepositoryValid(submitted.repository) || !['read', 'write'].includes(submitted.issues_permission))
-          throw operatorError('Enter canonical numeric App and installation IDs, an exact repository and a supported permission. No request was sent.');
+          throw operatorError('Enter a numeric App ID, an exact repository and a supported permission. Leave the optional installation ID blank or enter its canonical numeric ID. No request was sent.');
         body = {...submitted, private_key_pem: element('connect-github-private-key').value};
         element('connect-github-private-key').value = '';
         await workspace.mutate('credentials/github-app', body, 'connect-status',

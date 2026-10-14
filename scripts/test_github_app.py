@@ -107,7 +107,8 @@ class GithubAppTests(unittest.TestCase):
     def test_config_and_private_key_admission(self):
         for changes in ({"app_id": True}, {"installation_id": 0}, {"owner": "bad/owner"},
                         {"repository": ".."}, {"issues": "admin"}, {"repository_id": 1},
-                        {"account_id": 1}, {"account_id": True, "repository_id": 1}):
+                        {"account_id": 1}, {"account_id": True, "repository_id": 1},
+                        {"installation_id": None, "account_id": 700, "repository_id": 900}):
             with self.subTest(changes=changes), self.assertRaises(app.GitHubAppError):
                 replace(CONFIG, **changes)
         self.assertNotIn("PRIVATE KEY", repr(self.key))
@@ -167,6 +168,36 @@ class GithubAppTests(unittest.TestCase):
             self.assertEqual(options["expected_statuses"], tuple(range(200, 600)))
         self.assertEqual(calls[0][0].get_header("Authorization"), calls[1][0].get_header("Authorization"))
         self.assertEqual(calls[2][0].get_header("Authorization"), "Bearer " + TOKEN)
+
+    def test_initial_installation_discovery_uses_existing_lookup_and_pins_token(self):
+        transport = Transport(script())
+        unbound = replace(CONFIG, installation_id=None)
+        result = self.invoke(transport, config=unbound)
+        self.assertEqual(result.config, replace(CONFIG, account_id=700, repository_id=900))
+        self.assertIsNone(unbound.installation_id)
+        self.assertEqual([request.get_method() for request, _ in transport.calls], ["GET", "POST", "GET"])
+        self.assertEqual(transport.calls[0][0].full_url,
+            "https://api.github.com/repos/fixture-owner/fixture-repo/installation")
+        self.assertEqual(transport.calls[1][0].full_url,
+            "https://api.github.com/app/installations/456/access_tokens")
+        self.assertEqual(json.loads(transport.calls[1][0].data), {"repositories": ["fixture-repo"],
+            "permissions": {"issues": "write", "metadata": "read"}})
+        self.assertTrue(all(options["deadline"] is transport.calls[0][1]["deadline"]
+            for _, options in transport.calls))
+        with self.assertRaises(app.GitHubAppError):
+            replace(result, config=unbound)
+
+    def test_discovery_does_not_relax_installation_account_or_permission_checks(self):
+        variants = [{**INSTALLATION, "id": value} for value in (None, True, 0, "456", 2**53)]
+        variants += [{**INSTALLATION, "app_id": 124}, {**INSTALLATION, "target_id": 701},
+            {**INSTALLATION, "account": {"id": 700, "login": "different", "type": "Organization"}},
+            {**INSTALLATION, "suspended_at": "2026-10-01T00:00:00Z"},
+            {**INSTALLATION, "permissions": {"metadata": "read", "issues": "read"}}]
+        for value in variants:
+            with self.subTest(value=value):
+                _, transport = self.refused(script(installation=value), phase="installation", uncertain=False,
+                    config=replace(CONFIG, installation_id=None))
+                self.assertEqual(len(transport.calls), 1)
 
     def test_installation_failures_precede_mint(self):
         variants = [{**INSTALLATION, "app_id": 124}, {**INSTALLATION, "id": 457},
@@ -265,6 +296,9 @@ class GithubAppTests(unittest.TestCase):
         self.assertEqual(self.invoke(transport, config=config).config, config)
         self.assertEqual(json.loads(transport.calls[1][0].data), {"repository_ids": [900],
             "permissions": {"issues": "write", "metadata": "read"}})
+        _, mismatch = self.refused(script(installation={**INSTALLATION, "id": 457}),
+            phase="installation", uncertain=False, config=config)
+        self.assertEqual(len(mismatch.calls), 1)
         self.refused(script(listing={"total_count": 1, "repositories": [{**REPO, "id": 901}]}),
             phase="repository", uncertain=True, config=config)
         installation = deepcopy(INSTALLATION)
@@ -275,6 +309,11 @@ class GithubAppTests(unittest.TestCase):
         current = self.invoke(Transport(script()))
         empty = Transport([])
         self.assertIs(app.get_or_refresh(CONFIG, self.key, current, transport=empty, clock=lambda: NOW + 1), current)
+        self.assertEqual(empty.calls, [])
+        for cached in (None, current):
+            with self.assertRaises(app.GitHubAppError):
+                app.get_or_refresh(replace(CONFIG, installation_id=None), self.key, cached,
+                    transport=empty, clock=lambda: NOW)
         self.assertEqual(empty.calls, [])
         self.assertFalse(app.needs_refresh(current, NOW + 3539))
         self.assertTrue(app.needs_refresh(current, NOW + 3540))

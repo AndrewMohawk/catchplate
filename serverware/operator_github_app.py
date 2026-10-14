@@ -170,7 +170,8 @@ def verify_connection(payload):
     from serverware import operator_publication as publication
     publication.assert_not_held()
     try:
-        config = protocol.AppConfig(identifier(payload.app_id), identifier(payload.installation_id),
+        installation_id = None if payload.installation_id is None else identifier(payload.installation_id)
+        config = protocol.AppConfig(identifier(payload.app_id), installation_id,
             payload.repository.owner, payload.repository.name, payload.issues_permission)
         key = protocol.load_private_key(payload.private_key_pem.encode("utf-8"))
         token = protocol.mint_installation_token(config, key)

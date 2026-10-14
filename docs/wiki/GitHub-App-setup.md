@@ -39,7 +39,7 @@ supports installation tokens with Issues read access. If you later need
 Serverware's create-issue/comment preset, review that as a separate write grant;
 broader provider permissions alone do not enable it.
 
-## 2. Install it and collect the two GitHub IDs
+## 2. Install it and copy the App ID
 
 Open the App's settings, choose **Install App**, and install it on the account
 containing your repository. Choose **Only select repositories**, select just
@@ -48,14 +48,11 @@ organization approval rather than requesting broader access. [GitHub installatio
 
 - **App ID:** the numeric App ID shown in the App's settings. Do not copy its
   OAuth client ID. [GitHub's App/installation identity guide](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation).
-- **Installation ID:** the number identifying this account's installation,
-  not the repository ID. For an organization, the installation-settings URL
-  ends in `/organizations/ORGANIZATION/settings/installations/INSTALLATION_ID`.
-  Copy the number only. GitHub documents that URL in its
-  [installation-ID instructions](https://docs.github.com/en/actions/how-tos/manage-runners/use-actions-runner-controller/authenticate-to-the-api#authenticating-arc-with-a-github-app);
-  use that link for ID discovery, not its unrelated runner permissions.
-  If you cannot access the installation page, ask the installation owner or use
-  GitHub's documented installation lookup instead of guessing.
+- **Installation ID:** you normally do not need to find this. Serverware
+  discovers and verifies the existing installation for your App and repository
+  when you save. If you already know the ID and want to require an exact match,
+  enter it under **Advanced: specify an installation ID**. This is the
+  installation's ID, not the repository ID.
 
 ## 3. Generate a private key and save the connection
 
@@ -71,15 +68,18 @@ In Serverware, open **Credentials → Add credential → GitHub**, select
 | --- | --- |
 | Credential name | A useful label, such as `Issue reader — team repository` |
 | GitHub App ID | The numeric App ID from GitHub |
-| Installation ID | The numeric installation ID for the account containing the repository |
 | Repository owner / name | Exact owner and repository name, entered separately; no URL or `.git` suffix |
 | Maximum issue permission for this connection | **Read issues and comments** |
 | GitHub App private key (PEM) | Complete downloaded private-key PEM, including its boundary lines |
+| Advanced: Installation ID (optional) | Leave blank for automatic discovery, or supply the numeric ID to require an exact match |
 
 Choose **Save and verify GitHub App**. This contacts GitHub to check the App,
 installation, repository and permission and obtain a scoped installation token
 before saving. Serverware encrypts the private key and renews installation tokens
-server-side. Saving creates no Serverware client or permission. The form clears
+server-side. The verified installation ID is saved and stays pinned during
+renewal and key replacement; automatic discovery applies only to initial setup.
+Serverware does not install the App or add repositories. Saving creates no
+Serverware client or permission. The form clears
 the PEM; it is not available in client configuration. [Implemented connection contract](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-github-client-compatibility.md#operator-journey).
 
 ## 4. Give one client read access and run it

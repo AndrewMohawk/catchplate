@@ -78,10 +78,14 @@ function githubPermissionBundles(credential) {
 }
 function githubAppCredentialReceipt(credential, submitted) {
   const binding = projectGithubAppMetadata(credential).github_app;
+  // Discovery may select the installation only on initial creation. The receipt
+  // retains its exact verified ID, so subsequent catalog checks cannot drift.
+  const installationId = submitted?.installation_id;
   if (credential.status !== 'active' || credential.name !== submitted?.name ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(credential.id || '') ||
       typeof credential.created_at !== 'string' || !Number.isFinite(Date.parse(credential.created_at)) ||
-      !['app_id', 'installation_id', 'repository', 'issues_permission'].every(key => operatorExact(binding[key], submitted[key])))
+      !['app_id', 'repository', 'issues_permission'].every(key => operatorExact(binding[key], submitted[key])) ||
+      installationId !== undefined && installationId !== null && binding.installation_id !== installationId)
     throw operatorError('The exact saved GitHub App connection was not confirmed. Inspect saved state; do not submit again.');
   return {id: credential.id, name: credential.name, status: credential.status, created_at: credential.created_at,
     auth_type: credential.auth_type, header_name: credential.header_name, connection_type: credential.connection_type,

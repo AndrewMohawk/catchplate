@@ -80,7 +80,7 @@ def _epoch(value: object) -> int:
 @dataclass(frozen=True)
 class AppConfig:
     app_id: int
-    installation_id: int
+    installation_id: int | None
     owner: str
     repository: str
     issues: str
@@ -89,11 +89,15 @@ class AppConfig:
 
     def __post_init__(self):
         try:
-            _require(_identifier(self.app_id) and _identifier(self.installation_id))
+            _require(_identifier(self.app_id)
+                     and (self.installation_id is None or _identifier(self.installation_id)))
             github_issues.validate_repository({"owner": self.owner, "name": self.repository})
             _require(type(self.issues) is str and self.issues in {"read", "write"})
             _require((self.account_id is None and self.repository_id is None)
                      or (_identifier(self.account_id) and _identifier(self.repository_id)))
+            # Only a fresh, unbound setup may discover its installation. Saved
+            # account/repository identities always require the installation pin.
+            _require(self.installation_id is not None or self.account_id is None)
         except Exception:
             raise GitHubAppError("configuration") from None
 
@@ -114,7 +118,8 @@ class InstallationToken:
 
     def __post_init__(self):
         try:
-            _require(type(self.config) is AppConfig and self.config.repository_id is not None)
+            _require(type(self.config) is AppConfig and _identifier(self.config.installation_id)
+                     and self.config.repository_id is not None)
             _require(type(self.token) is str and _TOKEN.fullmatch(self.token) is not None)
             _require(type(self.issued_at) is int and type(self.expires_at) is int
                      and _epoch(self.issued_at) == self.issued_at
@@ -199,8 +204,9 @@ def _response(response: http_client.HttpResponse, status: int, maximum: int) -> 
     return value
 
 
-def _installation(value: dict, config: AppConfig) -> int:
-    _require(_identifier(value.get("id")) and value["id"] == config.installation_id
+def _installation(value: dict, config: AppConfig) -> tuple[int, int]:
+    _require(_identifier(value.get("id"))
+             and (config.installation_id is None or value["id"] == config.installation_id)
              and _identifier(value.get("app_id")) and value["app_id"] == config.app_id)
     account = value.get("account")
     _require(type(account) is dict and _identifier(account.get("id"))
@@ -215,7 +221,7 @@ def _installation(value: dict, config: AppConfig) -> int:
     _require(type(permissions) is dict and permissions.get("metadata") == "read"
              and permissions.get("issues") in ({"read", "write"} if config.issues == "read" else {"write"}))
     _require(config.account_id is None or config.account_id == account["id"])
-    return account["id"]
+    return value["id"], account["id"]
 
 
 def _repository(value: object, config: AppConfig, account_id: int) -> int:
@@ -245,7 +251,8 @@ def mint_installation_token(config: AppConfig, key: SigningKey, *,
 
     Injection is an internal test seam, not a configurable URL/HTTP interface.
     A failed mint or any subsequent check is uncertain and MUST NOT be retried
-    automatically. No identity is adopted from a renewal response.
+    automatically. A fresh setup may pin the verified installation from the
+    existing repository lookup. No identity is adopted from a renewal response.
     """
     phase, attempted, mint_body, candidates = "configuration", False, b"", ()
     try:
@@ -264,7 +271,8 @@ def mint_installation_token(config: AppConfig, key: SigningKey, *,
         phase = "installation"
         installation = exchange("GET", "/repos/" + config.owner + "/" + config.repository
             + "/installation", jwt, None, MAX_READ_BYTES)
-        account_id = _installation(_response(installation, 200, MAX_READ_BYTES), config)
+        installation_id, account_id = _installation(_response(installation, 200, MAX_READ_BYTES), config)
+        config = replace(config, installation_id=installation_id)
         permissions = {"issues": config.issues, "metadata": "read"}
         body = {"permissions": permissions}
         body["repositories" if config.repository_id is None else "repository_ids"] = [
@@ -321,6 +329,7 @@ def get_or_refresh(config: AppConfig, key: SigningKey, current: InstallationToke
     """
     try:
         _require(type(config) is AppConfig and type(key) is SigningKey
+                 and _identifier(config.installation_id)
                  and key.fingerprint == _key_fingerprint(key.private_key))
         if current is not None:
             _require(type(current) is InstallationToken)

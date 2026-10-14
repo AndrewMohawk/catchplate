@@ -19,7 +19,7 @@ Its deployment does not establish real GitHub account or repository acceptance.
 | Connection | Inputs saved in Serverware | Credential lifecycle |
 | --- | --- | --- |
 | Personal access token (PAT) | Connection name and the existing GitHub token. | Serverware does not renew the PAT; its provider permissions and expiry still apply. |
-| GitHub App | Connection name, numeric App ID, numeric installation ID, private-key PEM, exact repository owner/name, and Issues access (`read` or `write`). | Serverware holds the encrypted private key and obtains short-lived installation tokens server-side, renewing them when needed. |
+| GitHub App | Connection name, numeric App ID, private-key PEM, exact repository owner/name, and Issues access (`read` or `write`). Installation ID is discovered automatically, or optionally supplied under Advanced to require an exact match. | Serverware holds the encrypted private key and obtains short-lived installation tokens server-side, renewing them when needed. |
 
 For a GitHub App, first register and install your App in GitHub with access to the
 selected repository and the required Issues permission. This is an existing App
@@ -27,6 +27,13 @@ installation, not a GitHub OAuth user-login or consent flow. The GitHub App ID a
 installation ID are also **not** the Serverware application ID: the latter
 identifies an entry under **Clients**, the script or job allowed to use the proxy.
 A GitHub App is a provider credential, not a Serverware client.
+
+On initial setup, a blank installation ID uses the existing authenticated
+repository-installation lookup to discover and verify it; this adds no provider
+request. An explicitly supplied ID must match. The verified ID is persisted
+with the other numeric identities, and renewal and key replacement still
+require those saved pins. Discovery does not install the App, add repositories,
+or broaden its permissions.
 
 On the saved credential, choose **Use with a client**. Setup reuses that exact
 credential without asking for its secret again. Select or create a client,

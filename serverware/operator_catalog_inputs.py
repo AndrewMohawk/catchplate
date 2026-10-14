@@ -205,16 +205,17 @@ class GithubRepositoryInput(BaseModel):
 class GithubAppInput(NamedInput):
     model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
     app_id: str = Field(min_length=1, max_length=16)
-    installation_id: str = Field(min_length=1, max_length=16)
+    installation_id: str | None = Field(default=None, min_length=1, max_length=16)
     private_key_pem: str = Field(min_length=1, max_length=8192, repr=False)
     repository: GithubRepositoryInput
     issues_permission: Literal["read", "write"]
 
     @field_validator("app_id", "installation_id")
     @classmethod
-    def numeric_identity(cls, value: str) -> str:
+    def numeric_identity(cls, value: str | None) -> str | None:
         from serverware.operator_github_app import identifier
-        identifier(value)
+        if value is not None:
+            identifier(value)
         return value
 
     @field_validator("private_key_pem")

@@ -31,6 +31,7 @@ const CHECKER_ERRORS = ['CheckFailure', 'AssertionError', 'ValueError', 'TypeErr
   'ConnectionRefusedError', 'ConnectionResetError', 'BrokenPipeError', 'JSONDecodeError', 'UnicodeDecodeError',
   'SSLError', 'SSLCertVerificationError', 'RemoteDisconnected', 'IncompleteRead', 'HTTPException'];
 const CHECKER_MODULES = ['scripts.check_operator_guided', 'scripts.operator_guided_browser',
+  'scripts.operator_guided_hosted_profile',
   'scripts.check_operator_catalog', 'scripts.check_operator_demo', 'scripts.check_operator_live_smoke',
   'scripts.check_operator_ordinary_client', 'scripts.operator_catalog_feature_checks', 'scripts.run_ordinary_regression'];
 function need(value) { if (!value) throw new Error('Guided browser check refused'); }
@@ -120,6 +121,21 @@ function failureReceipt(stage, observations, checkerFailure = null, stderr = nul
     checkerFailure: checker, checkerStderr: diagnostic,
     ...Object.fromEntries(['postCount', 'getCount', 'pageErrors', 'consoleErrors', 'refusedRequests', 'downloadCount'].map(key =>
       [key, integer(observations[key], 0, 100) ? observations[key] : null]))};
+}
+function publicFailureReceipt(raw) {
+  need(Buffer.isBuffer(raw) && raw.length > 0 && raw.length <= 4096);
+  const value = JSON.parse(raw.toString('utf8'));
+  // The source writer emits exactly this canonical serialization. Requiring it
+  // also refuses duplicate keys, invalid UTF-8 and nonfinite JSON spellings.
+  need(Buffer.from(JSON.stringify(value) + '\n').equals(raw));
+  need(exact(value, ['schema', 'ok', 'stage', 'error', 'checkerFailure', 'checkerStderr',
+    'postCount', 'getCount', 'pageErrors', 'consoleErrors', 'refusedRequests', 'downloadCount']));
+  const checked = failureReceipt(value.stage, value, value.checkerFailure, value.checkerStderr);
+  need(same(value, checked));
+  // Export neither private bytes nor their fingerprint. These counters describe
+  // observations/attempts, not successful mutations or acceptance.
+  return {...checked, schema: 'serverware.guidedBrowserFailure/v1', checkerStderr: checked.checkerStderr === null ? null : {
+    capturedBytes: checked.checkerStderr.capturedBytes, truncated: checked.checkerStderr.truncated}};
 }
 async function downloadedBytes(download) {
   let stream; const chunks = []; let size = 0;
@@ -324,7 +340,7 @@ async function main() {
   }
 }
 module.exports = {readyFrame, requestFrame, responseFrame, continueFrame, checkerFailureFrame, stderrCollector,
-  failureReceipt, downloadedBytes, validateChecker};
+  failureReceipt, publicFailureReceipt, downloadedBytes, validateChecker};
 if (require.main === module) main().then(value => process.stdout.write(JSON.stringify(value) + '\n')).catch(() => {
   process.stderr.write('Guided browser check failed; no private request, response or download details emitted\n'); process.exitCode = 1;
 });

@@ -7,7 +7,7 @@ const {Readable} = require('node:stream');
 const groups = [];
 const test = (name, run) => groups.push({name, run});
 const {readyFrame, requestFrame, responseFrame, continueFrame, checkerFailureFrame, stderrCollector,
-  failureReceipt, downloadedBytes, validateChecker} =
+  failureReceipt, publicFailureReceipt, downloadedBytes, validateChecker} =
   require('./check_operator_guided_browser.cjs');
 const origin = 'https://serverware-guided.example.com', prefix = '/api/operator-demo';
 const digest = 'sha256:' + 'a'.repeat(64), runId = 'operator-check-' + 'b'.repeat(32);
@@ -128,6 +128,8 @@ test('closed failure receipt never retains source errors or secret-bearing arbit
   assert.deepEqual(checkerFailureFrame(frame), {stage: 'preflight', exceptionType: 'CheckFailure', failureSite: null});
   const located = clone(frame); located.result.failureSite = {module: 'scripts.check_operator_guided', line: 200};
   assert.deepEqual(checkerFailureFrame(located).failureSite, located.result.failureSite);
+  const hosted = clone(located); hosted.result.failureSite.module = 'scripts.operator_guided_hosted_profile';
+  assert.deepEqual(checkerFailureFrame(hosted).failureSite, hosted.result.failureSite);
   for (const change of [v => v.kind = 'ready', v => v.id = 1, v => v.result.ok = true,
     v => v.result.schema += '-other', v => v.result.error = 'private-canary',
     v => v.result.stage = 'private-canary', v => v.result.exceptionType = 'private-canary',
@@ -156,6 +158,32 @@ test('closed failure receipt never retains source errors or secret-bearing arbit
   for (const changed of [{...full, capturedBytes: true}, {...full, capturedBytes: 65537}, {...full, sha256: 'private-canary'},
     {...full, truncated: 1}, {...full, content: 'private-canary'}]) assert.equal(failureReceipt('ready', {}, null, changed).checkerStderr, null);
 });
+test('public failure projection validates canonical closed evidence and omits stderr fingerprints', () => {
+  const source = failureReceipt('ready', {postCount: 0, getCount: 0, pageErrors: 0, consoleErrors: 0,
+    refusedRequests: 0, downloadCount: 0}, {stage: 'preflight', exceptionType: 'ValueError',
+    failureSite: {module: 'scripts.operator_guided_hosted_profile', line: 93}},
+    {capturedBytes: 12, sha256: digest, truncated: false});
+  const encode = value => Buffer.from(JSON.stringify(value) + '\n');
+  const projected = publicFailureReceipt(encode(source));
+  assert.equal(projected.schema, 'serverware.guidedBrowserFailure/v1');
+  assert.deepEqual(projected.checkerStderr, {capturedBytes: 12, truncated: false});
+  assert.deepEqual(projected.checkerFailure, source.checkerFailure);
+  assert(!JSON.stringify(projected).includes(digest));
+  for (const change of [v => v.stage = 'private-canary', v => v.ok = true, v => v.error = 'private-canary',
+    v => v.extra = 'private-canary', v => delete v.getCount, v => v.postCount = true,
+    v => v.postCount = 101, v => v.getCount = 0.5, v => v.checkerFailure.private = 'private-canary',
+    v => v.checkerFailure.failureSite.module = 'scripts.private_canary',
+    v => v.checkerStderr.capturedBytes = 65537, v => v.checkerStderr.truncated = 1,
+    v => v.checkerStderr.sha256 = 'private-canary']) {
+    const changed = clone(source); change(changed); assert.throws(() => publicFailureReceipt(encode(changed)));
+  }
+  for (const raw of [Buffer.alloc(4097), Buffer.from('{}'),
+    Buffer.from(JSON.stringify(source).replace('"ok":false', '"ok":true,"ok":false') + '\n'),
+    Buffer.from(JSON.stringify(source).replace('"postCount":0', '"postCount":NaN') + '\n')])
+    assert.throws(() => publicFailureReceipt(raw));
+  const unknown = failureReceipt('inputs', {});
+  assert.equal(publicFailureReceipt(encode(unknown)).checkerFailure, null);
+});
 test('terminal admits only exact public evidence and preserves no real-provider claim', () => {
   const value = result(); assert.equal(validateChecker(value, browser(), ids), value);
   value.browser = Object.fromEntries(Object.entries(value.browser).reverse());
@@ -173,7 +201,7 @@ test('terminal admits only exact public evidence and preserves no real-provider 
 });
 
 async function main() {
-  assert.equal(groups.length, 9);
+  assert.equal(groups.length, 10);
   for (const {name, run} of groups) {
     await run();
     process.stdout.write('PASS ' + name + '\n');

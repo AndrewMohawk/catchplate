@@ -96,6 +96,7 @@ jobs:
           printf '%s  %s\n' 27e55cc30e487493b89b663085d6deeb0707be201a568657c922fac9076c317c \
             "$browser_cache/chromium_headless_shell-1208/chrome-headless-shell-linux64/chrome-headless-shell" \
             | sha256sum --check --strict
+          timeout --kill-after=2s 20s "$browser_node_root/bin/node" scripts/test_operator_guided_browser.cjs
       - name: Provision fixed public application and stock-client images
         run: >-
           timeout --kill-after=10s 900s python3 -I -S -B scripts/provision_operator_guided_hosted.py
@@ -119,7 +120,7 @@ jobs:
             --expected-binary-sha256 "$guided_binary_sha" \
             --initializer "$GITHUB_WORKSPACE/scripts/private_operator_audit/initialize.py" \
             --profile github-hosted-v1 --hosted-provision "$RUNNER_TEMP/serverware-guided-public/provision.json"
-      - name: Select only source-owned public terminal and joined receipts
+      - name: Select only source-owned public terminal, joined and diagnostic receipts
         if: always()
         shell: bash
         run: |
@@ -144,6 +145,12 @@ jobs:
                   with target.open('xb') as stream:
                       stream.write(raw)
           PY
+          # Missing browser evidence is unknown, never inferred success. Use
+          # only an enum/counter projection, with no raw stderr or its digest.
+          if test -n "${GUIDED_EVIDENCE:-}"; then
+            timeout --kill-after=2s 10s /home/catchplate/.nvm/versions/node/v25.5.0/bin/node \
+              scripts/select_operator_guided_failure.cjs
+          fi
       - name: Retain only public evidence, never runtime data or raw streams
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -155,5 +162,6 @@ jobs:
             ${{ runner.temp }}/serverware-guided-public/provision.json
             ${{ runner.temp }}/serverware-guided-public/terminal.json
             ${{ runner.temp }}/serverware-guided-public/joined-result.json
+            ${{ runner.temp }}/serverware-guided-public/browser-failure.json
           if-no-files-found: warn
           retention-days: 7

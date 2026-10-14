@@ -131,6 +131,7 @@ function createProxyView(workspace, applications) {
       try { gmailProfile = gmailSdkLanguage(element('gmail-sdk-language').value); }
       catch (_) { element('client-command').textContent = 'Choose a supported Gmail SDK language.'; return; }
       element('gmail-sdk-preparation').textContent = gmailProfile.preparation;
+      element('gmail-sdk-file-command').textContent = gmailSdkFileCommand(element('gmail-sdk-language').value);
       element('gmail-proxy-ca-path').placeholder = element('gmail-sdk-language').value === 'python' ?
         'Empty uses the pinned Python certifi roots' : 'Empty uses ' + gmailProfile.label + ' system/default trust';
     }
@@ -384,7 +385,7 @@ function createProxyView(workspace, applications) {
         try { config.client_recipe = gmailSdkClientConfiguration(gmailSdkOptions(catalog, application, rule), token); }
         catch (_) { element('client-copy-status').textContent = 'Private Gmail SDK configuration is unavailable; refresh and confirm this application token and CA paths.'; return; }
         config.proxy_ca_file = element('gmail-proxy-ca-path').value || null;
-        config.note += ' Contains this application token in client_recipe.environment and proxy_password. Run only the selected reviewed Gmail inbox example with the explicit clean environment/entrypoint. For v2, resolve each supplied CA path relative to example_directory before launch and use the exact arguments. When resolve_executable_from_path is true, first resolve the installed Node executable to an absolute path before clearing the environment. This JSON is not an executable. Bounded sample, no age restriction. Keep out of source control.';
+        config.note += ' Gmail Node, Python and Go examples accept this complete file with --config. Relative CA paths resolve beside this JSON file, not the example directory. Contains only the Serverware application token, not Google credentials. The example reads connection settings; this JSON is never executed. Bounded inbox sample, no age restriction. Keep out of source control.';
       } else config.note += ' Your client performs pagination and separate message reads; this is not an automated mail job. No age restriction.';
     }
     if (isGithubRule(rule)) {

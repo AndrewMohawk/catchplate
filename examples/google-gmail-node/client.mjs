@@ -1,7 +1,7 @@
 // Official generated Gmail SDK; explicit, bounded Gaxios fetch implementation.
-import { readFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readFileSync, readSync } from 'node:fs';
 import { isIP } from 'node:net';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { rootCertificates } from 'node:tls';
 import { pathToFileURL } from 'node:url';
 
@@ -13,6 +13,8 @@ const MAX_RESPONSE = 1024 * 1024;
 const TIMEOUT_MS = 30_000;
 const DEADLINE_MS = 120_000;
 const MAX_REQUESTS = 12;
+const MAX_CONFIG_BYTES = 64 * 1024;
+const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 
 function requireValue(condition) {
   if (!condition) throw new Error(FAILURE);
@@ -39,7 +41,7 @@ export function configuration(env) {
     && proxy.hostname.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))
     && !proxyUrl.includes('\\') && !/:[/]?$/.test(proxyUrl));
   const applicationId = required(env, 'SERVERWARE_APP_ID', 36);
-  requireValue(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(applicationId));
+  requireValue(UUID.test(applicationId));
   const token = required(env, 'SERVERWARE_PROXY_TOKEN', 43);
   requireValue(/^[A-Za-z0-9_-]{43}$/.test(token)
     && Buffer.from(token, 'base64url').length === 32
@@ -47,6 +49,74 @@ export function configuration(env) {
   return { proxyUrl, applicationId, token,
     caFile: required(env, 'SERVERWARE_CA_FILE'),
     proxyCaFile: env.SERVERWARE_PROXY_CA_FILE ? required(env, 'SERVERWARE_PROXY_CA_FILE') : null };
+}
+
+function readConfigurationFile(path) {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const before = fstatSync(fd);
+    requireValue(before.isFile() && before.size > 0 && before.size <= MAX_CONFIG_BYTES);
+    const bytes = Buffer.alloc(MAX_CONFIG_BYTES + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const count = readSync(fd, bytes, length, bytes.length - length, null);
+      if (count === 0) break;
+      length += count;
+    }
+    const after = fstatSync(fd);
+    requireValue(length === before.size && length <= MAX_CONFIG_BYTES
+      && ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].every(key => before[key] === after[key]));
+    return JSON.parse(bytes.subarray(0, length).toString('utf8'));
+  } finally { closeSync(fd); }
+}
+
+export function loadClientConfig(path, env, now = Date.now()) {
+  try {
+    const filename = resolve(required({ path }, 'path'));
+    const value = readConfigurationFile(filename);
+    const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+    requireValue(object(value) && object(value.client_recipe));
+    const recipe = value.client_recipe;
+    requireValue(['serverware.gmailSdkClient/v1', 'serverware.gmailSdkClient/v2'].includes(recipe.schema)
+      && object(recipe.environment));
+    requireValue(value.operation_bundle === 'gmail_read_v1'
+      && value.upstream_url === GMAIL_ORIGIN + LIST_PATH
+      && Array.isArray(value.methods) && value.methods.length === 1 && value.methods[0] === 'GET'
+      && value.query_mode === 'orderedFormV1' && value.credential_input === 'replace_exact'
+      && value.proxy_authentication === 'basic_and_bearer_v1'
+      && value.proxy_username === value.application_id
+      && typeof value.access_rule_id === 'string' && UUID.test(value.access_rule_id)
+      && Number.isSafeInteger(now) && now > 0
+      && Number.isSafeInteger(value.token_expires_at_epoch_ms) && value.token_expires_at_epoch_ms > now);
+    const connection = recipe.environment;
+    requireValue(recipe.access_rule_id === value.access_rule_id
+      && recipe.token_expires_at_epoch_ms === value.token_expires_at_epoch_ms
+      && connection.SERVERWARE_APP_ID === value.application_id
+      && connection.SERVERWARE_PROXY_URL === value.proxy_url
+      && connection.SERVERWARE_PROXY_TOKEN === value.proxy_password
+      && connection.SERVERWARE_CA_FILE === value.ca_file
+      && (connection.SERVERWARE_PROXY_CA_FILE ?? null) === (value.proxy_ca_file ?? null));
+    const caPath = value => resolve(dirname(filename), required({ path: value }, 'path'));
+    // Language, entrypoint, commands and arbitrary environment entries are inert.
+    // Import only connection values, clearing an absent outer CA from the caller.
+    return configuration({ ...env,
+      SERVERWARE_PROXY_URL: value.proxy_url,
+      SERVERWARE_APP_ID: value.application_id,
+      SERVERWARE_PROXY_TOKEN: value.proxy_password,
+      SERVERWARE_CA_FILE: caPath(value.ca_file),
+      SERVERWARE_PROXY_CA_FILE: value.proxy_ca_file === undefined || value.proxy_ca_file === null
+        ? undefined : caPath(value.proxy_ca_file),
+    });
+  } catch { throw new Error(FAILURE); }
+}
+
+export function parseArguments(args) {
+  requireValue(Array.isArray(args) && args.every(value => typeof value === 'string'));
+  if (args.length === 0) return { help: false, configPath: null };
+  if (args.length === 1 && args[0] === '--help') return { help: true, configPath: null };
+  requireValue(args.length === 2 && args[0] === '--config'
+    && args[1].length > 0 && !args[1].startsWith('--'));
+  return { help: false, configPath: required({ path: args[1] }, 'path') };
 }
 
 function certificate(path, readFile) {
@@ -186,8 +256,12 @@ export async function perform(sdk) {
 async function main() {
   let proxy;
   try {
-    requireValue(process.argv.length === 2);
-    const config = configuration(process.env);
+    const args = parseArguments(process.argv.slice(2));
+    if (args.help) {
+      console.log('Usage: node client.mjs [--config PATH]');
+      return;
+    }
+    const config = args.configPath ? loadClientConfig(args.configPath, process.env) : configuration(process.env);
     const [{ gmail, auth }, { ProxyAgent, request }] = await Promise.all([
       import('@googleapis/gmail'), import('undici'),
     ]);

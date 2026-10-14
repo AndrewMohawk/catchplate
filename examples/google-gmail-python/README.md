@@ -50,7 +50,30 @@ cd examples/google-gmail-python
 python3.12 -m venv .venv
 .venv/bin/python -m pip install --only-binary=:all: -r requirements.txt
 .venv/bin/python -m pip check
+```
 
+Download **Private client configuration** from Proxy setup, then run the saved
+file directly:
+
+```sh
+chmod 600 /private/path/serverware-client.private.json
+.venv/bin/python gmail.py --config /private/path/serverware-client.private.json
+```
+
+Keep this file private and out of source control: it contains the Serverware
+application token, not a Google token. Put the downloaded CA beside the JSON
+when using its default `./serverware-ca.pem` path. Both interception and optional
+outer-proxy CA paths resolve relative to the JSON file, not the current directory.
+The loader requires a current integer token expiry and matching application,
+access-rule, proxy, token and CA values in the download and its nested recipe.
+Downloads for Go, Node.js or Python work with this Python entrypoint; language,
+entrypoint and argument metadata are never executed. Only allowlisted connection
+fields reach the existing clean child. A detached `client_recipe` is not a full
+download, and `--config` is not accepted in the internal `--child` mode.
+
+Alternatively, the existing environment-only invocation remains available:
+
+```sh
 export SERVERWARE_PROXY_URL='https://your-proxy.example:443'
 export SERVERWARE_APP_ID='your-saved-application-uuid'
 export SERVERWARE_CA_FILE='/absolute/path/to/serverware-ca.pem'
@@ -101,6 +124,19 @@ without enabling HTTP debug logging or printing exception objects.
   returned message ID mismatch fail. No response body is included in errors.
 
 ## Verification and remaining evidence
+
+The configuration/CLI checks need only Python's standard library:
+
+```sh
+python3 -B test_gmail.py --config-only ConfigurationTests -v
+```
+
+On 2026-10-14, these six groups passed in 0.028 seconds. This mode supplies inert
+SDK import stubs and never runs the SDK or transport; it checks full-download
+field joins, all three language descriptions, bounded duplicate-free JSON,
+expiry, relative paths, clean child arguments and private-error handling.
+
+With the prepared pinned dependencies, run the real SDK checks as well:
 
 ```sh
 .venv/bin/python -B -m unittest -v test_gmail

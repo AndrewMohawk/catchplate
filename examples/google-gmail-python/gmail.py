@@ -5,10 +5,12 @@ from contextlib import contextmanager
 from importlib.metadata import version
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
 import ssl
+import stat
 import subprocess
 import sys
 import time
@@ -29,6 +31,86 @@ PINS = {"google-api-python-client": "2.201.0", "httplib2": "0.32.0",
     "requests": "2.34.2", "urllib3": "2.8.0", "certifi": "2026.7.22"}
 REQUIRED_ENV = ("SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID", "SERVERWARE_PROXY_TOKEN", "SERVERWARE_CA_FILE")
 FAILURE = "Gmail read failed; check application permission, proxy trust and the operator audit log."
+MAX_CONFIG_BYTES = 64 * 1024
+
+
+def configuration_environment(config_file):
+    """Read the workspace's private download as data, never as a command."""
+    path = Path(config_file).absolute()
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW), "rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= MAX_CONFIG_BYTES:
+            raise ValueError("Invalid configuration file")
+        raw = stream.read(MAX_CONFIG_BYTES + 1)
+    if not 0 < len(raw) <= MAX_CONFIG_BYTES:
+        raise ValueError("Invalid configuration file")
+
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("Duplicate configuration field")
+            result[key] = value
+        return result
+
+    def number(value):
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError("Invalid configuration number")
+        return result
+
+    def invalid_constant(_value):
+        raise ValueError("Invalid configuration number")
+
+    value = json.loads(raw.decode("utf-8"), object_pairs_hook=pairs,
+        parse_float=number, parse_constant=invalid_constant)
+    if type(value) is not dict:
+        raise ValueError("Invalid configuration object")
+    recipe = value.get("client_recipe")
+    if (type(recipe) is not dict
+            or recipe.get("schema") not in ("serverware.gmailSdkClient/v1", "serverware.gmailSdkClient/v2")
+            or recipe.get("clear_environment") is not True
+            or type(recipe.get("environment")) is not dict):
+        raise ValueError("A downloaded Gmail SDK configuration is required")
+    for field in ("application_id", "access_rule_id"):
+        if type(value.get(field)) is not str or str(UUID(value[field])) != value[field]:
+            raise ValueError("Invalid configuration identity")
+    expiry = value.get("token_expires_at_epoch_ms")
+    if (value.get("operation_bundle") != "gmail_read_v1"
+            or value.get("upstream_url") != ORIGIN + LIST_PATH
+            or value.get("methods") != ["GET"]
+            or value.get("query_mode") != "orderedFormV1"
+            or value.get("credential_input") != "replace_exact"
+            or value.get("proxy_authentication") != "basic_and_bearer_v1"
+            or value.get("proxy_username") != value["application_id"]
+            or type(expiry) is not int or not time.time_ns() // 1_000_000 < expiry <= 2**53 - 1
+            or type(recipe.get("token_expires_at_epoch_ms")) is not int
+            or recipe["token_expires_at_epoch_ms"] != expiry
+            or recipe.get("access_rule_id") != value["access_rule_id"]):
+        raise ValueError("Invalid Gmail configuration scope")
+    connection = recipe["environment"]
+    bindings = {"proxy_url": "SERVERWARE_PROXY_URL", "application_id": "SERVERWARE_APP_ID",
+        "proxy_password": "SERVERWARE_PROXY_TOKEN", "ca_file": "SERVERWARE_CA_FILE"}
+    selected = {}
+    for field, key in bindings.items():
+        if type(value.get(field)) is not str or connection.get(key) != value[field]:
+            raise ValueError("Gmail connection values disagree")
+        selected[key] = value[field]
+    proxy_ca = value.get("proxy_ca_file")
+    if ("proxy_ca_file" not in value or proxy_ca is not None and type(proxy_ca) is not str
+            or connection.get("SERVERWARE_PROXY_CA_FILE") != proxy_ca):
+        raise ValueError("Gmail proxy CA values disagree")
+    if proxy_ca is not None:
+        selected["SERVERWARE_PROXY_CA_FILE"] = proxy_ca
+
+    for key in ("SERVERWARE_CA_FILE", "SERVERWARE_PROXY_CA_FILE"):
+        if key in selected:
+            item = selected[key]
+            if not item or len(item) > 512 or any(ord(c) < 32 or ord(c) == 127 for c in item):
+                raise ValueError("Invalid CA path")
+            selected[key] = str((path.parent / item).resolve())
+    # No command, language metadata or other environment entry is inherited.
+    return child_environment(selected)
 
 
 def settings(env):
@@ -282,15 +364,19 @@ def launch(env):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Read a bounded INBOX sample with the official Gmail SDK.")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--config", metavar="PATH", help="Private client JSON downloaded from Serverware")
     args = parser.parse_args(argv)
     logging.disable(logging.CRITICAL)
     try:
+        if args.child and args.config is not None:
+            raise ValueError("Downloaded configuration is parent-only")
         if args.child:
             check_versions()
             with configured_http(private_child_environment(os.environ)) as http:
                 value = read_mail(http)
         else:
-            value = launch(os.environ)
+            env = os.environ if args.config is None else configuration_environment(args.config)
+            value = launch(env)
         print(json.dumps(summary(value), separators=(",", ":")))
         return 0
     except Exception:

@@ -177,8 +177,8 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(shards["python-2"][0][0].script, "test_managed_client.py")
         self.assertEqual(shards["python-2"][0][-1].script, "test_native_jit_prepare.py")
         self.assertEqual(shards["python-3"][0][0].script, "test_authority_complete_read_write.py")
-        self.assertEqual(tuple(len(selected) for selected, _ in shards.values()), (12, 40, 43, 1, 17))
-        self.assertEqual((len(runner.SUITES), len(python)), (113, 96))
+        self.assertEqual(tuple(len(selected) for selected, _ in shards.values()), (12, 41, 43, 1, 17))
+        self.assertEqual((len(runner.SUITES), len(python)), (114, 97))
         self.assertEqual(shards["node"][0], tuple(suite for suite in runner.SUITES if suite.runtime == "node"))
         for partition, (selected, budget) in shards.items():
             self.assertTrue(selected)
@@ -239,7 +239,7 @@ class RunnerTests(unittest.TestCase):
                         str(runner.ROOT / "scripts" / native.script)])
                 receipt = json.loads((output / "result.json").read_text())
                 self.assertEqual((receipt["partition"], receipt["maximumSeconds"], receipt["totalSuiteCount"]),
-                    ("native-review", 600, 113))
+                    ("native-review", 600, 114))
                 self.assertEqual([suite["script"] for suite in receipt["suites"]], [native.script])
                 self.assertEqual(receipt["suites"][0]["status"],
                     "not_run_budget" if expected_seconds is None else "passed")
@@ -251,7 +251,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(len(proof), 1)
         self.assertEqual(proof[0].seconds, 180)
         self.assertEqual(proof[0].arguments, ())
-        self.assertEqual(len(runner.SUITES), 113)
+        self.assertEqual(len(runner.SUITES), 114)
         self.assertEqual(budget, 600)
         self.assertEqual(runner.MAX_PARTITION_SECONDS, 600)
 

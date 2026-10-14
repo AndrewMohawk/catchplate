@@ -46,6 +46,10 @@ function gmailSdkPublicConfiguration({proxyUrl, applicationId, accessRuleId, tok
 function gmailSdkShellQuote(value) {
   return "'" + value.replaceAll("'", "'\\''") + "'";
 }
+function gmailSdkFileCommand(language = 'go') {
+  const profile = gmailSdkLanguage(language);
+  return [profile.entrypoint, ...profile.arguments, '--config', './serverware-client.private.json'].join(' ');
+}
 function buildGmailSdkClientRecipe(options) {
   const config = gmailSdkPublicConfiguration(options);
   const language = options.language === undefined ? 'go' : options.language;

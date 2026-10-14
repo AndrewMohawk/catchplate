@@ -37,7 +37,8 @@ attachment, history, profile or Calendar calls.
 The permission has no age restriction; this example's inbox/count limits do not
 narrow the saved application's authority. Current-source **Proxy setup** offers
 Go, Node.js and Python under **Gmail SDK language**; choose **Node.js** for this
-project's copied recipe and private configuration. Prepare dependencies first:
+project's copied shell recipe. The Node client also accepts the private JSON
+download generated for any of those languages. Prepare dependencies first:
 the recipe does not install or build them. See the
 [deployment record](../../docker/serverware-operator-demo/README.md) for the live
 release. All three SDK jobs have isolated synthetic-provider proxy evidence in
@@ -59,7 +60,26 @@ The real npm-generated lock pins `@googleapis/gmail` 22.0.1, `googleapis-common`
 9.2.0, Gaxios 7.3.1 and Undici 8.11.2. Do not regenerate it as part of running
 the job. Using the scoped Gmail package avoids installing every Google API.
 
-`.env.example` is reference configuration; the program does not load it. Set
+After installing, download **Private client configuration** and the interception
+CA from **Proxy setup**. Keep the JSON private and place the CA at the path
+recorded in it (relative paths resolve beside the JSON, not your working directory):
+
+```sh
+chmod 600 /path/to/serverware-client.private.json
+node client.mjs --config /path/to/serverware-client.private.json
+```
+
+Use the complete download, not just its nested `client_recipe`. The client checks
+its Gmail read permission, standard proxy login, unexpired token metadata and
+matching connection fields in both copies. It accepts the default Go recipe
+(v1) and Node/Python recipes (v2), but never runs JSON entrypoints, arguments or
+commands, and imports only the required connection settings. File settings
+override ambient connection values; an absent optional proxy CA clears any
+ambient `SERVERWARE_PROXY_CA_FILE`. Keep this token-bearing JSON out of source
+control and obtain a fresh download if its token has expired.
+
+The env-only invocation still works. `.env.example` is reference configuration;
+the program does not load it. Set
 the following in the process environment, with the token injected privately
 through your secret manager—not a command-line argument or shell-history literal:
 
@@ -81,8 +101,9 @@ No provider credentials, Google client secret, refresh token or credentials JSON
 belong in this process. Disable request/debug logging. The program refuses
 `GOOGLE_APPLICATION_CREDENTIALS`, `DEBUG`, `NODE_DEBUG`, `NODE_DEBUG_NATIVE`,
 `GOOGLE_SDK_NODE_LOGGING`, `NODE_OPTIONS`, and disabled TLS verification. It does
-not read `.env`, private client-config downloads, or browser storage. Process
-environment and memory still contain the application token; protect them from
+not read `.env` or browser storage. With `--config`, only a regular JSON file up
+to 64 KiB is accepted; symlinks are refused. The private file, process memory and
+(when using env-only setup) environment contain the application token; protect them from
 other users and diagnostics. Errors print one fixed message and exit nonzero.
 
 ## How the ordinary SDK reaches the proxy

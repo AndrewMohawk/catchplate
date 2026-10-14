@@ -10,7 +10,7 @@ const vm = require('node:vm');
 
 const ROOT = resolve(__dirname, '..');
 const source = readFileSync(join(ROOT, 'serverware/operator_demo_web/workspace_gmail_sdk.js'), 'utf8');
-const helpers = vm.runInNewContext(source + '\n({gmailSdkLanguage, gmailSdkPublicConfiguration, buildGmailSdkClientRecipe, gmailSdkClientConfiguration});', {}, {timeout: 1000});
+const helpers = vm.runInNewContext(source + '\n({gmailSdkLanguage, gmailSdkPublicConfiguration, buildGmailSdkClientRecipe, gmailSdkClientConfiguration, gmailSdkFileCommand});', {}, {timeout: 1000});
 const clone = value => JSON.parse(JSON.stringify(value));
 const TOKEN = Buffer.alloc(32, 85).toString('base64url');
 const NOW = 1800000000000;
@@ -19,6 +19,17 @@ const input = {proxyUrl: 'https://proxy.example.test', applicationId: '11111111-
   nowEpochMs: NOW, caPath: './serverware-ca.pem', proxyCaPath: ''};
 const observed = [];
 function test(name, body) { body(); observed.push(name); }
+
+test('downloaded config commands are fixed, language-specific and secret-free', () => {
+  for (const [language, command] of [
+    ['go', './gmail-example'], ['node', 'node client.mjs'], ['python', '.venv/bin/python -I -B gmail.py'],
+  ]) {
+    assert.equal(helpers.gmailSdkFileCommand(language), command + ' --config ./serverware-client.private.json');
+    assert(!helpers.gmailSdkFileCommand(language).includes(TOKEN));
+  }
+  for (const language of ['node; echo unwanted', '__proto__', '', null])
+    assert.throws(() => helpers.gmailSdkFileCommand(language));
+});
 
 test('closed languages and unchanged Go v1 default', () => {
   const expected = {schema: 'serverware.gmailSdkClient/v1', example_directory: 'examples/google-gmail-go',

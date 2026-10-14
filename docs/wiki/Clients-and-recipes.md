@@ -47,7 +47,7 @@ export SERVERWARE_PROXY_TOKEN
 
 Replace the public placeholders with your deployment's values. Disable shell tracing and HTTP/SDK debug logging. Environment and process memory still contain the client token; use a trusted workstation or protected runner. Run `unset SERVERWARE_PROXY_TOKEN` when finished.
 
-The `.env.example` files document inputs; the examples do not automatically load them. **Download private client config** is available only while the page holds the matching one-time token. That JSON contains the client token and is not an executable. The GitHub examples accept it explicitly with `--config` as shown below; other examples still use their documented inputs. Keep it out of source control, chat and logs.
+The `.env.example` files document inputs; the examples do not automatically load them. **Download private client config** is available only while the page holds the matching one-time token. That JSON contains the client token and is not an executable. The GitHub and Gmail examples accept their matching downloads explicitly with `--config` as shown below; other examples still use their documented inputs. Keep it out of source control, chat and logs.
 
 ## Optional renewal for a long-running workload
 
@@ -118,6 +118,20 @@ The SDK receives only the fixed public GitHub dummy. Serverware substitutes the 
 ## Other maintained SDK jobs
 
 Use the selected directory's README, dependency pins and `.env.example`; do not transplant a different SDK's proxy settings.
+
+For Gmail, prepare one example, then download the private config and CA for the
+saved **Official Gmail SDK** permission. From that example's directory, run one:
+
+```bash
+node client.mjs --config /path/serverware-client.private.json
+.venv/bin/python -I -B gmail.py --config /path/serverware-client.private.json
+./gmail-example --config /path/serverware-client.private.json
+```
+
+No manual environment setup is needed. Relative CA paths resolve beside the
+JSON, and expired or mismatched configurations are refused. These examples read
+an inbox sample; the file never selects a command or supplies a Google token.
+Keep the JSON private, for example with `chmod 600`.
 
 | Job and required permission | Node.js | Python | Go |
 | --- | --- | --- | --- |

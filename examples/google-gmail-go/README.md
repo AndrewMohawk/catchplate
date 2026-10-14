@@ -93,10 +93,32 @@ not install dependencies, renew the application token or repeat a failed job.
 The optional **private client configuration** download is available only while
 the browser holds this application's one-time token. Its `client_recipe` includes
 the exact SDK environment, including that private token, plus the example
-directory and entrypoint. Keep the JSON out of source control. It is reference
-configuration, not an executable, and this Go program does not load it
-automatically. A previously saved application's token cannot be retrieved by
-opening Proxy setup.
+directory and entrypoint. Keep the JSON out of source control and readable only
+by your user. With the binary already built, you can use that download directly:
+
+```sh
+./gmail-example --config /absolute/path/to/private-gmail-client.json
+```
+
+This accepts either the full private download or its `client_recipe` object
+(`serverware.gmailSdkClient/v1` or `/v2`), including a recipe downloaded with
+Node or Python selected. It always runs this Go example's fixed, read-only job;
+downloaded language, entrypoint, arguments and other environment entries are
+never executed. Relative CA paths resolve beside the JSON file, **not** relative
+to the example directory; place the downloaded CA there or use absolute paths.
+The full download's duplicated connection fields and Gmail permission must
+agree with its recipe. The file must be a regular JSON file of at most 64 KiB;
+symlinks, invalid access-rule IDs and expired application tokens are refused.
+
+For `--config` only, the CLI clears its own process environment before SDK
+initialization and installs just the validated connection values and a fixed
+locale. This prevents ambient Google client-certificate discovery and does not
+change your parent shell. Run the binary in a trusted environment: this is not
+isolation from settings already processed at runtime startup. The normal
+explicit proxy and TLS checks still apply. No token is placed in arguments;
+the JSON and process memory/environment remain private. Expiry is checked at
+startup, not renewed. A previously saved application's token cannot be retrieved
+by opening Proxy setup.
 
 For manual configuration, `.env.example` is a reference; the program does not automatically load it. Set
 these variables in the process environment using your private secret-injection

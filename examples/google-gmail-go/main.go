@@ -285,7 +285,14 @@ func run(getenv func(string) string, out io.Writer) error {
 }
 
 func main() {
-	if err := run(os.Getenv, os.Stdout); err != nil {
+	getenv, err := configurationEnvironment(os.Args[1:], os.Getenv, time.Now())
+	if err == nil && len(os.Args) > 1 {
+		err = replaceConfigurationEnvironment(getenv)
+	}
+	if err == nil {
+		err = run(getenv, os.Stdout)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error()) // Only fixed errors, never SDK responses.
 		os.Exit(1)
 	}

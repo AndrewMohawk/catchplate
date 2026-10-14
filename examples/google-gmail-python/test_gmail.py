@@ -4,6 +4,7 @@ TLS checks use real certificates and in-memory handshakes. These tests do not
 claim a Serverware lease, proxy acceptance, consent or deployed integration.
 """
 import base64
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import io
 import json
@@ -16,16 +17,32 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import ModuleType
 from urllib.parse import parse_qs, urlsplit
 
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import NameOID
-import requests
-from requests.adapters import HTTPAdapter
-
-import gmail as example
+CONFIG_ONLY = "--config-only" in sys.argv
+if CONFIG_ONLY:
+    sys.argv.remove("--config-only")
+    # Only configuration/CLI tests run in this stdlib-only mode. These stubs do
+    # not implement or test any SDK/transport behavior; actual SDK tests below
+    # still require the real prepared dependencies.
+    names = ("certifi", "httplib2", "requests", "requests.adapters",
+        "googleapiclient", "googleapiclient.discovery")
+    stubs = {name: ModuleType(name) for name in names}
+    stubs["requests.adapters"].HTTPAdapter = type("UnavailableAdapter", (), {})
+    def unavailable_sdk(*args, **kwargs):
+        raise AssertionError("Configuration-only test reached the SDK")
+    stubs["googleapiclient.discovery"].build = unavailable_sdk
+    with patch.dict(sys.modules, stubs):
+        import gmail as example
+else:
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    import requests
+    from requests.adapters import HTTPAdapter
+    import gmail as example
 
 
 def no_network(event, _):
@@ -36,6 +53,161 @@ def no_network(event, _):
 sys.addaudithook(no_network)
 APP = "12345678-1234-4234-8234-123456789abc"
 TOKEN = base64.urlsafe_b64encode(b"synthetic-application-token-0001").decode().rstrip("=")
+
+
+class ConfigurationTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix="gmail-config-offline-")
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name) / "serverware-client.private.json"
+        self.token = base64.urlsafe_b64encode(b"c" * 32).decode().rstrip("=")
+        rule = "00000000-0000-4000-8000-000000000002"
+        # Full workspace_proxy_audit download, including its nested SDK recipe;
+        # not a detached recipe or an executable description.
+        self.value = {"application_id": APP, "access_rule_id": rule,
+            "proxy_url": "https://proxy.example.test:8443", "proxy_authentication": "basic_and_bearer_v1",
+            "proxy_username": APP, "proxy_password": self.token, "token_expires_at_epoch_ms": 2**53 - 1,
+            "ca_file": "./serverware-ca.pem", "proxy_ca_file": None,
+            "operation_bundle": "gmail_read_v1", "upstream_url": example.ORIGIN + example.LIST_PATH,
+            "methods": ["GET"], "response_mode": "passthrough", "credential_input": "replace_exact",
+            "request_headers": {"Authorization": example.PLACEHOLDER}, "query_mode": "orderedFormV1",
+            "age_policy": {"mode": "unrestricted"}, "client_recipe": {
+                "schema": "serverware.gmailSdkClient/v1", "clear_environment": True,
+                "example_directory": "examples/google-gmail-go", "entrypoint": "./gmail-example",
+                "access_rule_id": rule, "token_expires_at_epoch_ms": 2**53 - 1,
+                "environment": {"LANG": "C.UTF-8", "SERVERWARE_PROXY_URL": "https://proxy.example.test:8443",
+                    "SERVERWARE_APP_ID": APP, "SERVERWARE_PROXY_TOKEN": self.token,
+                    "SERVERWARE_CA_FILE": "./serverware-ca.pem"}}}
+        previous = logging.root.manager.disable
+        self.addCleanup(logging.disable, previous)
+
+    def write(self, value=None):
+        self.path.write_text(json.dumps(self.value if value is None else value), encoding="utf-8")
+        return self.path
+
+    def test_all_producer_languages_map_only_connection_data_and_resolve_ca_beside_json(self):
+        for language in ("go", "node", "python"):
+            value = deepcopy(self.value)
+            recipe = value["client_recipe"]
+            if language != "go":
+                recipe.update(schema="serverware.gmailSdkClient/v2", language=language,
+                    arguments=["client.mjs"] if language == "node" else ["-I", "-B", "gmail.py"],
+                    resolve_ca_paths=True, resolve_executable_from_path=language == "node",
+                    entrypoint="node" if language == "node" else ".venv/bin/python",
+                    example_directory="examples/google-gmail-" + language)
+            with self.subTest(language=language), patch.object(example.subprocess, "run") as run:
+                selected = example.configuration_environment(self.write(value))
+            run.assert_not_called()
+            self.assertEqual(selected, {"SERVERWARE_PROXY_URL": value["proxy_url"], "SERVERWARE_APP_ID": APP,
+                "SERVERWARE_PROXY_TOKEN": self.token, "SERVERWARE_CA_FILE": str(self.path.parent / "serverware-ca.pem")})
+        recipe.update(language="ignored", entrypoint="do-not-execute", arguments=["do-not-execute"],
+            example_directory="/not/the/path/base")
+        recipe["environment"].update(HTTPS_PROXY="wrong", GOOGLE_APPLICATION_CREDENTIALS="wrong",
+            SSLKEYLOGFILE="wrong", PATH="wrong", SERVERWARE_PROXY_CA_FILE="./proxy's $literal.pem")
+        value["proxy_ca_file"] = "./proxy's $literal.pem"
+        before = deepcopy(value)
+        with patch.object(example.subprocess, "run") as run:
+            selected = example.configuration_environment(self.write(value))
+        run.assert_not_called()
+        self.assertEqual(value, before)
+        self.assertEqual(set(selected), set(example.REQUIRED_ENV) | {"SERVERWARE_PROXY_CA_FILE"})
+        self.assertEqual(selected["SERVERWARE_PROXY_CA_FILE"], str(self.path.parent / "proxy's $literal.pem"))
+
+    def test_wrapper_and_recipe_connection_disagreements_refuse(self):
+        mutations = (("application_id", "00000000-0000-4000-8000-000000000003"),
+            ("access_rule_id", "00000000-0000-4000-8000-000000000003"),
+            ("proxy_url", "https://different.example.test"), ("proxy_username", "wrong"),
+            ("proxy_password", "d" * 43), ("ca_file", "./other.pem"),
+            ("proxy_ca_file", "./other.pem"), ("token_expires_at_epoch_ms", 2**53 - 2),
+            ("operation_bundle", "github_issues_read_v1"), ("proxy_authentication", "bearer"),
+            ("upstream_url", "https://different.example.test"), ("methods", ["POST"]),
+            ("query_mode", "none"), ("credential_input", "none"))
+        for field, invalid in mutations:
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                example.configuration_environment(self.write({**self.value, field: invalid}))
+        for field, invalid in (("schema", "serverware.gmailSdkClient/v3"), ("clear_environment", False),
+                ("environment", []), ("access_rule_id", "not-a-uuid"), ("token_expires_at_epoch_ms", 2**53 - 2)):
+            value = deepcopy(self.value)
+            value["client_recipe"][field] = invalid
+            with self.subTest(recipe_field=field), self.assertRaises(ValueError):
+                example.configuration_environment(self.write(value))
+        with self.assertRaises(ValueError):
+            example.configuration_environment(self.write(self.value["client_recipe"]))
+
+    def test_expiry_identity_and_connection_grammar_refuse_even_when_copies_agree(self):
+        for expiry in (0, 1, True, 2**53, 2**53 - 1.0, "9007199254740991", float("nan"), float("inf")):
+            value = deepcopy(self.value)
+            value["token_expires_at_epoch_ms"] = value["client_recipe"]["token_expires_at_epoch_ms"] = expiry
+            with self.subTest(expiry_type=type(expiry).__name__), self.assertRaises(ValueError):
+                example.configuration_environment(self.write(value))
+        value = deepcopy(self.value)
+        value["token_expires_at_epoch_ms"] = value["client_recipe"]["token_expires_at_epoch_ms"] = 1234
+        with patch.object(example.time, "time_ns", return_value=1234 * 1_000_000), self.assertRaises(ValueError):
+            example.configuration_environment(self.write(value))
+        for rule in ("bad", "{00000000-0000-4000-8000-000000000002}", "00000000000040008000000000000002"):
+            value = deepcopy(self.value)
+            value["access_rule_id"] = value["client_recipe"]["access_rule_id"] = rule
+            with self.subTest(rule=rule), self.assertRaises(ValueError):
+                example.configuration_environment(self.write(value))
+        for field, key, invalid in (("proxy_url", "SERVERWARE_PROXY_URL", "http://proxy.example.test"),
+                ("proxy_password", "SERVERWARE_PROXY_TOKEN", "private-canary\n"),
+                ("ca_file", "SERVERWARE_CA_FILE", ""), ("ca_file", "SERVERWARE_CA_FILE", "x" * 513),
+                ("ca_file", "SERVERWARE_CA_FILE", "./bad\n.pem"), ("ca_file", "SERVERWARE_CA_FILE", None)):
+            value = deepcopy(self.value)
+            value[field] = value["client_recipe"]["environment"][key] = invalid
+            with self.subTest(field=field, invalid_type=type(invalid).__name__), self.assertRaises(ValueError):
+                example.configuration_environment(self.write(value))
+
+    def test_file_is_bounded_regular_duplicate_free_json(self):
+        self.path.write_bytes(b" " * (example.MAX_CONFIG_BYTES + 1))
+        with self.assertRaises(ValueError): example.configuration_environment(self.path)
+        with self.assertRaises((ValueError, OSError)): example.configuration_environment(self.path.parent)
+        fifo = self.path.parent / "fifo"
+        os.mkfifo(fifo)
+        with self.assertRaises(ValueError): example.configuration_environment(fifo)
+        link = self.path.parent / "link"
+        link.symlink_to(self.path)
+        with self.assertRaises(OSError): example.configuration_environment(link)
+        for raw in (b"", b"[]", b"{", b'{"client_recipe":{},"client_recipe":{}}',
+                b'{"ignored":NaN}', b'{"ignored":1e309}', b"\xff"):
+            self.path.write_bytes(raw)
+            with self.subTest(raw=raw), self.assertRaises(ValueError): example.configuration_environment(self.path)
+        raw = json.dumps(self.value).encode()
+        self.path.write_bytes(raw + b" " * (example.MAX_CONFIG_BYTES - len(raw)))
+        self.assertEqual(example.configuration_environment(self.path)["SERVERWARE_APP_ID"], APP)
+
+    def test_cli_preserves_environment_only_mode_and_keeps_token_off_child_argv(self):
+        good = {"pages": 1, "messages_read": 0, "more_pages": False}
+        with patch.object(example, "launch", return_value=good) as launch, patch("sys.stdout", io.StringIO()):
+            self.assertEqual(example.main([]), 0)
+            self.assertIs(launch.call_args.args[0], os.environ)
+        with patch.dict(os.environ, {"SERVERWARE_PROXY_TOKEN": "wrong", "HTTPS_PROXY": "wrong"}, clear=True), \
+                patch.object(example, "check_versions"), patch.object(example.subprocess, "run",
+                    return_value=subprocess.CompletedProcess([], 0, json.dumps(good).encode(), b"")) as run, \
+                patch("sys.stdout", io.StringIO()) as out, patch("sys.stderr", io.StringIO()) as err:
+            self.assertEqual(example.main(["--config", str(self.write())]), 0)
+        self.assertEqual(json.loads(out.getvalue()), good)
+        self.assertEqual(err.getvalue(), "")
+        argv, options = run.call_args.args[0], run.call_args.kwargs
+        self.assertEqual(argv[1:3], ["-I", "-B"])
+        self.assertEqual(argv[-1], "--child")
+        self.assertNotIn(self.token, " ".join(argv))
+        self.assertNotIn("--config", argv)
+        self.assertEqual(options["env"]["SERVERWARE_PROXY_TOKEN"], self.token)
+        self.assertEqual(set(options["env"]), set(example.REQUIRED_ENV))
+        self.assertEqual(options["timeout"], 120)
+
+    def test_child_config_and_malformed_download_refuse_before_sdk_without_private_output(self):
+        self.path.write_text('{"private-canary":"' + self.token + '",', encoding="utf-8")
+        for args in (["--config", str(self.path)], ["--child", "--config", str(self.path)]):
+            with patch.object(example, "launch") as launch, patch.object(example, "configured_http") as configure, \
+                    patch.object(example, "check_versions") as versions, patch("sys.stdout", io.StringIO()) as out, \
+                    patch("sys.stderr", io.StringIO()) as err:
+                self.assertEqual(example.main(args), 1)
+            launch.assert_not_called(); configure.assert_not_called(); versions.assert_not_called()
+            self.assertEqual(out.getvalue(), "")
+            self.assertEqual(err.getvalue(), example.FAILURE + "\n")
+            self.assertNotIn(self.token, err.getvalue())
 
 
 def certificate(path, name):
@@ -89,6 +261,7 @@ def response(request, *, value=None, status=200, raw=None, headers=None):
     return result
 
 
+@unittest.skipIf(CONFIG_ONLY, "SDK checks require the prepared pinned dependencies")
 class GmailTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="gmail-sdk-offline-")

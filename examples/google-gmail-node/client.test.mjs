@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Readable } from 'node:stream';
 import { spawnSync } from 'node:child_process';
-import { configuration, proxyOptions, createTransport, perform, FAILURE } from './client.mjs';
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { runInNewContext } from 'node:vm';
+import { configuration, loadClientConfig, parseArguments, proxyOptions, createTransport, perform, FAILURE } from './client.mjs';
 
 const env = { SERVERWARE_PROXY_URL: 'https://proxy.example:443',
   SERVERWARE_APP_ID: '11111111-2222-4333-8444-555555555555',
@@ -29,6 +33,104 @@ test('configuration is application-only; refuses ambient diagnostic/credential c
     { NODE_TLS_REJECT_UNAUTHORIZED: '0' }, { DEBUG: '*' }, { NODE_DEBUG: 'http' },
     { NODE_OPTIONS: '--require hook' }, { GOOGLE_APPLICATION_CREDENTIALS: '/private/provider.json' },
   ]) assert.throws(() => configuration({ ...env, ...override }));
+});
+
+const now = 1_800_000_000_000;
+const sdkConfiguration = runInNewContext(readFileSync(new URL(
+  '../../serverware/operator_demo_web/workspace_gmail_sdk.js', import.meta.url), 'utf8')
+  + '\ngmailSdkClientConfiguration;');
+function downloadedConfig(language = 'go', proxyCaPath = '') {
+  const recipe = sdkConfiguration({ language, proxyUrl: env.SERVERWARE_PROXY_URL,
+    applicationId: env.SERVERWARE_APP_ID, accessRuleId: '22222222-3333-4444-8555-666666666666',
+    tokenExpiresAtEpochMs: now + 60_000, nowEpochMs: now,
+    caPath: './serverware-ca.pem', proxyCaPath }, env.SERVERWARE_PROXY_TOKEN);
+  return { operation_bundle: 'gmail_read_v1', upstream_url: 'https://gmail.googleapis.com/gmail/v1/users/me/messages',
+    methods: ['GET'], query_mode: 'orderedFormV1', credential_input: 'replace_exact',
+    proxy_authentication: 'basic_and_bearer_v1', proxy_username: env.SERVERWARE_APP_ID,
+    application_id: env.SERVERWARE_APP_ID, access_rule_id: recipe.access_rule_id,
+    proxy_url: env.SERVERWARE_PROXY_URL, proxy_password: env.SERVERWARE_PROXY_TOKEN,
+    token_expires_at_epoch_ms: recipe.token_expires_at_epoch_ms,
+    ca_file: recipe.environment.SERVERWARE_CA_FILE, proxy_ca_file: proxyCaPath || null, client_recipe: recipe };
+}
+function privateFile(t) {
+  const directory = mkdtempSync(join(tmpdir(), 'gmail-client-config-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  return { directory, filename: join(directory, 'serverware-client.private.json') };
+}
+
+test('downloaded wrappers accept actual Go/Node/Python recipes, not their executable metadata', t => {
+  const { directory, filename } = privateFile(t);
+  const ambient = { ...env, SERVERWARE_APP_ID: 'bad', SERVERWARE_PROXY_URL: 'http://wrong.example',
+    SERVERWARE_PROXY_TOKEN: 'wrong', SERVERWARE_CA_FILE: '/wrong.pem' };
+  for (const language of ['go', 'node', 'python']) {
+    const value = downloadedConfig(language, language === 'node' ? './outer.pem' : '');
+    value.client_recipe.entrypoint = 'DO_NOT_EXECUTE';
+    value.client_recipe.arguments = ['DO_NOT_EXECUTE'];
+    Object.assign(value.client_recipe.environment, { NODE_OPTIONS: '--require DO_NOT_EXECUTE',
+      DEBUG: '*', GOOGLE_APPLICATION_CREDENTIALS: '/DO_NOT_IMPORT.json' });
+    writeFileSync(filename, JSON.stringify(value), { mode: 0o600 });
+    assert.deepEqual(loadClientConfig(filename, ambient, now), {
+      proxyUrl: env.SERVERWARE_PROXY_URL, applicationId: env.SERVERWARE_APP_ID, token: env.SERVERWARE_PROXY_TOKEN,
+      caFile: join(directory, 'serverware-ca.pem'),
+      proxyCaFile: language === 'node' ? join(directory, 'outer.pem') : null,
+    });
+  }
+  assert.equal(ambient.SERVERWARE_PROXY_TOKEN, 'wrong');
+  assert.equal(ambient.SERVERWARE_PROXY_CA_FILE, '/private/outer.pem');
+  assert.throws(() => loadClientConfig(filename, { ...ambient, DEBUG: '*' }, now), { message: FAILURE });
+});
+
+test('downloaded config refuses wrong scope, expiry and every duplicated connection mismatch', t => {
+  const { filename } = privateFile(t);
+  for (const change of [
+    value => { value.operation_bundle = 'github_issues_read_v1'; },
+    value => { value.upstream_url += '/other'; }, value => { value.methods.push('POST'); },
+    value => { value.query_mode = 'canonical'; }, value => { value.credential_input = 'insert'; },
+    value => { value.proxy_authentication = 'bearer'; }, value => { value.proxy_username = 'other'; },
+    value => { value.access_rule_id = value.client_recipe.access_rule_id = 'not-a-uuid'; },
+    value => { value.client_recipe.schema = 'serverware.gmailSdkClient/v3'; },
+    value => { value.client_recipe.environment = []; }, value => { delete value.client_recipe; },
+    ...[now, now - 1, now + 0.5, '1800000060000', Number.MAX_SAFE_INTEGER + 1, null].map(expiry => value => {
+      value.token_expires_at_epoch_ms = value.client_recipe.token_expires_at_epoch_ms = expiry;
+    }),
+    ...['access_rule_id', 'token_expires_at_epoch_ms'].map(key => value => { value.client_recipe[key] = 'mismatch'; }),
+    ...['SERVERWARE_APP_ID', 'SERVERWARE_PROXY_URL', 'SERVERWARE_PROXY_TOKEN', 'SERVERWARE_CA_FILE',
+      'SERVERWARE_PROXY_CA_FILE'].map(key => value => { value.client_recipe.environment[key] = 'mismatch'; }),
+  ]) {
+    const value = downloadedConfig(); change(value);
+    writeFileSync(filename, JSON.stringify(value), { mode: 0o600 });
+    assert.throws(() => loadClientConfig(filename, env, now), { message: FAILURE });
+  }
+});
+
+test('private configuration is a bounded regular JSON file; filesystem/parser failures stay fixed', t => {
+  const { directory, filename } = privateFile(t);
+  const json = JSON.stringify(downloadedConfig());
+  writeFileSync(filename, json.padEnd(64 * 1024), { mode: 0o600 });
+  assert.equal(loadClientConfig(filename, env, now).applicationId, env.SERVERWARE_APP_ID);
+  const link = join(directory, 'link.json'); symlinkSync(filename, link);
+  for (const path of [link, directory, join(directory, 'missing.json')])
+    assert.throws(() => loadClientConfig(path, env, now), { message: FAILURE });
+  for (const raw of ['', 'DO_NOT_PRINT_SECRET', 'null', '[]', json.padEnd(64 * 1024 + 1)]) {
+    writeFileSync(filename, raw);
+    assert.throws(() => loadClientConfig(filename, env, now), { message: FAILURE });
+  }
+});
+
+test('CLI accepts only optional config path or help, with no secret/config details on failure', t => {
+  assert.deepEqual(parseArguments([]), { help: false, configPath: null });
+  assert.deepEqual(parseArguments(['--config', '/private/client.json']), { help: false, configPath: '/private/client.json' });
+  assert.deepEqual(parseArguments(['--help']), { help: true, configPath: null });
+  for (const args of [['--config'], ['--config', ''], ['--config', '--help'], ['--token', 'secret'],
+    ['--config', 'one', '--config', 'two'], ['list'], ['--help', '--config', 'one']])
+    assert.throws(() => parseArguments(args), { message: FAILURE });
+  const { filename } = privateFile(t);
+  writeFileSync(filename, 'DO_NOT_PRINT_SECRET', { mode: 0o600 });
+  const result = spawnSync(process.execPath, ['client.mjs', '--config', filename], {
+    cwd: new URL('.', import.meta.url), env: {}, encoding: 'utf8', timeout: 5000 });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, FAILURE + '\n');
 });
 
 test('separate CA roots; Basic app identity is CONNECT-only and never URL userinfo', () => {

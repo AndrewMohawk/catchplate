@@ -344,12 +344,21 @@ const handoffTests = [
       for (const [language, label, entrypoint, args] of [['go', 'Go', './gmail-example', []],
         ['node', 'Node.js', 'node', ['client.mjs']], ['python', 'Python', '.venv/bin/python', ['-I', '-B', 'gmail.py']]]) {
         await page.locator('#gmail-sdk-language').selectOption(language);
+        assert.equal(await page.locator('#gmail-sdk-file-command').innerText(),
+          [entrypoint, ...args, '--config', './serverware-client.private.json'].join(' '));
         assert.match(await page.locator('#client-template-title').innerText(), new RegExp('Official ' + label.replace('.', '\\.') + ' SDK'));
         assert((await page.locator('#gmail-sdk-guidance').innerText()).includes('selected ' + label + ' Gmail SDK'));
         const command = await copiedCommand(page); await publicSecretsAbsent(page, command, held);
         assert(command.includes('examples/google-gmail-' + language));
         assert(command.includes(language === 'go' ? 'exec ./gmail-example' : language === 'node' ? 'exec "$1" client.mjs' : 'exec .venv/bin/python -I -B gmail.py'));
         const config = await downloadedConfig(page);
+        const configFile = join(evidence, 'gmail-' + language + '.private.json');
+        await writeFile(configFile, JSON.stringify(config), {flag: 'wx', mode: 0o600});
+        const {loadClientConfig} = await import('../examples/google-gmail-node/client.mjs');
+        const loaded = loadClientConfig(configFile, {}, NOW);
+        assert.equal(loaded.applicationId, IDS.application);
+        assert.equal(loaded.token, held);
+        assert.equal(loaded.caFile, resolve(evidence, config.ca_file));
         assert.equal(config.client_recipe.schema, 'serverware.gmailSdkClient/' + (language === 'go' ? 'v1' : 'v2'));
         assert.equal(config.client_recipe.entrypoint, entrypoint);
         assert.equal(config.client_recipe.example_directory, 'examples/google-gmail-' + language);

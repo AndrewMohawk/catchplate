@@ -59,8 +59,9 @@ class RunnerTests(unittest.TestCase):
                 "test_authority_release_private_ingress.py", "test_native_jit_prepare.py",
                 "test_approval_history_metadata.py"):
             denial = next(row for row in runner.SUITES if row.script == script)
+            expected_seconds = 180 if script == "test_authority_revocation_proof_bundle.py" else 60
             self.assertEqual((denial.category, denial.runtime, denial.arguments, denial.seconds),
-                ("backend", "python", (), 60))
+                ("backend", "python", (), expected_seconds))
         self.assertIn("test_operator_notification_google_events.py", paths)
         self.assertIn("test_approval_capabilities_http.py", paths)
         self.assertIn("test_authority_jit_review_receipt.py", paths)

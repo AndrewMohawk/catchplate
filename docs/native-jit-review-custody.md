@@ -332,6 +332,37 @@ preservation-aware migration, including unchanged historical native-pair rows.
 Do not rebuild current-only constraints around old rows or rewrite signed
 historical identities. The running instance is unchanged by this source batch.
 
+### Bounded literal plan preparation
+
+The October 14 plan prerequisites now frame read originals as a small manifest
+and immutable frames of at most 128 KiB, preserving the existing 96 MiB aggregate
+ceiling. The one-shot owner can acquire through the real reader or replay those
+literal originals through the actual kernel. Its output is unsigned and
+uncommitted; the original session token is required transiently and is never
+retained in the result. No selector, executable registry, schema or generic work
+limit changes accompany this component.
+
+All 12 focused tests passed, including a greater-than-4-MiB round trip and
+mutation, truncation, order, deadline and ledger controls. Six additional tests
+passed with independently constructed primary/counted trees, genuinely signed
+synthetic root enrollment and two nonce-bound heads, synthetic Nitro evidence,
+and all nine or thirteen selected rows. Actual replay produced zero authorize
+mutations and exactly four unsigned receipt effects; revoked credentials, bad
+token/root/signature and an already-present receipt were refused. Only fixture
+clocks were replaced, not proof or kernel verdicts. The final six-test run took
+96.403 seconds in the pinned, network-isolated app image, exited zero without
+OOM or restart, and its container was removed. The earlier import-profile
+failure and exit-137 run are not successful acceptance; the latter's terminal
+OOM/timeout cause was not independently retained.
+
+These tests do not exercise PostgreSQL acquisition or establish cold policy
+admission, signing, commit, completion ACK or disclosure. Those remain the next
+integration boundary. In particular, existing activation and registration
+policies cannot silently become native-review policy owners. A separate
+compatibility gap also remains: generic configuration capture in the existing
+native-review kernel and new owner rejects otherwise-valid fractional timeout
+values; do not rewrite a signed configuration to work around it.
+
 ### Opening component checkpoint and startup repair
 
 The source batch was committed and pushed as `950701ae`. Separately frozen

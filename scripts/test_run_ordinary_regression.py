@@ -46,6 +46,8 @@ class RunnerTests(unittest.TestCase):
                 "test_authority_native_jit_review_current_chunks.py",
                 "test_authority_native_jit_review_current_read.py",
                 "test_authority_native_jit_review_open.py",
+                "test_authority_native_jit_review_plan.py",
+                "test_authority_native_jit_review_plan_replay.py",
                 "test_authority_launcher_native_review_credentials.py",
                 "test_native_jit_review_portal.py",
                 "test_authority_native_jit_pending.py",
@@ -59,7 +61,8 @@ class RunnerTests(unittest.TestCase):
                 "test_authority_release_private_ingress.py", "test_native_jit_prepare.py",
                 "test_approval_history_metadata.py"):
             denial = next(row for row in runner.SUITES if row.script == script)
-            expected_seconds = 180 if script == "test_authority_revocation_proof_bundle.py" else 60
+            expected_seconds = 180 if script in {"test_authority_revocation_proof_bundle.py",
+                "test_authority_native_jit_review_plan_replay.py"} else 60
             self.assertEqual((denial.category, denial.runtime, denial.arguments, denial.seconds),
                 ("backend", "python", (), expected_seconds))
         self.assertIn("test_operator_notification_google_events.py", paths)
@@ -122,7 +125,8 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual({row.script for row in runner.SUITES if row.script.startswith(
             ("test_operator_x_", "test_prepare_operator_x_", "test_run_operator_x_"))},
             x_backend | x_ui | x_fixture | {relay})
-        observers = {"test_operator_rollout_x_quota.py", "test_operator_rollout_snapshot.py"}
+        observers = {"test_operator_rollout_x_quota.py", "test_operator_rollout_snapshot.py",
+            "test_operator_source_revision_retained.py", "test_operator_source_revision_retained_host.py"}
         self.assertTrue(observers <= set(paths))
         for row in runner.SUITES:
             if row.script in x_backend:
@@ -163,8 +167,8 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(shards["python-2"][0][0].script, "test_managed_client.py")
         self.assertEqual(shards["python-2"][0][-1].script, "test_native_jit_prepare.py")
         self.assertEqual(shards["python-3"][0][0].script, "test_authority_complete_read_write.py")
-        self.assertEqual(tuple(len(selected) for selected, _ in shards.values()), (12, 39, 41, 16))
-        self.assertEqual((len(runner.SUITES), len(python)), (108, 92))
+        self.assertEqual(tuple(len(selected) for selected, _ in shards.values()), (12, 41, 43, 16))
+        self.assertEqual((len(runner.SUITES), len(python)), (112, 96))
         self.assertEqual(shards["node"][0], tuple(suite for suite in runner.SUITES if suite.runtime == "node"))
         for partition, (selected, budget) in shards.items():
             self.assertTrue(selected)
@@ -178,7 +182,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(len(proof), 1)
         self.assertEqual(proof[0].seconds, 180)
         self.assertEqual(proof[0].arguments, ())
-        self.assertEqual(len(runner.SUITES), 108)
+        self.assertEqual(len(runner.SUITES), 112)
         self.assertEqual(budget, 600)
         self.assertEqual(runner.MAX_PARTITION_SECONDS, 600)
 

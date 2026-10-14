@@ -100,6 +100,8 @@ SUITES = (
     Suite("backend", "test_authority_native_jit_review_current_chunks.py", seconds=60),
     Suite("backend", "test_authority_native_jit_review_current_read.py", seconds=60),
     Suite("backend", "test_authority_native_jit_review_open.py", seconds=60),
+    Suite("backend", "test_authority_native_jit_review_plan.py", seconds=60),
+    Suite("backend", "test_authority_native_jit_review_plan_replay.py", seconds=180),
     Suite("backend", "test_authority_launcher_native_review_credentials.py", seconds=60),
     Suite("backend", "test_native_jit_review_portal.py", seconds=60),
     # Synthetic pending, writer-boundary, legacy-reader and ASGI controls only;
@@ -149,6 +151,9 @@ SUITES = (
     Suite("backend", "test_run_operator_x_post_fixture.py", seconds=60),
     Suite("backend", "test_operator_rollout_x_quota.py", seconds=60),
     Suite("backend", "test_operator_rollout_snapshot.py", seconds=60),
+    # Inert copied-state harness controls only; no retained state or Docker access.
+    Suite("backend", "test_operator_source_revision_retained.py", seconds=60),
+    Suite("backend", "test_operator_source_revision_retained_host.py", seconds=60),
     Suite("backend", "test_operator_guided_checker.py", seconds=60),
     Suite("backend", "test_operator_guided_fixture.py", seconds=60),
     Suite("backend", "test_operator_public_proxy.py", seconds=60),

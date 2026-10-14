@@ -266,7 +266,7 @@ func run(getenv func(string) string, out io.Writer) error {
 }
 
 func main() {
-	if err := run(os.Getenv, os.Stdout); err != nil {
+	if err := runCLI(os.Args[1:], os.Getenv, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err.Error()) // Fixed errors only, never raw SDK/provider data.
 		os.Exit(1)
 	}

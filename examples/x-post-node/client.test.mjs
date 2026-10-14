@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFileSync } from 'node:fs';
-import { configuration, createSdk, failure, installTransport, onePostInterceptor,
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { configuration, createSdk, failure, installTransport, loadClientConfig, onePostInterceptor, parseArguments,
   perform, postText, proxyOptions, PUBLIC_X_DUMMY, X_ORIGIN } from './client.mjs';
 
 const env = () => ({ SERVERWARE_PROXY_URL: 'https://proxy.example.test',
@@ -10,6 +12,79 @@ const env = () => ({ SERVERWARE_PROXY_URL: 'https://proxy.example.test',
   SERVERWARE_X_POST_TEXT: 'An explicit synthetic post.', SERVERWARE_X_POST_CONFIRM: 'post-once' });
 const pem = value => Buffer.from('-----BEGIN CERTIFICATE-----\n' + value + '\n-----END CERTIFICATE-----');
 const request = () => ({ origin: X_ORIGIN, path: '/2/tweets', method: 'POST', body: '{"text":"test"}' });
+const NOW = 1_791_996_000_000;
+const downloaded = () => ({ application_id: env().SERVERWARE_APP_ID,
+  access_rule_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', proxy_url: env().SERVERWARE_PROXY_URL,
+  proxy_authentication: 'basic_and_bearer_v1', proxy_username: env().SERVERWARE_APP_ID,
+  proxy_password: 'downloaded_synthetic_token', token_expires_at_epoch_ms: NOW + 60000,
+  ca_file: './serverware-ca.pem', proxy_ca_file: null, upstream_url: X_ORIGIN + '/2/tweets', methods: ['POST'],
+  operation_bundle: 'x_text_post_v1', credential_input: 'replace_exact', response_mode: 'x_post_json_v1',
+  client_recipe: { required_local_environment: ['SERVERWARE_X_POST_TEXT', 'SERVERWARE_X_POST_CONFIRM'],
+    confirmation_value: 'post-once', automatic_retries: 0, sdk_auth_token: PUBLIC_X_DUMMY } });
+function configFile(t) {
+  const directory = mkdtempSync(join(tmpdir(), 'serverware-x-post-config-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'serverware-client.private.json');
+  return { directory, path, write(value) { writeFileSync(path, JSON.stringify(value), { mode: 0o600 }); return path; } };
+}
+
+test('downloaded config imports connection only; post content and confirmation remain local', t => {
+  const file = configFile(t), value = downloaded();
+  value.text = 'never-import'; value.request_body = { text: 'never-import' };
+  value.request_headers = { Authorization: 'never-import' }; value.command = 'never-execute';
+  value.SERVERWARE_X_POST_TEXT = 'never-import'; value.SERVERWARE_X_POST_CONFIRM = 'post-once';
+  value.environment = { SERVERWARE_X_POST_TEXT: 'never-import', SERVERWARE_X_POST_CONFIRM: 'post-once' };
+  value.client_recipe.environment = value.environment;
+  const path = file.write(value);
+  for (const local of [{}, { SERVERWARE_X_POST_TEXT: 'local' }, { SERVERWARE_X_POST_CONFIRM: 'post-once' },
+    { SERVERWARE_X_POST_TEXT: 'local', SERVERWARE_X_POST_CONFIRM: 'yes' }])
+    assert.throws(() => loadClientConfig(path, local, NOW));
+  const ambient = { ...env(), SERVERWARE_PROXY_CA_FILE: '/stale.pem' };
+  assert.deepEqual(loadClientConfig(path, ambient, NOW), {
+    proxyUrl: value.proxy_url, applicationId: value.application_id, token: value.proxy_password,
+    caFile: join(file.directory, 'serverware-ca.pem'), proxyCaFile: null, text: env().SERVERWARE_X_POST_TEXT });
+  assert.equal(ambient.SERVERWARE_PROXY_CA_FILE, '/stale.pem');
+  value.proxy_ca_file = './outer.pem';
+  assert.equal(loadClientConfig(file.write(value), env(), NOW).proxyCaFile, join(file.directory, 'outer.pem'));
+  delete value.proxy_ca_file;
+  assert.equal(loadClientConfig(file.write(value), ambient, NOW).proxyCaFile, null);
+});
+
+test('downloaded config rejects mismatched identity, expired token and non-post scope', t => {
+  const file = configFile(t);
+  for (const patch of [{ application_id: 'bad' }, { access_rule_id: 'bad' }, { proxy_username: 'other' },
+    { proxy_authentication: 'bearer' }, { proxy_password: 'bad token' }, { proxy_url: 'http://proxy.test' },
+    { token_expires_at_epoch_ms: NOW }, { token_expires_at_epoch_ms: String(NOW + 60000) },
+    { token_expires_at_epoch_ms: Number.MAX_SAFE_INTEGER + 1 }, { ca_file: '' }, { proxy_ca_file: '' },
+    { operation_bundle: 'x_username_read_v1' }, { methods: ['GET'] }, { methods: ['POST', 'POST'] },
+    { upstream_url: 'https://api.twitter.com/2/tweets' }, { upstream_url: X_ORIGIN + '/2/tweets?query=1' },
+    { credential_input: 'inject' }, { response_mode: 'passthrough' }])
+    assert.throws(() => loadClientConfig(file.write({ ...downloaded(), ...patch }), env(), NOW));
+  file.write(downloaded());
+  assert.throws(() => loadClientConfig(file.path, { ...env(), NODE_TLS_REJECT_UNAUTHORIZED: '0' }, NOW));
+  assert.throws(() => loadClientConfig(file.path, env(), NaN));
+});
+
+test('downloaded config is bounded regular JSON and errors omit private content', t => {
+  const file = configFile(t), json = JSON.stringify(downloaded());
+  writeFileSync(file.path, json.padEnd(65536, ' '));
+  assert.equal(loadClientConfig(file.path, env(), NOW).text, env().SERVERWARE_X_POST_TEXT);
+  for (const raw of ['', json.padEnd(65537, ' '), '{"secret":"private-canary"', 'null', '[]']) {
+    writeFileSync(file.path, raw);
+    assert.throws(() => loadClientConfig(file.path, env(), NOW), { message: 'X posting configuration or response refused' });
+  }
+  assert.throws(() => loadClientConfig(file.directory, env(), NOW));
+  file.write(downloaded()); const link = join(file.directory, 'link.json'); symlinkSync(file.path, link);
+  assert.throws(() => loadClientConfig(link, env(), NOW));
+});
+
+test('config CLI preserves environment invocation and cannot supply posting confirmation or text', () => {
+  assert.deepEqual(parseArguments([]), { help: false, configPath: null });
+  assert.deepEqual(parseArguments(['--config', './private.json']), { help: false, configPath: './private.json' });
+  assert.equal(parseArguments(['--help']).help, true);
+  for (const args of [['--config'], ['--config', ''], ['--config', '--help'], ['--config', 'a', '--config', 'b'],
+    ['--help', 'extra'], ['--confirm', 'post-once'], ['--text', 'post']]) assert.throws(() => parseArguments(args));
+});
 
 test('posting requires exact confirmation and bounded text without rewriting', () => {
   for (const patch of [{ SERVERWARE_X_POST_CONFIRM: undefined }, { SERVERWARE_X_POST_CONFIRM: 'yes' },

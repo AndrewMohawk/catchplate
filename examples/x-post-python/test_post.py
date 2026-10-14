@@ -9,16 +9,24 @@ import ssl
 import subprocess
 import sys
 import tempfile
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-import certifi
-import requests
-from requests.adapters import HTTPAdapter
-from xdk import Client
-
-import post
+CONFIG_ONLY = "--config-only" in sys.argv
+if CONFIG_ONLY:
+    sys.argv.remove("--config-only")
+    # Import-only stubs: this mode tests JSON/CLI behavior, never SDK transport.
+    stubs = {name: ModuleType(name) for name in ("requests", "requests.adapters")}
+    stubs["requests.adapters"].HTTPAdapter = type("UnavailableAdapter", (), {})
+    with patch.dict(sys.modules, stubs):
+        import post
+else:
+    import certifi
+    import requests
+    from requests.adapters import HTTPAdapter
+    from xdk import Client
+    import post
 
 
 def no_network(event, args):
@@ -46,6 +54,109 @@ def response(request, body=None, status=201, raw=None):
     return value
 
 
+class ConfigurationTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(prefix="x-post-config-offline-")
+        self.addCleanup(directory.cleanup)
+        self.path = Path(directory.name) / "serverware-client.private.json"
+        self.local = {"SERVERWARE_X_POST_TEXT": TEXT, "SERVERWARE_X_POST_CONFIRM": "post-once"}
+        self.value = {"application_id": APP_ID, "access_rule_id": "00000000-0000-4000-8000-000000000002",
+            "proxy_authentication": "basic_and_bearer_v1", "proxy_username": APP_ID, "proxy_password": TOKEN,
+            "proxy_url": "https://proxy.example.test:8443", "token_expires_at_epoch_ms": 2**53 - 1,
+            "ca_file": "./serverware-ca.pem", "proxy_ca_file": None, "operation_bundle": "x_text_post_v1",
+            "upstream_url": "https://api.x.com/2/tweets", "methods": ["POST"],
+            "credential_input": "replace_exact", "response_mode": "x_post_json_v1",
+            "request_headers": {"Authorization": "ignored"}, "request_body": {"text": "not local text"},
+            "SERVERWARE_X_POST_TEXT": "not local text", "SERVERWARE_X_POST_CONFIRM": "post-once",
+            "client_recipe": {"command": "never-execute", "confirmation_value": "post-once",
+                "environment": {"SERVERWARE_X_POST_TEXT": "not local text", "SERVERWARE_X_POST_CONFIRM": "post-once"}}}
+
+    def write(self, value=None):
+        self.path.write_text(json.dumps(self.value if value is None else value), encoding="utf-8")
+        return self.path
+
+    def test_download_maps_connection_data_and_relative_ca_but_keeps_local_text(self):
+        with patch.object(post.subprocess, "run") as run:
+            selected = post.configuration_environment(self.write(), {**self.local, "X_ACCESS_TOKEN": "never-forward"})
+        run.assert_not_called()
+        self.assertEqual(set(selected), set(post.REQUIRED_ENV))
+        self.assertEqual(selected["SERVERWARE_CA_FILE"], str(self.path.parent / "serverware-ca.pem"))
+        self.assertEqual(selected["SERVERWARE_PROXY_TOKEN"], TOKEN)
+        self.assertEqual(selected["SERVERWARE_X_POST_TEXT"], TEXT)
+        self.assertEqual(selected["SERVERWARE_X_POST_CONFIRM"], "post-once")
+        self.value["proxy_ca_file"] = "./proxy's $literal.pem"
+        selected = post.configuration_environment(self.write(), self.local)
+        self.assertEqual(selected["SERVERWARE_PROXY_CA_FILE"], str(self.path.parent / "proxy's $literal.pem"))
+
+    def test_json_cannot_supply_posting_text_or_confirmation(self):
+        for local in ({}, {"SERVERWARE_X_POST_TEXT": TEXT}, {"SERVERWARE_X_POST_CONFIRM": "post-once"},
+                {**self.local, "SERVERWARE_X_POST_CONFIRM": "true"}):
+            with self.subTest(keys=sorted(local)), self.assertRaises(ValueError):
+                post.configuration_environment(self.write(), local)
+        with patch.dict(os.environ, {}, clear=True), patch.object(post, "launch") as launch, \
+                patch("sys.stdout", io.StringIO()) as out, patch("sys.stderr", io.StringIO()) as err:
+            self.assertEqual(post.main(["--config", str(self.write())]), 1)
+        launch.assert_not_called()
+        self.assertEqual(out.getvalue(), "")
+        self.assertEqual(err.getvalue(), post.FAILURE + "\n")
+
+    def test_scope_identity_expiry_and_connection_mismatches_refuse(self):
+        cases = (("application_id", "bad"), ("access_rule_id", "bad"), ("proxy_username", "wrong"),
+            ("proxy_authentication", "bearer"), ("operation_bundle", "x_username_read_v1"),
+            ("upstream_url", self.value["upstream_url"] + "?extra=1"), ("methods", ["GET"]),
+            ("credential_input", "none"), ("response_mode", "passthrough"),
+            ("proxy_url", "http://proxy.test"), ("proxy_password", "secret\n"), ("ca_file", ""),
+            ("proxy_ca_file", False),
+            *(("token_expires_at_epoch_ms", expiry) for expiry in (0, True, 2**53, 2**53 - 1.0, "future")))
+        for key, invalid in cases:
+            with self.subTest(key=key, value=invalid), self.assertRaises(ValueError):
+                post.configuration_environment(self.write({**self.value, key: invalid}), self.local)
+        with patch.object(post.time, "time_ns", return_value=1234 * 1_000_000), self.assertRaises(ValueError):
+            post.configuration_environment(self.write({**self.value, "token_expires_at_epoch_ms": 1234}), self.local)
+
+    def test_configuration_is_bounded_regular_and_strict_json(self):
+        for raw in (b"", b"[]", b"{", b'{"a":1,"a":2}', b'{"a":NaN}', b'{"a":1e309}',
+                b"\xff", b" " * (post.MAX_CONFIG_BYTES + 1)):
+            self.path.write_bytes(raw)
+            with self.subTest(raw=raw[:20]), self.assertRaises(ValueError):
+                post.configuration_environment(self.path, self.local)
+        fifo = self.path.parent / "fifo"
+        os.mkfifo(fifo)
+        with self.assertRaises(ValueError): post.configuration_environment(fifo, self.local)
+        link = self.path.parent / "link"
+        link.symlink_to(self.path)
+        with self.assertRaises(OSError): post.configuration_environment(link, self.local)
+        raw = json.dumps(self.value).encode()
+        self.path.write_bytes(raw + b" " * (post.MAX_CONFIG_BYTES - len(raw)))
+        self.assertEqual(post.configuration_environment(self.path, self.local)["SERVERWARE_APP_ID"], APP_ID)
+
+    def test_cli_preserves_env_mode_and_uses_config_without_private_arguments(self):
+        with patch.object(post, "launch", return_value=RESULT) as launch, patch("sys.stdout", io.StringIO()):
+            self.assertEqual(post.main([]), 0)
+            self.assertIs(launch.call_args.args[0], os.environ)
+        with patch.dict(os.environ, {**self.local, "SERVERWARE_PROXY_TOKEN": "wrong", "HTTPS_PROXY": "wrong"}, clear=True), \
+                patch.object(post, "check_versions"), patch.object(post.subprocess, "run",
+                    return_value=SimpleNamespace(returncode=0, stdout=json.dumps(RESULT).encode(), stderr=b"")) as run, \
+                patch("sys.stdout", io.StringIO()):
+            self.assertEqual(post.main(["--config", str(self.write())]), 0)
+        self.assertNotIn(TOKEN, " ".join(run.call_args.args[0]))
+        self.assertNotIn(TEXT, " ".join(run.call_args.args[0]))
+        self.assertNotIn("--config", run.call_args.args[0])
+        self.assertEqual(run.call_args.kwargs["env"]["SERVERWARE_X_POST_TEXT"], TEXT)
+        self.assertEqual(set(run.call_args.kwargs["env"]), set(post.REQUIRED_ENV))
+
+    def test_bad_json_and_child_config_fail_before_launch_with_redacted_output(self):
+        self.path.write_text('{"private":"' + TOKEN + '",', encoding="utf-8")
+        for args in (["--config", str(self.path)], ["--child", "--config", str(self.path)]):
+            with patch.object(post, "launch") as launch, patch.object(post, "check_versions") as versions, \
+                    patch("sys.stdout", io.StringIO()) as out, patch("sys.stderr", io.StringIO()) as err:
+                self.assertEqual(post.main(args), 1)
+            launch.assert_not_called(); versions.assert_not_called()
+            self.assertEqual(out.getvalue(), "")
+            self.assertEqual(err.getvalue(), post.FAILURE + "\n")
+
+
+@unittest.skipIf(CONFIG_ONLY, "SDK checks require the prepared pinned dependencies")
 class PostExampleTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory(prefix="x-post-offline-")

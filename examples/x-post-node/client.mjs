@@ -1,12 +1,14 @@
 // Official XDK owns serialization/auth selection; documented Undici hooks own transport.
-import { readFileSync } from 'node:fs';
-import { isAbsolute, resolve } from 'node:path';
+import { closeSync, constants, fstatSync, openSync, readFileSync, readSync } from 'node:fs';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const PUBLIC_X_DUMMY = 'serverware-x-post-placeholder-v1';
 export const X_ORIGIN = 'https://api.x.com';
 export const REQUEST_TIMEOUT_MS = 30_000;
 export const PROCESS_TIMEOUT_MS = 35_000;
+const MAX_CONFIG_BYTES = 64 * 1024;
+const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 
 function requireValue(condition) {
   if (!condition) throw new Error('X posting configuration or response refused');
@@ -45,6 +47,61 @@ export function configuration(env) {
   requireValue(isAbsolute(caFile) && (proxyCaFile === null || isAbsolute(proxyCaFile)));
   return { proxyUrl, applicationId, token, caFile, proxyCaFile,
     text: postText(env.SERVERWARE_X_POST_TEXT) };
+}
+
+function readConfigurationFile(path) {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const before = fstatSync(fd);
+    requireValue(before.isFile() && before.size > 0 && before.size <= MAX_CONFIG_BYTES);
+    const bytes = Buffer.alloc(MAX_CONFIG_BYTES + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const count = readSync(fd, bytes, length, bytes.length - length, null);
+      if (count === 0) break;
+      length += count;
+    }
+    const after = fstatSync(fd);
+    requireValue(length === before.size && length <= MAX_CONFIG_BYTES
+      && ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].every(key => before[key] === after[key]));
+    return JSON.parse(bytes.subarray(0, length).toString('utf8'));
+  } finally { closeSync(fd); }
+}
+
+export function loadClientConfig(path, env, now = Date.now()) {
+  try {
+    const filename = resolve(required({ path }, 'path'));
+    const value = readConfigurationFile(filename);
+    requireValue(value !== null && typeof value === 'object' && !Array.isArray(value));
+    requireValue(typeof value.access_rule_id === 'string' && UUID.test(value.access_rule_id)
+      && value.proxy_authentication === 'basic_and_bearer_v1'
+      && value.proxy_username === value.application_id
+      && Number.isSafeInteger(now) && now >= 0
+      && Number.isSafeInteger(value.token_expires_at_epoch_ms) && value.token_expires_at_epoch_ms > now);
+    requireValue(value.operation_bundle === 'x_text_post_v1' && value.upstream_url === X_ORIGIN + '/2/tweets'
+      && Array.isArray(value.methods) && value.methods.length === 1 && value.methods[0] === 'POST'
+      && value.credential_input === 'replace_exact' && value.response_mode === 'x_post_json_v1');
+    const caPath = value => resolve(dirname(filename), required({ path: value }, 'path'));
+    // Only connection fields are imported. Post text and post-once confirmation
+    // MUST come from the caller's environment, never this file or its recipe.
+    return configuration({ ...env,
+      SERVERWARE_PROXY_URL: value.proxy_url,
+      SERVERWARE_APP_ID: value.application_id,
+      SERVERWARE_PROXY_TOKEN: value.proxy_password,
+      SERVERWARE_CA_FILE: caPath(value.ca_file),
+      SERVERWARE_PROXY_CA_FILE: value.proxy_ca_file === undefined || value.proxy_ca_file === null
+        ? undefined : caPath(value.proxy_ca_file),
+    });
+  } catch { throw new Error('X posting configuration or response refused'); }
+}
+
+export function parseArguments(args) {
+  requireValue(Array.isArray(args) && args.every(value => typeof value === 'string'));
+  if (args.length === 0) return { help: false, configPath: null };
+  if (args.length === 1 && args[0] === '--help') return { help: true, configPath: null };
+  requireValue(args.length === 2 && args[0] === '--config'
+    && args[1].length > 0 && !args[1].startsWith('--'));
+  return { help: false, configPath: required({ path: args[1] }, 'path') };
 }
 
 function certificate(path, readFile) {
@@ -129,7 +186,7 @@ export function failure(error, observation = {}) {
 
 async function main() {
   if (process.argv.length === 3 && process.argv[2] === '--help') {
-    console.log('node client.mjs\nPosting integration pending. Explicit text and SERVERWARE_X_POST_CONFIRM=post-once required; see README.md.');
+    console.log('node client.mjs [--config PATH]\nExplicit local text and SERVERWARE_X_POST_CONFIRM=post-once required; see README.md.');
     return;
   }
   const observation = { invoked: false, httpStatus: null };
@@ -141,8 +198,8 @@ async function main() {
     process.exit(observation.invoked ? 2 : 1);
   }, PROCESS_TIMEOUT_MS);
   try {
-    requireValue(process.argv.length === 2);
-    const config = configuration(process.env);
+    const args = parseArguments(process.argv.slice(2));
+    const config = args.configPath === null ? configuration(process.env) : loadClientConfig(args.configPath, process.env);
     const undici = await import('undici');
     transport = installTransport(config, observation, undici);
     const { Client } = await import('@xdevplatform/xdk');

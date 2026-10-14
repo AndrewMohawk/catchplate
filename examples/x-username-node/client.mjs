@@ -1,11 +1,13 @@
 // Official XDK generates the request. Documented Undici configuration routes it.
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { closeSync, constants, fstatSync, openSync, readFileSync, readSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const PUBLIC_X_DUMMY = 'serverware-x-placeholder-v1';
 export const X_ORIGIN = 'https://api.x.com';
 const DEADLINE_MS = 30_000;
+const MAX_CONFIG_BYTES = 64 * 1024;
+const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 
 function requireValue(condition) {
   if (!condition) throw new Error('X example configuration or request refused');
@@ -36,6 +38,64 @@ export function configuration(env) {
   return { proxyUrl, applicationId, token, username,
     caFile: required(env, 'SERVERWARE_CA_FILE'),
     proxyCaFile: env.SERVERWARE_PROXY_CA_FILE ? required(env, 'SERVERWARE_PROXY_CA_FILE') : null };
+}
+
+function readConfigurationFile(path) {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const before = fstatSync(fd);
+    requireValue(before.isFile() && before.size > 0 && before.size <= MAX_CONFIG_BYTES);
+    const bytes = Buffer.alloc(MAX_CONFIG_BYTES + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const count = readSync(fd, bytes, length, bytes.length - length, null);
+      if (count === 0) break;
+      length += count;
+    }
+    const after = fstatSync(fd);
+    requireValue(length === before.size && length <= MAX_CONFIG_BYTES
+      && ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].every(key => before[key] === after[key]));
+    return JSON.parse(bytes.subarray(0, length).toString('utf8'));
+  } finally { closeSync(fd); }
+}
+
+export function loadClientConfig(path, env, now = Date.now()) {
+  try {
+    const filename = resolve(required({ path }, 'path'));
+    const value = readConfigurationFile(filename);
+    requireValue(value !== null && typeof value === 'object' && !Array.isArray(value));
+    requireValue(typeof value.access_rule_id === 'string' && UUID.test(value.access_rule_id)
+      && value.proxy_authentication === 'basic_and_bearer_v1'
+      && value.proxy_username === value.application_id
+      && Number.isSafeInteger(now) && now >= 0
+      && Number.isSafeInteger(value.token_expires_at_epoch_ms) && value.token_expires_at_epoch_ms > now);
+    requireValue(value.operation_bundle === 'x_username_read_v1'
+      && typeof value.username === 'string' && /^[a-z0-9_]{1,15}$/.test(value.username)
+      && value.upstream_url === X_ORIGIN + '/2/users/by/username/' + value.username
+      && Array.isArray(value.methods) && value.methods.length === 1 && value.methods[0] === 'GET'
+      && value.credential_input === 'replace_exact' && value.response_mode === 'x_app_read_json_v1');
+    const caPath = value => resolve(dirname(filename), required({ path: value }, 'path'));
+    // Only connection and exact saved username are imported. Commands, headers,
+    // request bodies and arbitrary environment values in this JSON are inert.
+    return configuration({ ...env,
+      SERVERWARE_PROXY_URL: value.proxy_url,
+      SERVERWARE_APP_ID: value.application_id,
+      SERVERWARE_PROXY_TOKEN: value.proxy_password,
+      SERVERWARE_CA_FILE: caPath(value.ca_file),
+      SERVERWARE_PROXY_CA_FILE: value.proxy_ca_file === undefined || value.proxy_ca_file === null
+        ? undefined : caPath(value.proxy_ca_file),
+      SERVERWARE_X_USERNAME: value.username,
+    });
+  } catch { throw new Error('X example configuration or request refused'); }
+}
+
+export function parseArguments(args) {
+  requireValue(Array.isArray(args) && args.every(value => typeof value === 'string'));
+  if (args.length === 0) return { help: false, configPath: null };
+  if (args.length === 1 && args[0] === '--help') return { help: true, configPath: null };
+  requireValue(args.length === 2 && args[0] === '--config'
+    && args[1].length > 0 && !args[1].startsWith('--'));
+  return { help: false, configPath: required({ path: args[1] }, 'path') };
 }
 
 function certificate(path, readFile) {
@@ -112,13 +172,13 @@ export function failure(error) {
 
 async function main() {
   if (process.argv.length === 3 && process.argv[2] === '--help') {
-    console.log('node client.mjs\nOne read-only X username lookup. Explicit environment configuration: see README.md.');
+    console.log('node client.mjs [--config PATH]\nOne read-only X username lookup. Configuration: see README.md.');
     return;
   }
   let transport;
   try {
-    requireValue(process.argv.length === 2);
-    const config = configuration(process.env);
+    const args = parseArguments(process.argv.slice(2));
+    const config = args.configPath === null ? configuration(process.env) : loadClientConfig(args.configPath, process.env);
     const undici = await import('undici');
     transport = installTransport(config, undici);
     // XDK captures native fetch during import; no fetch/header monkey patch.

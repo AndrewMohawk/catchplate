@@ -39,6 +39,19 @@ credential, generic bearer grant or existing `x.v2` rule is not this preset.
 
 Python 3.10+ on Linux/macOS, from this directory:
 
+After installing the requirements, download **Private client configuration**
+and the interception CA from **Proxy setup**. The shortest invocation is:
+
+```sh
+.venv/bin/python -B username.py --config /private/path/serverware-client.private.json
+```
+
+The complete download selects the exact permitted lowercase username. Relative
+CA paths resolve beside the JSON file. Keep it private: it contains the scoped
+Serverware application token. Expired tokens and mismatched permissions are
+refused; commands, headers and bodies in the file are inert. No X token is needed
+on the client. The environment-only invocation remains available:
+
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
@@ -60,6 +73,10 @@ Use the actual saved username: `[a-z0-9_]{1,15}`, without `@`. Input is not sile
 lowercased. The proxy URL must be HTTPS with no credentials, path, query or
 fragment. `.env.example` is a reference, not an automatically loaded file.
 No provider token environment variable is used or forwarded.
+
+For configuration/CLI checks without installing SDK dependencies, run
+`python3 -B test_username.py --config-only ConfigurationTests -v`.
+This uses import-only stubs and does not test SDK transport or provider access.
 
 Output is one JSON object containing `id`, `username` and `name`. The returned
 username can have the provider's capitalization but must match the selected name

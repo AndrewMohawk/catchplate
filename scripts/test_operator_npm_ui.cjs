@@ -411,6 +411,20 @@ const tests = [
       assert.equal(config.client_recipe.fresh_cache_required, true); assert.equal(config.client_recipe.automatic_retries, 0);
       assert(!text.includes(PRIVATE)); assert(!/11\.8\.0|21\.0\.4/.test(text));
       assert.equal(f.node('client-copy-status').textContent, 'Downloaded private client configuration. Keep it out of source control.');
+      assert.equal(f.node('provider-config-handoff').hidden, false);
+      assert.equal(f.node('provider-config-command').textContent, 'node client.mjs --config ./serverware-client.private.json');
+      const directory = await mkdtemp(resolve(tmpdir(), 'serverware-npm-download-'));
+      try {
+        const path = resolve(directory, 'serverware-client.private.json');
+        await writeFile(path, text, {mode: 0o600});
+        const {loadClientConfig} = await import(pathToFileURL(resolve(NPM_EXAMPLE, 'client.mjs')).href);
+        const loaded = loadClientConfig(path, {SERVERWARE_PROXY_TOKEN: 'wrong-ambient'}, 'view', NOW);
+        assert.equal(loaded.operation, 'view'); assert.equal(loaded.token, f.token);
+        assert.equal(loaded.applicationId, IDS.application);
+        assert.equal(loaded.packageName, config.package || config.client_recipe.package);
+        assert.equal(loaded.caFile, resolve(directory, 'serverware-ca.pem'));
+        assert.throws(() => loadClientConfig(path, {}, 'publish', NOW), 'no implicit publication confirmation');
+      } finally { await rm(directory, {recursive: true, force: true}); }
     }
   }],
   ['actual GitHub private download loads directly in the stock-client configuration path', async () => {

@@ -61,6 +61,21 @@ function renderOperatorExampleProjects(rule, catalog) {
     links.append(link);
   }
 }
+function operatorFileHandoff(rule) {
+  const profiles = {
+    alchemy_chain_status_read_v1: {python: 'chain_status.py', note: 'Reads chain ID and block number for the saved chain; no transactions.'},
+    x_username_read_v1: {python: 'username.py', note: 'Looks up only the saved username; no posting.'},
+    x_text_post_v1: {python: 'post.py', note: 'Before running, set your text and SERVERWARE_X_POST_CONFIRM=post-once locally. The file cannot supply either value. Never automatically retry an uncertain post.'},
+    npm_metadata_read_v1: {note: 'Reads the selected package metadata by default. No install or publication.'},
+    npm_publish_v1: {note: 'Reads package metadata by default. Publishing requires an explicit publish command plus your local version, reviewed tarball/hash and publish-publicly confirmation; see the example README.'},
+    npm_install_v1: {note: 'Choose an allowed package and exact version locally. To install, also choose a reviewed project and a new output directory, then append install or ci; see the example README.'},
+  };
+  if (!rule || !Object.hasOwn(profiles, rule.operation_bundle)) return null;
+  const profile = profiles[rule.operation_bundle];
+  return {commands: 'node client.mjs --config ./serverware-client.private.json' + (profile.python ?
+    '\npython3 -I ' + profile.python + ' --config ./serverware-client.private.json\ngo run . --config ./serverware-client.private.json' : ''),
+    note: profile.note};
+}
 function createProxyView(workspace, applications) {
   const home = element('proxy'); const content = textNode('div'); content.id = 'proxy-setup-content';
   content.append(...[...home.children].slice(2)); home.append(content);
@@ -87,6 +102,7 @@ function createProxyView(workspace, applications) {
     element('npm-publish-client-controls').hidden = true;
     element('alchemy-client-controls').hidden = true;
     element('x-post-client-controls').hidden = true;
+    element('provider-config-handoff').hidden = true;
     element('client-proxy-login').hidden = true;
     for (const id of ['client-proxy-auth-mode', 'client-proxy-host', 'client-proxy-port', 'client-proxy-username',
       'client-proxy-password-note', 'client-proxy-login-status']) element(id).textContent = '';
@@ -181,6 +197,12 @@ function createProxyView(workspace, applications) {
       element('client-command').textContent = xPost ? 'The X SDK example needs standard username/password proxy login.' : 'The stock npm client needs standard username/password proxy login.';
       element('client-guidance').textContent = 'Use Clients to explicitly enable standard proxy login if advertised, then refresh. The app ID is the username and its existing Serverware token is the password. No login mode or token is changed automatically.';
       return;
+    }
+    const handoff = proxyAuthentication === 'basic_and_bearer_v1' ? operatorFileHandoff(rule) : null;
+    if (handoff) {
+      element('provider-config-handoff').hidden = false;
+      element('provider-config-command').textContent = handoff.commands;
+      element('provider-config-note').textContent = handoff.note;
     }
     const messageId = element('gmail-message-id').value;
     if (messageRead && !/^[A-Za-z0-9_-]{1,512}$/.test(messageId)) {

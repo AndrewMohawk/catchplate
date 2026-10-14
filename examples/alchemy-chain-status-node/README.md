@@ -45,6 +45,21 @@ cd examples/alchemy-chain-status-node
 npm ci --ignore-scripts --no-audit --no-fund
 ```
 
+In **Proxy setup**, select the app and Alchemy chain-status permission, then
+download its private client JSON and CA. Run the downloaded file directly:
+
+```sh
+node client.mjs --config /private/path/serverware-client.private.json
+```
+
+Relative CA paths resolve beside the JSON file. Keep this file private: it
+contains the scoped Serverware app token. The loader checks the saved chain,
+permission shape, Basic login and token expiry. It never executes recipe
+commands or imports headers, environment entries or request bodies; this job
+still performs only the two fixed reads. TLS verification remains enabled.
+
+Alternatively, keep using explicit environment configuration:
+
 Use the names in [.env.example](.env.example). Supply `SERVERWARE_PROXY_TOKEN`
 through a private environment/secret manager, not a pasted shell command or
 committed dotenv file. No Alchemy key environment variable is required or read.

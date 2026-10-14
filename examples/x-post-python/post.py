@@ -4,13 +4,16 @@ from contextlib import contextmanager
 from importlib.metadata import version
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
 import ssl
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.parse import quote, urlsplit
 from uuid import UUID
 
@@ -24,6 +27,66 @@ FAILURE = "X post preparation failed; no post was attempted by this invocation."
 UNKNOWN = "X post outcome unknown. Do not replay; check the operator audit and X before any new action."
 REQUIRED_ENV = ("SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID", "SERVERWARE_PROXY_TOKEN",
     "SERVERWARE_CA_FILE", "SERVERWARE_X_POST_TEXT", "SERVERWARE_X_POST_CONFIRM")
+MAX_CONFIG_BYTES = 64 * 1024
+
+
+def configuration_environment(config_file, env):
+    """Only connection data comes from JSON; posting intent is local environment only."""
+    path = Path(config_file).absolute()
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW), "rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= MAX_CONFIG_BYTES:
+            raise ValueError("Invalid configuration file")
+        raw = stream.read(MAX_CONFIG_BYTES + 1)
+    if not 0 < len(raw) <= MAX_CONFIG_BYTES:
+        raise ValueError("Invalid configuration file")
+
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("Duplicate configuration field")
+            result[key] = value
+        return result
+
+    def number(value):
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError("Invalid configuration number")
+        return result
+
+    value = json.loads(raw.decode("utf-8"), object_pairs_hook=pairs,
+        parse_float=number, parse_constant=number)
+    if type(value) is not dict:
+        raise ValueError("Invalid configuration object")
+    for field in ("application_id", "access_rule_id"):
+        if type(value.get(field)) is not str or str(UUID(value[field])) != value[field]:
+            raise ValueError("Invalid configuration identity")
+    expiry = value.get("token_expires_at_epoch_ms")
+    if (value.get("proxy_authentication") != "basic_and_bearer_v1"
+            or value.get("proxy_username") != value["application_id"]
+            or type(expiry) is not int or not time.time_ns() // 1_000_000 < expiry <= 2**53 - 1
+            or value.get("operation_bundle") != "x_text_post_v1"
+            or value.get("upstream_url") != BASE_URL + "/2/tweets"
+            or value.get("methods") != ["POST"]
+            or value.get("credential_input") != "replace_exact"
+            or value.get("response_mode") != "x_post_json_v1"):
+        raise ValueError("Invalid X posting configuration scope")
+    selected = {key: env[key] for key in ("SERVERWARE_X_POST_TEXT", "SERVERWARE_X_POST_CONFIRM") if key in env}
+    for field, key in (("application_id", "SERVERWARE_APP_ID"), ("proxy_url", "SERVERWARE_PROXY_URL"),
+            ("proxy_password", "SERVERWARE_PROXY_TOKEN")):
+        if type(value.get(field)) is not str:
+            raise ValueError("Invalid connection value")
+        selected[key] = value[field]
+    for field, key in (("ca_file", "SERVERWARE_CA_FILE"), ("proxy_ca_file", "SERVERWARE_PROXY_CA_FILE")):
+        item = value.get(field)
+        if field == "proxy_ca_file" and item is None:
+            continue
+        if type(item) is not str or not item or len(item) > 4096 or any(ord(c) < 32 or ord(c) == 127 for c in item):
+            raise ValueError("Invalid CA path")
+        selected[key] = str((path.parent / item).resolve())
+    # JSON text, confirmation, commands, bodies and headers cannot authorize a post.
+    return child_environment(selected)
 
 
 class OutcomeUnknown(Exception):
@@ -228,17 +291,20 @@ def launch(env):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Create one confirmed text-only post; integration is not yet available.")
+    parser = argparse.ArgumentParser(description="Create one explicitly confirmed text-only post through Serverware.")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--config", metavar="PATH", help="Private client JSON downloaded from Serverware")
     args = parser.parse_args(argv)
     logging.disable(logging.CRITICAL)
     completed = False
     try:
+        if args.child and args.config is not None:
+            raise ValueError("Downloaded configuration is parent-only")
         if args.child:
             check_versions()
             value = create_post(child_environment(os.environ))
         else:
-            value = launch(os.environ)
+            value = launch(os.environ if args.config is None else configuration_environment(args.config, os.environ))
         completed = True
         print(json.dumps(value))
         return 0

@@ -50,6 +50,31 @@ dependency updates; `npm ci` installs its recorded dependency tree without
 rewriting it. The mocked tests need only Node built-ins and can run without
 installing dependencies.
 
+### Use the downloaded client configuration
+
+From **Proxy setup**, download the private client config and CA into this prepared
+example directory. For a metadata or publishing permission, read metadata with:
+
+```sh
+node client.mjs --config ./serverware-client.private.json
+```
+
+The file supplies the proxy login, saved package and CA paths; relative CA paths
+resolve beside the JSON. It contains a Serverware client token, never an npm
+provider token. Keep it private and out of source control. Its connection/scope
+fields are read as data; commands, environment fields and operation names in the
+file are never executed. Expired or mismatched configurations are refused.
+
+Other operations remain explicit: append `manifest`, `install`, `ci` or
+`publish` to the command. Supply the exact version locally. For installation,
+also choose a package from the saved allowlist (required when it contains more
+than one package), the reviewed project and new output directory. Publication
+still requires the local reviewed tarball/hash and `publish-publicly`
+confirmation described below; the saved permission supplies its package/tag.
+Downloading the file does not authorize or initiate any operation.
+
+### Environment-only alternative
+
 Use [.env.example](.env.example) as an environment-variable reference; the program
 does not automatically load it. Supply real values through your secret manager
 or shell environment without committing them:

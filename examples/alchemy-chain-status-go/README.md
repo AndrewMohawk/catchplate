@@ -21,6 +21,21 @@ provider entitlement or validity of an Alchemy key.
 
 ## Configure and run
 
+For an existing permission, download its private client JSON and verified CA
+from **Proxy setup**, then run from this directory:
+
+```sh
+GOTOOLCHAIN=local go run . --config /private/path/serverware-client.private.json
+```
+
+This imports the saved Basic application login and exact chain-status scope;
+relative CA paths resolve beside the JSON file. It always makes the two fixed
+reads, ignoring exported request bodies, headers and commands. Keep the file
+private and untracked; an expired app token requires a new download. Optional
+`proxy_ca_file` supplies extra outer-proxy trust. No connection values fall back
+to the environment in file mode. The environment-only invocation below remains
+supported; both modes refuse ambient `SSL_CERT_FILE` and `SSL_CERT_DIR`.
+
 When `alchemy_key_v1` and `alchemy_chain_status_read_v1` are supported, save the
 Alchemy API/access key in Serverware, create an application, and grant
 **Alchemy chain status: read** for `eth-mainnet` or `eth-sepolia`. Select the

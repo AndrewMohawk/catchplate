@@ -1,11 +1,14 @@
-// Offline source/example checks: no actual SDK, process, network or filesystem I/O.
+// Offline configuration checks: bounded temporary JSON files, no SDK or network.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { configuration, npmConfiguration, childEnvironment, pacoteOptions, npmArguments,
   reviewedTarball, reviewedManifest, publishSummary, failure, PUBLIC_NPM_DUMMY, VERSIONS } from './core.mjs';
-import { verifyVersions, trustedPem, invokeWorker } from './client.mjs';
+import { verifyVersions, trustedPem, invokeWorker, loadClientConfig, parseArguments } from './client.mjs';
 import { perform } from './worker.mjs';
 
 const bytes = Buffer.from('inert reviewed fixture bytes, not an archive');
@@ -28,6 +31,82 @@ const receipt = { ...metadata, id: metadata.name + '@1.2.3', size: bytes.length,
   integrity: 'sha512-' + createHash('sha512').update(bytes).digest('base64'),
   shasum: createHash('sha1').update(bytes).digest('hex') };
 const noCall = () => assert.fail('unexpected effect');
+const NOW = 1800000000000;
+const downloaded = (changes = {}) => ({
+  application_id: env.SERVERWARE_APP_ID, access_rule_id: '11111111-1111-4111-8111-111111111111',
+  proxy_authentication: 'basic_and_bearer_v1', proxy_username: env.SERVERWARE_APP_ID,
+  proxy_password: env.SERVERWARE_PROXY_TOKEN, proxy_url: env.SERVERWARE_PROXY_URL,
+  token_expires_at_epoch_ms: NOW + 60000, ca_file: './serverware-ca.pem',
+  upstream_url: 'https://registry.npmjs.org/', operation_bundle: 'npm_metadata_read_v1', methods: ['GET'],
+  packages: [env.SERVERWARE_NPM_PACKAGE], client_recipe: {package: env.SERVERWARE_NPM_PACKAGE}, ...changes,
+});
+function withConfig(value, check) {
+  const directory = mkdtempSync(join(tmpdir(), 'serverware-npm-config-'));
+  const path = join(directory, 'client.private.json');
+  try { writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value), {mode: 0o600}); check(path, directory); }
+  finally { rmSync(directory, {recursive: true}); }
+}
+
+test('downloaded npm configuration selects connection/package values and relative CA files', () => {
+  withConfig(downloaded(), (path, directory) => {
+    const config = loadClientConfig(path, {...env, SERVERWARE_PROXY_TOKEN: 'ambient', SERVERWARE_NPM_PACKAGE: 'ambient'}, 'view', NOW);
+    assert.equal(config.operation, 'view'); assert.equal(config.token, env.SERVERWARE_PROXY_TOKEN);
+    assert.equal(config.packageName, env.SERVERWARE_NPM_PACKAGE);
+    assert.equal(config.caFile, join(directory, 'serverware-ca.pem')); assert.equal(config.proxyCaFile, null);
+  });
+  withConfig(downloaded({proxy_ca_file: './outer.pem'}), (path, directory) => {
+    assert.equal(loadClientConfig(path, env, 'view', NOW).proxyCaFile, join(directory, 'outer.pem'));
+  });
+});
+
+test('downloaded scope never selects publication, installs, local inputs or confirmation', () => {
+  const publish = downloaded({operation_bundle: 'npm_publish_v1', methods: ['PUT'],
+    package: env.SERVERWARE_NPM_PACKAGE, tag: 'saved-tag', operation: 'publish',
+    environment: {SERVERWARE_NPM_PUBLISH_CONFIRM: 'publish-publicly'},
+    SERVERWARE_NPM_PUBLISH_CONFIRM: 'publish-publicly', request_body: 'never used'});
+  withConfig(publish, path => {
+    assert.equal(loadClientConfig(path, {}, undefined, NOW).operation, 'view');
+    assert.throws(() => loadClientConfig(path, {...env, SERVERWARE_NPM_PUBLISH_CONFIRM: undefined}, 'publish', NOW));
+    assert.equal(loadClientConfig(path, env, 'publish', NOW).tag, 'saved-tag');
+    assert.throws(() => loadClientConfig(path, env, 'install', NOW));
+  });
+  withConfig(downloaded(), path => {
+    assert.throws(() => loadClientConfig(path, env, 'publish', NOW));
+    assert.throws(() => loadClientConfig(path, env, 'install', NOW));
+    assert.throws(() => loadClientConfig(path, {}, 'manifest', NOW));
+  });
+  withConfig(downloaded({operation_bundle: 'npm_install_v1', methods: ['GET', 'POST']}), path => {
+    const local = {...env, SERVERWARE_NPM_PROJECT: '/reviewed/project', SERVERWARE_NPM_OUTPUT: '/reviewed/new-output'};
+    assert.equal(loadClientConfig(path, local, 'ci', NOW).output, local.SERVERWARE_NPM_OUTPUT);
+    assert.throws(() => loadClientConfig(path, {...local, SERVERWARE_NPM_PACKAGE: 'outside-grant'}, 'ci', NOW));
+    assert.throws(() => loadClientConfig(path, env, 'ci', NOW));
+  });
+});
+
+test('downloaded identity, expiry, bundle and registry mismatches fail with a fixed error', () => {
+  for (const change of [{proxy_username: 'different'}, {access_rule_id: 'invalid'},
+    {token_expires_at_epoch_ms: NOW}, {token_expires_at_epoch_ms: 'later'}, {proxy_authentication: 'bearer'},
+    {upstream_url: 'https://other.invalid/'}, {operation_bundle: 'constructor'},
+    {methods: ['PUT']}, {packages: ['not-selected']}, {ca_file: ''}]) {
+    withConfig(downloaded(change), path => assert.throws(() => loadClientConfig(path, env, 'view', NOW),
+      {message: 'npm example configuration or operation refused'}));
+  }
+  for (const text of ['{', 'null', '[]', 'x'.repeat(65537)])
+    withConfig(text, path => assert.throws(() => loadClientConfig(path, env, 'view', NOW)));
+  withConfig(downloaded(), (path, directory) => {
+    const link = join(directory, 'linked.json'); symlinkSync(path, link);
+    assert.throws(() => loadClientConfig(link, env, 'view', NOW));
+  });
+});
+
+test('CLI config flag keeps read-only default and explicit operations', () => {
+  assert.deepEqual(parseArguments(['--config', 'client.json']), {help: false, operation: 'view', configPath: 'client.json'});
+  assert.equal(parseArguments(['publish', '--config', 'client.json']).operation, 'publish');
+  assert.equal(parseArguments(['--config', 'client.json', 'ci']).operation, 'ci');
+  assert.equal(parseArguments(['--help']).help, true);
+  for (const args of [['--config'], ['--config', ''], ['--config', '--help'], ['view', 'publish'],
+    ['--config', 'a', '--config', 'b'], ['--unknown'], ['--help', 'publish']]) assert.throws(() => parseArguments(args));
+});
 
 test('default is read-only; names, proxy identity and explicit write admission are closed', () => {
   assert.equal(configuration(env).operation, 'view');

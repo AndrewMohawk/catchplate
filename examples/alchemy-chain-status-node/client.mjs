@@ -1,14 +1,16 @@
 // Dedicated-process launcher. Never copy an SDK error, child stderr, or a
 // credential-bearing proxy URL to output. No provider credentials are accepted.
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readFileSync, readSync } from 'node:fs';
 import { X509Certificate } from 'node:crypto';
-import { isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const DEADLINE_MS = 30_000;
 export const CHAINS = Object.freeze({ 'eth-mainnet': '0x1', 'eth-sepolia': '0xaa36a7' });
 export const OUTPUT_KEYS = ['blockNumber', 'chain', 'chainId', 'ok', 'operation'];
+const MAX_CONFIG_BYTES = 64 * 1024;
+const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 
 function requireValue(condition) {
   if (!condition) throw new Error('Alchemy example configuration or response refused');
@@ -38,6 +40,66 @@ export function configuration(env) {
   const proxyCaFile = env.SERVERWARE_PROXY_CA_FILE ? required(env, 'SERVERWARE_PROXY_CA_FILE') : null;
   requireValue(isAbsolute(caFile) && (!proxyCaFile || isAbsolute(proxyCaFile)));
   return { proxyUrl, applicationId, token, chain, caFile, proxyCaFile };
+}
+
+function readConfigurationFile(path) {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const before = fstatSync(fd);
+    requireValue(before.isFile() && before.size > 0 && before.size <= MAX_CONFIG_BYTES);
+    const bytes = Buffer.alloc(MAX_CONFIG_BYTES + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const count = readSync(fd, bytes, length, bytes.length - length, null);
+      if (count === 0) break;
+      length += count;
+    }
+    const after = fstatSync(fd);
+    requireValue(length === before.size && length <= MAX_CONFIG_BYTES
+      && ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].every(key => before[key] === after[key]));
+    return JSON.parse(bytes.subarray(0, length).toString('utf8'));
+  } finally { closeSync(fd); }
+}
+
+export function loadClientConfig(path, env, now = Date.now()) {
+  try {
+    const filename = resolve(required({ path }, 'path'));
+    const value = readConfigurationFile(filename);
+    requireValue(value !== null && typeof value === 'object' && !Array.isArray(value));
+    requireValue(typeof value.access_rule_id === 'string' && UUID.test(value.access_rule_id)
+      && value.proxy_authentication === 'basic_and_bearer_v1'
+      && value.proxy_username === value.application_id
+      && Number.isSafeInteger(now) && now >= 0
+      && Number.isSafeInteger(value.token_expires_at_epoch_ms) && value.token_expires_at_epoch_ms > now);
+    requireValue(value.operation_bundle === 'alchemy_chain_status_read_v1'
+      && typeof value.chain === 'string' && Object.hasOwn(CHAINS, value.chain)
+      && value.upstream_url === 'https://' + value.chain + '.g.alchemy.com/v2'
+      && Array.isArray(value.methods) && value.methods.length === 1 && value.methods[0] === 'POST'
+      && value.credential_input === 'replace_exact' && value.response_mode === 'alchemy_rpc_read_json_v1'
+      && Array.isArray(value.rpc_methods) && value.rpc_methods.length === 2
+      && value.rpc_methods[0] === 'eth_chainId' && value.rpc_methods[1] === 'eth_blockNumber');
+    const caPath = value => resolve(dirname(filename), required({ path: value }, 'path'));
+    // JSON selects only connection and saved chain. Commands, headers, request
+    // bodies and environment entries are inert; the child still makes two fixed reads.
+    return configuration({ ...env,
+      SERVERWARE_PROXY_URL: value.proxy_url,
+      SERVERWARE_APP_ID: value.application_id,
+      SERVERWARE_PROXY_TOKEN: value.proxy_password,
+      SERVERWARE_CA_FILE: caPath(value.ca_file),
+      SERVERWARE_PROXY_CA_FILE: value.proxy_ca_file === undefined || value.proxy_ca_file === null
+        ? undefined : caPath(value.proxy_ca_file),
+      SERVERWARE_ALCHEMY_CHAIN: value.chain,
+    });
+  } catch { throw new Error('Alchemy example configuration or response refused'); }
+}
+
+export function parseArguments(args) {
+  requireValue(Array.isArray(args) && args.every(value => typeof value === 'string'));
+  if (args.length === 0) return { help: false, configPath: null };
+  if (args.length === 1 && args[0] === '--help') return { help: true, configPath: null };
+  requireValue(args.length === 2 && args[0] === '--config'
+    && args[1].length > 0 && !args[1].startsWith('--'));
+  return { help: false, configPath: required({ path: args[1] }, 'path') };
 }
 
 export function certificate(path, readFile = readFileSync) {
@@ -81,8 +143,8 @@ export function failure() {
     error: 'Alchemy chain status failed; inspect configuration, saved permission and service audit logs. No automatic retry.' };
 }
 
-export function run(env, { spawn = spawnSync, readFile = readFileSync } = {}) {
-  const config = configuration(env);
+export function run(env, { spawn = spawnSync, readFile = readFileSync, configPath = null } = {}) {
+  const config = configPath === null ? configuration(env) : loadClientConfig(configPath, env);
   certificate(config.caFile, readFile);
   if (config.proxyCaFile) certificate(config.proxyCaFile, readFile);
   const child = spawn(process.execPath, [fileURLToPath(new URL('./request.mjs', import.meta.url))], {
@@ -96,11 +158,12 @@ export function run(env, { spawn = spawnSync, readFile = readFileSync } = {}) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   if (process.argv.length === 3 && process.argv[2] === '--help') {
-    console.log('node client.mjs\nTwo read-only Alchemy RPC calls through Serverware. Explicit configuration: see README.md.');
+    console.log('node client.mjs [--config PATH]\nTwo read-only Alchemy RPC calls through Serverware. Configuration: see README.md.');
   } else {
     try {
-      requireValue(process.argv.length === 2 && process.versions.node === '25.5.0');
-      console.log(JSON.stringify(run(process.env)));
+      const args = parseArguments(process.argv.slice(2));
+      requireValue(process.versions.node === '25.5.0');
+      console.log(JSON.stringify(run(process.env, { configPath: args.configPath })));
     } catch {
       console.error(JSON.stringify(failure()));
       process.exitCode = 1;

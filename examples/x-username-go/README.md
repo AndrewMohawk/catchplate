@@ -25,6 +25,21 @@ keep these boundaries separate.
 
 ## Configure and run
 
+For an existing permission, download its private client JSON and verified CA
+from **Proxy setup**, then run from this directory:
+
+```sh
+GOTOOLCHAIN=local go run . --config /private/path/serverware-client.private.json
+```
+
+The file supplies only the saved Basic application login and exact username
+read scope. Relative CA paths resolve beside the JSON file; optional
+`proxy_ca_file` adds outer-proxy trust. Exported commands, request headers and
+bodies are ignored. Keep the file private and untracked, and download again
+after token expiry. File mode never falls back to ambient connection values
+and refuses `SSL_CERT_FILE`/`SSL_CERT_DIR`; use its explicit CA fields instead.
+The environment-only invocation below remains supported.
+
 When the deployment supports `x_app_bearer_v1` and `x_username_read_v1`, save the
 real app-only X bearer token in Serverware, create an application, and grant
 **X username: read** for one exact lowercase username (`[a-z0-9_]{1,15}`). Select

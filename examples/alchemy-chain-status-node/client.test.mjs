@@ -1,8 +1,11 @@
 // Inert configuration/launcher tests. No SDK import, child execution or network.
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { rootCertificates } from 'node:tls';
 import test from 'node:test';
-import { certificate, childEnvironment, configuration, DEADLINE_MS, failure, run, summary } from './client.mjs';
+import { certificate, childEnvironment, configuration, DEADLINE_MS, failure, loadClientConfig, parseArguments, run, summary } from './client.mjs';
 import { agentOptions, boundedDispatcher, createSdk, installTransport, perform, PUBLIC_ALCHEMY_DUMMY,
   REQUEST_TIMEOUT_MS, RESPONSE_LIMIT, sdkSettings } from './request.mjs';
 
@@ -12,6 +15,85 @@ const ENV = { SERVERWARE_PROXY_URL: 'https://proxy.example.test:8443',
   SERVERWARE_ALCHEMY_CHAIN: 'eth-mainnet' };
 const PEM = Buffer.from(rootCertificates[0]);
 const SUCCESS = { ok: true, operation: 'chain-status', chain: 'eth-mainnet', chainId: '0x1', blockNumber: '0x123' };
+const NOW = 1_791_996_000_000;
+const downloaded = () => ({ application_id: ENV.SERVERWARE_APP_ID,
+  access_rule_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', proxy_url: ENV.SERVERWARE_PROXY_URL,
+  proxy_authentication: 'basic_and_bearer_v1', proxy_username: ENV.SERVERWARE_APP_ID,
+  proxy_password: 'downloaded_synthetic_token', token_expires_at_epoch_ms: NOW + 60000,
+  ca_file: './serverware-ca.pem', proxy_ca_file: null, chain: 'eth-mainnet',
+  upstream_url: 'https://eth-mainnet.g.alchemy.com/v2', methods: ['POST'],
+  operation_bundle: 'alchemy_chain_status_read_v1', rpc_methods: ['eth_chainId', 'eth_blockNumber'],
+  credential_input: 'replace_exact', response_mode: 'alchemy_rpc_read_json_v1' });
+function configFile(t) {
+  const directory = mkdtempSync(join(tmpdir(), 'serverware-alchemy-config-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'serverware-client.private.json');
+  return { directory, path, write(value) { writeFileSync(path, JSON.stringify(value), { mode: 0o600 }); return path; } };
+}
+
+test('downloaded config imports only connection and exact chain; relative CA paths use the file directory', t => {
+  const file = configFile(t), value = downloaded();
+  value.request_body = { method: 'eth_sendRawTransaction', params: ['never-import'] };
+  value.request_headers = { Authorization: 'never-import' };
+  value.client_recipe = { command: 'never-execute', environment: { NODE_OPTIONS: 'never-import' } };
+  const ambient = { ...ENV, SERVERWARE_ALCHEMY_CHAIN: 'eth-sepolia', SERVERWARE_PROXY_CA_FILE: '/stale.pem' };
+  const config = loadClientConfig(file.write(value), ambient, NOW);
+  assert.deepEqual(config, { proxyUrl: value.proxy_url, applicationId: value.application_id,
+    token: value.proxy_password, chain: 'eth-mainnet', caFile: join(file.directory, 'serverware-ca.pem'), proxyCaFile: null });
+  assert.equal(ambient.SERVERWARE_PROXY_CA_FILE, '/stale.pem');
+  value.proxy_ca_file = './outer.pem';
+  assert.equal(loadClientConfig(file.write(value), {}, NOW).proxyCaFile, join(file.directory, 'outer.pem'));
+  delete value.proxy_ca_file;
+  assert.equal(loadClientConfig(file.write(value), ambient, NOW).proxyCaFile, null);
+  value.chain = 'eth-sepolia'; value.upstream_url = 'https://eth-sepolia.g.alchemy.com/v2';
+  assert.equal(loadClientConfig(file.write(value), {}, NOW).chain, 'eth-sepolia');
+});
+
+test('downloaded config rejects mismatched identity, expired token and broadened RPC scope', t => {
+  const file = configFile(t);
+  for (const patch of [{ application_id: 'bad' }, { access_rule_id: 'bad' }, { proxy_username: 'other' },
+    { proxy_authentication: 'bearer' }, { proxy_password: 'bad token' }, { proxy_url: 'http://proxy.test' },
+    { token_expires_at_epoch_ms: NOW }, { token_expires_at_epoch_ms: String(NOW + 60000) },
+    { token_expires_at_epoch_ms: Number.MAX_SAFE_INTEGER + 1 }, { ca_file: '' }, { proxy_ca_file: '' },
+    { operation_bundle: 'generic' }, { chain: 'other' }, { methods: ['GET'] }, { methods: ['POST', 'POST'] },
+    { upstream_url: 'https://eth-mainnet.g.alchemy.com/v2/private-key' },
+    { upstream_url: 'https://eth-sepolia.g.alchemy.com/v2' }, { credential_input: 'inject' },
+    { response_mode: 'passthrough' }, { rpc_methods: ['eth_sendRawTransaction'] }])
+    assert.throws(() => loadClientConfig(file.write({ ...downloaded(), ...patch }), {}, NOW));
+  file.write(downloaded());
+  assert.throws(() => loadClientConfig(file.path, { NODE_TLS_REJECT_UNAUTHORIZED: '0' }, NOW));
+  assert.throws(() => loadClientConfig(file.path, {}, NaN));
+});
+
+test('downloaded config is bounded regular JSON with fixed errors', t => {
+  const file = configFile(t), json = JSON.stringify(downloaded());
+  writeFileSync(file.path, json.padEnd(65536, ' '));
+  assert.equal(loadClientConfig(file.path, {}, NOW).chain, 'eth-mainnet');
+  for (const raw of ['', json.padEnd(65537, ' '), '{"secret":"private-canary"', 'null', '[]']) {
+    writeFileSync(file.path, raw);
+    assert.throws(() => loadClientConfig(file.path, {}, NOW), { message: 'Alchemy example configuration or response refused' });
+  }
+  assert.throws(() => loadClientConfig(file.directory, {}, NOW));
+  file.write(downloaded()); const link = join(file.directory, 'link.json'); symlinkSync(file.path, link);
+  assert.throws(() => loadClientConfig(link, {}, NOW));
+});
+
+test('config CLI preserves environment invocation and feeds only fixed settings to one inert child', t => {
+  assert.deepEqual(parseArguments([]), { help: false, configPath: null });
+  assert.deepEqual(parseArguments(['--config', './private.json']), { help: false, configPath: './private.json' });
+  assert.equal(parseArguments(['--help']).help, true);
+  for (const args of [['--config'], ['--config', ''], ['--config', '--help'], ['--config', 'a', '--config', 'b'],
+    ['--help', 'extra'], ['--write'], ['send-transaction']]) assert.throws(() => parseArguments(args));
+  const file = configFile(t), value = { ...downloaded(), token_expires_at_epoch_ms: Date.now() + 60000 };
+  let calls = 0;
+  assert.deepEqual(run({}, { configPath: file.write(value), readFile: () => PEM, spawn(command, args, options) {
+    calls++; assert.equal(options.env.SERVERWARE_ALCHEMY_CHAIN, 'eth-mainnet');
+    assert.equal(options.env.SERVERWARE_PROXY_TOKEN, value.proxy_password);
+    assert.equal(args.length, 1); assert.ok(args[0].endsWith('/request.mjs'));
+    return { status: 0, signal: null, stdout: JSON.stringify(SUCCESS) };
+  } }), SUCCESS);
+  assert.equal(calls, 1);
+});
 
 test('only two fixed chains and an HTTPS credential-free proxy are configured', () => {
   assert.equal(configuration(ENV).chain, 'eth-mainnet');

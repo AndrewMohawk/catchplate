@@ -44,6 +44,20 @@ destination and save a chain-status permission for one application. Wait for
 the matching gate/policy to load. The application must have **Basic proxy
 authentication enabled**; a bearer-only proxy application is not sufficient.
 
+Download **Private client configuration** and the interception CA from **Proxy
+setup**, then run from this example directory:
+
+```sh
+.venv/bin/python -B chain_status.py --config /private/path/serverware-client.private.json
+```
+
+The complete JSON download selects the saved chain and connection. Relative CA
+paths resolve beside that JSON file. Keep the file private: it contains the
+Serverware application token. Its headers, request body and commands are not
+executed; this example still performs only the two fixed chain-status reads.
+Expired application tokens and mismatched permissions are refused before launch.
+
+Alternatively, keep the environment-only invocation below.
 Set the variables illustrated in `.env.example` through your secret manager or
 private shell environment. The program does not load `.env` automatically.
 `SERVERWARE_PROXY_TOKEN` is only the scoped **Serverware application token**.
@@ -106,6 +120,10 @@ earlier `062180fe`/7.13.0 pass and both preceding failures. This remains synthet
 proxy evidence, not real-provider or deployed-instance acceptance.
 
 ## Primary implementation references
+
+Configuration/CLI checks alone need no SDK installation:
+`python3 -B test_chain_status.py --config-only ConfigurationTests -v`.
+This explicitly uses import-only stubs and makes no SDK or provider claim.
 
 - [Pinned web3.py HTTPProvider](https://raw.githubusercontent.com/ethereum/web3.py/v7.15.0/web3/providers/rpc/rpc.py): explicit session and `exception_retry_configuration=None`.
 - [Pinned web3.py provider base](https://raw.githubusercontent.com/ethereum/web3.py/v7.15.0/web3/providers/base.py): request IDs, serialization and opt-in caching.

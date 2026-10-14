@@ -4,13 +4,16 @@ from contextlib import contextmanager
 from importlib.metadata import version
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
 import ssl
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.parse import quote, urlsplit
 from uuid import UUID
 
@@ -23,6 +26,66 @@ PINS = {"xdk": "0.10.6", "requests": "2.34.2", "urllib3": "2.8.0",
 FAILURE = "X lookup failed; check configuration, proxy health and the operator audit log."
 REQUIRED_ENV = ("SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID", "SERVERWARE_PROXY_TOKEN",
     "SERVERWARE_CA_FILE", "SERVERWARE_X_USERNAME")
+MAX_CONFIG_BYTES = 64 * 1024
+
+
+def configuration_environment(config_file):
+    """Read the private console download; never execute a recipe or supplied request."""
+    path = Path(config_file).absolute()
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW), "rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= MAX_CONFIG_BYTES:
+            raise ValueError("Invalid configuration file")
+        raw = stream.read(MAX_CONFIG_BYTES + 1)
+    if not 0 < len(raw) <= MAX_CONFIG_BYTES:
+        raise ValueError("Invalid configuration file")
+
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("Duplicate configuration field")
+            result[key] = value
+        return result
+
+    def number(value):
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError("Invalid configuration number")
+        return result
+
+    value = json.loads(raw.decode("utf-8"), object_pairs_hook=pairs,
+        parse_float=number, parse_constant=number)
+    if type(value) is not dict:
+        raise ValueError("Invalid configuration object")
+    for field in ("application_id", "access_rule_id"):
+        if type(value.get(field)) is not str or str(UUID(value[field])) != value[field]:
+            raise ValueError("Invalid configuration identity")
+    expiry, username = value.get("token_expires_at_epoch_ms"), value.get("username")
+    if (value.get("proxy_authentication") != "basic_and_bearer_v1"
+            or value.get("proxy_username") != value["application_id"]
+            or type(expiry) is not int or not time.time_ns() // 1_000_000 < expiry <= 2**53 - 1
+            or value.get("operation_bundle") != "x_username_read_v1"
+            or type(username) is not str or not re.fullmatch(r"[a-z0-9_]{1,15}", username)
+            or value.get("upstream_url") != BASE_URL + "/2/users/by/username/" + username
+            or value.get("methods") != ["GET"]
+            or value.get("credential_input") != "replace_exact"
+            or value.get("response_mode") != "x_app_read_json_v1"):
+        raise ValueError("Invalid X lookup configuration scope")
+    selected = {"SERVERWARE_X_USERNAME": username}
+    for field, key in (("application_id", "SERVERWARE_APP_ID"), ("proxy_url", "SERVERWARE_PROXY_URL"),
+            ("proxy_password", "SERVERWARE_PROXY_TOKEN")):
+        if type(value.get(field)) is not str:
+            raise ValueError("Invalid connection value")
+        selected[key] = value[field]
+    for field, key in (("ca_file", "SERVERWARE_CA_FILE"), ("proxy_ca_file", "SERVERWARE_PROXY_CA_FILE")):
+        item = value.get(field)
+        if field == "proxy_ca_file" and item is None:
+            continue
+        if type(item) is not str or not item or len(item) > 4096 or any(ord(c) < 32 or ord(c) == 127 for c in item):
+            raise ValueError("Invalid CA path")
+        selected[key] = str((path.parent / item).resolve())
+    return child_environment(selected)
 
 
 def settings(env):
@@ -173,14 +236,17 @@ def launch(env):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Look up one permitted X username (read only).")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--config", metavar="PATH", help="Private client JSON downloaded from Serverware")
     args = parser.parse_args(argv)
     logging.disable(logging.CRITICAL)
     try:
+        if args.child and args.config is not None:
+            raise ValueError("Downloaded configuration is parent-only")
         if args.child:
             check_versions()
             value = read_username(child_environment(os.environ))
         else:
-            value = launch(os.environ)
+            value = launch(os.environ if args.config is None else configuration_environment(args.config))
         print(json.dumps(value, ensure_ascii=True))
         return 0
     except Exception:

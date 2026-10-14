@@ -16,6 +16,24 @@ accepts HTTP 201, matching the [X create-post API](https://docs.x.com/x-api/post
 
 ## Prepared input contract
 
+For an existing posting grant, download its private client JSON and verified CA
+from **Proxy setup**. Set `SERVERWARE_X_POST_TEXT` to your intended post and
+`SERVERWARE_X_POST_CONFIRM=post-once` explicitly in your local environment, then
+run from this directory:
+
+```sh
+GOTOOLCHAIN=local go run . --config /private/path/serverware-client.private.json
+```
+
+This sends one real post, subject to the grant. **The JSON never supplies post
+text or confirmation**: recipe environment entries, commands, headers and bodies
+are ignored. Only the saved Basic login and exact text-post scope are imported.
+Relative CA paths resolve beside the file; optional `proxy_ca_file` adds
+outer-proxy trust. Keep the file private and untracked; download again after
+token expiry. No connection values fall back to your environment. Omitting
+`--config` retains the environment-only inputs below. Both modes retain TLS
+verification and refuse ambient `SSL_CERT_FILE`/`SSL_CERT_DIR`.
+
 Use only after the matching posting deployment is enabled and the operator has
 issued an explicit posting grant; isolated acceptance is not live authorization:
 

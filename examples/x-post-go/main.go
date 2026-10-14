@@ -1,5 +1,5 @@
 // Bounded, single-attempt plain-text posting with the community go-twitter SDK.
-// Proxy integration is not yet available or verified; see README.md.
+// See README.md for the isolated acceptance and live-provider boundary.
 package main
 
 import (
@@ -344,7 +344,7 @@ func writeSummary(out io.Writer, result summary) error {
 }
 
 func main() {
-	if err := run(os.Getenv, os.Stdout); err != nil {
+	if err := runCLI(os.Args[1:], os.Getenv, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err.Error()) // Fixed messages only; never SDK errors, text or tokens.
 		os.Exit(exitCode(err))
 	}

@@ -38,6 +38,25 @@ cd examples/x-post-node
 npm ci --ignore-scripts --no-audit --no-fund
 ```
 
+In **Proxy setup**, select the app and text-post permission and download its
+private client JSON and CA. Connection settings can come directly from the
+download, but text and confirmation must still be set locally:
+
+```sh
+export SERVERWARE_X_POST_TEXT='Your explicitly reviewed text'
+export SERVERWARE_X_POST_CONFIRM='post-once'
+node client.mjs --config /private/path/serverware-client.private.json
+unset SERVERWARE_X_POST_CONFIRM SERVERWARE_X_POST_TEXT
+```
+
+Relative CA paths resolve beside the JSON file. Keep it private: it contains
+the scoped Serverware app token. The loader checks Basic login, token expiry
+and the exact posting permission. It imports connection fields only, never
+commands, environment entries, headers, post content or confirmation. The file
+alone cannot cause a post. TLS verification and the no-retry rule are unchanged.
+
+Alternatively, the existing environment-only invocation remains supported:
+
 Supply `SERVERWARE_PROXY_TOKEN` through a secret manager or protected environment;
 never put it in command arguments, a proxy URL, committed files or logs.
 `.env.example` is reference only and is not loaded automatically. Text may also

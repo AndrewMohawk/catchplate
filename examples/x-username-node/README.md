@@ -41,6 +41,21 @@ cd examples/x-username-node
 npm ci --ignore-scripts --no-audit --no-fund
 ```
 
+In **Proxy setup**, select the app and username-read permission, then download
+its private client JSON and CA. No connection variables need to be copied:
+
+```sh
+node client.mjs --config /private/path/serverware-client.private.json
+```
+
+Relative CA paths resolve beside the JSON file. Keep it private: it contains
+the scoped Serverware app token. The loader checks Basic login, token expiry
+and the exact saved username/read permission. Commands, headers, body and
+environment entries from the file are never executed or imported; it cannot
+select posting or another operation. TLS verification remains enabled.
+
+Alternatively, the existing environment invocation remains supported:
+
 Export the public configuration below and supply `SERVERWARE_PROXY_TOKEN`
 through your secret manager or protected CI environment. It is the scoped
 **Serverware application token**, never an X token. Do not put it in shell

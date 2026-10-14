@@ -35,6 +35,22 @@ Obtain an explicitly authorized posting grant, application ID/token,
 interception CA and any separate outer-proxy CA from the operator. Never bypass
 TLS or fall back to a direct X request. `.env.example` is reference only.
 
+You can download **Private client configuration** and the interception CA from
+**Proxy setup** instead of entering connection variables. Keep this JSON private:
+it contains the Serverware application token. Relative CA paths resolve beside
+the JSON file. Posting text and confirmation must still be supplied locally:
+
+```bash
+export SERVERWARE_X_POST_TEXT='An explicitly reviewed text-only post'
+export SERVERWARE_X_POST_CONFIRM=post-once
+.venv/bin/python -B post.py --config /private/path/serverware-client.private.json
+unset SERVERWARE_X_POST_CONFIRM SERVERWARE_X_POST_TEXT
+```
+
+The file cannot supply posting text or confirmation, execute commands, change
+the fixed posting endpoint or enable retries. Expired tokens and mismatched
+permissions are refused before launch. The environment-only form is unchanged:
+
 ```bash
 export SERVERWARE_PROXY_URL='https://your-proxy-host:443'
 export SERVERWARE_APP_ID='your-application-uuid'
@@ -96,6 +112,11 @@ The application token and text remain visible to sufficiently privileged
 same-user process inspection; use a trusted workstation and scoped token.
 
 ## Offline tests
+
+Configuration/CLI checks alone need no SDK installation:
+`python3 -B test_post.py --config-only ConfigurationTests -v`.
+This uses import-only stubs, not SDK/provider execution. The full existing SDK
+suite still requires the pinned dependencies:
 
 ```bash
 .venv/bin/python -B test_post.py -v

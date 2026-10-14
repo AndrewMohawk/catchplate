@@ -135,6 +135,7 @@ CONTROL_PLANE_RELEASE_SOCKET = "/run/serverware/oidc-session-activation-token-re
 CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_MAX_BYTES = 4 * 1024 * 1024
 CONTROL_PLANE_ENROLLMENT_KEY_MAX_BYTES = 4096
 CONTROL_PLANE_ENROLLMENT_KEY_NAME = "serverware-control-plane-enrollment-signing-key"
+NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_NAME = "SERVERWARE_NATIVE_JIT_REVIEW_CURRENT_ROOT_ENROLLMENT_FD"
 CONTROL_PLANE_EXECUTION_SCHEMA = "serverware.controlPlaneRegistrationExecution/v1"
 CONTROL_PLANE_EXECUTION_V2_SCHEMA = "serverware.controlPlaneRegistrationExecution/v2"
 CONTROL_PLANE_EXECUTION_V3_SCHEMA = "serverware.controlPlaneRegistrationExecution/v3"
@@ -3078,6 +3079,9 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
         setup_native_observation: bool = False, local_admission: tuple[int, str, int] | None = None,
         static_credential_creation_fd: int | None = None, static_credential_rotation_fd: int | None = None,
         currentness_assignment_fd: int | None = None) -> int:
+    if (NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_NAME in os.environ
+            or NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_NAME.removesuffix("_FD") + "_PATH" in os.environ):
+        raise RuntimeError("native review enrollment requires actual native stage zero")
     if type(public_revocation) is not bool or public_revocation and role not in {"verifier", "issuer", "executor"}:
         raise RuntimeError("public revocation cold selection requires its fixed measured roles")
     if type(genesis_maintenance) is not bool or genesis_maintenance and (role != "control-plane" or public_revocation):

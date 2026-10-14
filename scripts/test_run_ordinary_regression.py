@@ -46,6 +46,7 @@ class RunnerTests(unittest.TestCase):
                 "test_native_jit_review_open_owner.py",
                 "test_authority_native_jit_review_current_chunks.py",
                 "test_authority_native_jit_review_current_read.py",
+                "test_authority_native_jit_review_transport.py",
                 "test_authority_native_jit_review_open.py",
                 "test_authority_native_jit_review_plan.py",
                 "test_authority_native_jit_review_plan_replay.py",

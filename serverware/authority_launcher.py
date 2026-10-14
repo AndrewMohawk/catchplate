@@ -200,6 +200,13 @@ NATIVE_REVIEW_CREDENTIAL_NAMES = {
 }
 NATIVE_REVIEW_POLICY_FIELD = "nativeJitReviewOpeningPolicy"
 NATIVE_REVIEW_POLICY_SCHEMA = "serverware.nativeJitReviewOpeningPolicy/v1"
+NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_NAME = "SERVERWARE_NATIVE_JIT_REVIEW_CURRENT_ROOT_ENROLLMENT_FD"
+NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_ROLES = ("verifier", "planner")
+MAX_NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_BYTES = 128 * 1024
+NATIVE_REVIEW_AUTHORITY_POLICY_FIELD = "nativeJitReviewAuthorityPolicy"
+NATIVE_REVIEW_AUTHORITY_POLICY_SCHEMA = "serverware.nativeJitReviewAuthorityPolicy/v1"
+NATIVE_REVIEW_DESCRIPTOR_NAMES = frozenset(NATIVE_REVIEW_CREDENTIAL_NAMES.values()) | {
+    NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_NAME}
 AUTHORITY_CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v6"
 SIGNED_AUTHORITY_CONFIG_SCHEMA = "serverware.signedPolicyAuthorityServiceConfiguration/v6"
 MAX_AUTHORITY_CONFIG_BYTES = 4 * 1024 * 1024
@@ -243,22 +250,25 @@ def _is_digest(value: object) -> bool:
 
 
 def _native_review_candidates(role, names, *, trusted_host_local, handoff_descriptor):
-    """Provisional CLI inventory, not permission to read/use a purpose key."""
-    selected = frozenset(names) & frozenset(NATIVE_REVIEW_CREDENTIAL_NAMES.values())
+    """Provisional CLI inventory, not permission to read/use a native original."""
+    selected = frozenset(names) & NATIVE_REVIEW_DESCRIPTOR_NAMES
+    allowed = {NATIVE_REVIEW_CREDENTIAL_NAMES[role]} if role in NATIVE_REVIEW_CREDENTIAL_NAMES else set()
+    if role in NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_ROLES:
+        allowed.add(NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_NAME)
     if selected and (trusted_host_local or handoff_descriptor is None
-            or selected != {NATIVE_REVIEW_CREDENTIAL_NAMES.get(role)}):
+            or not selected <= allowed):
         raise LaunchError("native review credentials require their exact native role")
     return selected
 
 
-def _native_review_credentials(role, original, generation, *, native_stage_zero):
-    """Derive a roster only from the already authenticated generation's original.
+def _native_review_configuration_payload(original, generation, *, native_stage_zero):
+    """Read selection only from the already authenticated generation's original.
 
     Called AFTER package/generation and native handoff verification. This is not
     a second configuration admission: MeasuredConfiguration.load still verifies
     its root signature and full optional policy before signer initialization.
     """
-    if (native_stage_zero is not True or role not in NATIVE_REVIEW_CREDENTIAL_NAMES
+    if (native_stage_zero is not True
             or type(original) is not bytes or not 0 < len(original) <= MAX_AUTHORITY_CONFIG_BYTES
             or type(generation) is not dict or generation.get("schema") != GENERATION_CONTEXT_SCHEMA
             or generation.get("trustMode") not in {"external-production", "tee-hardware"}):
@@ -295,16 +305,42 @@ def _native_review_credentials(role, original, generation, *, native_stage_zero)
                 or generation.get("minimumRollbackSequence") != payload.get("generationMinimumRollbackSequence")
                 or generation.get("configurationBindingDigest") != payload.get("generationBindingDigest")):
             raise ValueError("configuration payload binding")
-        if NATIVE_REVIEW_POLICY_FIELD not in payload:
-            return frozenset()
-        policy = payload[NATIVE_REVIEW_POLICY_FIELD]
-        if (type(policy) is not dict or policy.get("schema") != NATIVE_REVIEW_POLICY_SCHEMA
-                or not _is_digest(generation.get("operationManifestDigest"))
-                or policy.get("sourceContractDigest") != generation["operationManifestDigest"]):
-            raise ValueError("native review policy selector")
     except (ValueError, TypeError, RecursionError) as exc:
         raise LaunchError("native review configuration binding is invalid") from exc
+    return payload
+
+
+def _native_review_credentials(role, original, generation, *, native_stage_zero):
+    if role not in NATIVE_REVIEW_CREDENTIAL_NAMES:
+        raise LaunchError("native review key role is unavailable")
+    payload = _native_review_configuration_payload(original, generation,
+        native_stage_zero=native_stage_zero)
+    if NATIVE_REVIEW_POLICY_FIELD not in payload:
+        return frozenset()
+    policy = payload[NATIVE_REVIEW_POLICY_FIELD]
+    if (type(policy) is not dict or policy.get("schema") != NATIVE_REVIEW_POLICY_SCHEMA
+            or not _is_digest(generation.get("operationManifestDigest"))
+            or policy.get("sourceContractDigest") != generation["operationManifestDigest"]):
+        raise LaunchError("native review policy selector is invalid")
     return frozenset({NATIVE_REVIEW_CREDENTIAL_NAMES[role]})
+
+
+def _native_review_current_root_credentials(role, original, generation, *, native_stage_zero):
+    """Select the separate enrollment original, never enrollment embedded in config."""
+    if role not in NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_ROLES:
+        raise LaunchError("native review enrollment role is unavailable")
+    payload = _native_review_configuration_payload(original, generation,
+        native_stage_zero=native_stage_zero)
+    if NATIVE_REVIEW_AUTHORITY_POLICY_FIELD not in payload:
+        return frozenset()
+    policy = payload[NATIVE_REVIEW_AUTHORITY_POLICY_FIELD]
+    if (type(policy) is not dict or set(policy) != {"schema", "sourceContractDigest",
+            "authenticationPolicy", "trustPolicy", "stateEndpoint"}
+            or policy.get("schema") != NATIVE_REVIEW_AUTHORITY_POLICY_SCHEMA
+            or not _is_digest(generation.get("operationManifestDigest"))
+            or policy.get("sourceContractDigest") != generation["operationManifestDigest"]):
+        raise LaunchError("native review authority policy selector is invalid")
+    return frozenset({NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_NAME})
 
 
 def _boot_identity_digest() -> str:
@@ -615,9 +651,10 @@ def _seal_bytes(name: str, value: bytes, *, mode: int = 0o400) -> int:
     return descriptor
 
 
-def _seal_readonly_native_review_key(value: bytes) -> int:
+def _seal_readonly_native_review_key(value: bytes, *, maximum_bytes: int = 64 * 1024) -> int:
     """Reopen only our new sealed inode, never an arbitrary credential path."""
-    if not 0 < len(value) <= 64 * 1024:
+    if (maximum_bytes not in {64 * 1024, MAX_NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_BYTES}
+            or not 0 < len(value) <= maximum_bytes):
         raise LaunchError("native review credential size is invalid")
     writable = _seal_bytes("authority-native-review-key", value, mode=0o400)
     readonly = None
@@ -643,12 +680,14 @@ def _seal_readonly_native_review_key(value: bytes) -> int:
 
 
 def _retain_native_review_credential(binding):
-    """Read/reseal a selected key only after authenticated native admission."""
+    """Read/reseal a selected original only after authenticated native admission."""
     descriptor = binding["descriptor"]
     name = binding["environmentName"]
-    if (name not in NATIVE_REVIEW_CREDENTIAL_NAMES.values()
+    maximum = (MAX_NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_BYTES
+        if name == NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_NAME else 64 * 1024)
+    if (name not in NATIVE_REVIEW_DESCRIPTOR_NAMES
             or binding["ownerUid"] != 0 or binding["mode"] != 0o400
-            or not 0 < binding["size"] <= 64 * 1024
+            or not 0 < binding["size"] <= maximum
             or os.environ.get(name) != str(descriptor)
             or name.removesuffix("_FD") + "_PATH" in os.environ
             or fcntl.fcntl(descriptor, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY):
@@ -664,7 +703,7 @@ def _retain_native_review_credential(binding):
             or any(getattr(before, field) != getattr(after, field) for field in fields)
             or "sha256:" + hashlib.sha256(value).hexdigest() != binding["sha256"]):
         raise LaunchError("native review credential measurement changed")
-    sealed = _seal_readonly_native_review_key(value)
+    sealed = _seal_readonly_native_review_key(value, maximum_bytes=maximum)
     try:
         os.dup2(sealed, descriptor, inheritable=False)
     finally:
@@ -2666,10 +2705,10 @@ def _enter(
             or _native_review_candidates(role, native_review_credentials,
                 trusted_host_local=trusted_host_local, handoff_descriptor=handoff_descriptor)
                 != native_review_credentials
-            or {name for name in NATIVE_REVIEW_CREDENTIAL_NAMES.values() if name in os.environ}
+            or {name for name in NATIVE_REVIEW_DESCRIPTOR_NAMES if name in os.environ}
                 != native_review_credentials
             or any(name.removesuffix("_FD") + "_PATH" in os.environ
-                for name in NATIVE_REVIEW_CREDENTIAL_NAMES.values())):
+                for name in NATIVE_REVIEW_DESCRIPTOR_NAMES)):
         raise LaunchError("native review provisional descriptor set is invalid")
     expected_credentials |= native_review_credentials
     flags = sys.flags
@@ -3189,6 +3228,10 @@ def _enter(
         selected_native_review = _native_review_credentials(role,
             _read_descriptor("SERVERWARE_POLICY_AUTHORITY_CONFIG", MAX_AUTHORITY_CONFIG_BYTES),
             generation_context, native_stage_zero=launch_assurance.get("nativeStageZero"))
+    if not trusted_host_local and role in NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_ROLES:
+        selected_native_review |= _native_review_current_root_credentials(role,
+            _read_descriptor("SERVERWARE_POLICY_AUTHORITY_CONFIG", MAX_AUTHORITY_CONFIG_BYTES),
+            generation_context, native_stage_zero=launch_assurance.get("nativeStageZero"))
     if selected_native_review != native_review_credentials:
         raise LaunchError("native review credentials differ from the admitted configuration")
     for binding in credential_descriptors:
@@ -3284,7 +3327,7 @@ def _enter(
 
 def main(argv: list[str] | None = None) -> int:
     if any(name in os.environ or name.removesuffix("_FD") + "_PATH" in os.environ
-            for name in NATIVE_REVIEW_CREDENTIAL_NAMES.values()):
+            for name in NATIVE_REVIEW_DESCRIPTOR_NAMES):
         raise LaunchError("native review originals require explicit measured descriptor delivery")
     if any(
         os.environ.get(name)

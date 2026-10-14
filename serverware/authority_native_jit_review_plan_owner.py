@@ -148,6 +148,7 @@ class PreparedNativeJitReviewPlan:
     mutations_original: bytes
     before_vector_original: bytes
     after_vector_original: bytes
+    retained_originals: tuple[str, str, str, str]
 
 
 class NativeJitReviewPlanOwner:
@@ -377,9 +378,14 @@ class NativeJitReviewPlanOwner:
                     frame(reads.vector.IDENTITY_DOMAIN, (after,), work), owned["result"], interval,
                     plan_digest, None, None, tuple(owned["selectedRows"]),
                     tuple(owned["mutations"]), effects.work_units)
+            retained = kernel._row(kernel.core.KernelContext(operation, request["arguments"],
+                acquired.selected_rows, acquired.database_now, request["requestDigest"]),
+                kernel.storage.TABLE, {"approval_request_id": request["arguments"]["approval_request_id"]})
+            retained_originals = tuple(retained[name] for name in (
+                "parent_request_original", "child_request_original", "pair_original", "proof_original"))
             return PreparedNativeJitReviewPlan(operation, request_original, challenge_original,
                 authorization_original, preparation_original, read_manifest_original, read_frames,
-                result, mutations, before, after)
+                result, mutations, before, after, retained_originals)
         except BaseException as exc:
             self._failed = True
             if isinstance(exc, Exception):

@@ -99,6 +99,7 @@ from serverware import authority_static_credential_rotation_approval as static_r
 from serverware import authority_static_credential_custody as static_custody
 from serverware import authority_native_jit_review_custody as jit_review_custody
 from serverware import authority_native_jit_review_open_custody as jit_review_open_custody
+from serverware import authority_native_jit_review_service_policy as jit_review_service_policy
 from serverware import authority_native_jit_submission as native_jit
 from serverware import authority_static_credential_rotation_custody as static_rotation_custody
 from serverware import authority_setup_policy_admission as setup_policy_admission
@@ -1279,7 +1280,7 @@ class MeasuredConfiguration:
                 "authority configuration root signature is invalid"
             ) from exc
         if (
-            set(payload) - {genesis_policy.FIELD, setup_native_final_policy.FIELD, setup_native_hardware_policy.FIELD, setup_native_runtime_policy.FIELD, setup_native_ca.FIELD, setup_native_enrollment_policy.FIELD, evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, setup_cancel.FIELD, setup_create.FIELD, setup_bind_credential.FIELD, static_create.FIELD, static_rotate.FIELD, static_custody.FIELD, jit_review_custody.FIELD, jit_review_open_custody.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, finalization_policy.FIELD, native_readiness_policy.FIELD, native_activation.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD, recovery_configuration.FIELD, challenge_maintenance_policy.FIELD}
+            set(payload) - {genesis_policy.FIELD, setup_native_final_policy.FIELD, setup_native_hardware_policy.FIELD, setup_native_runtime_policy.FIELD, setup_native_ca.FIELD, setup_native_enrollment_policy.FIELD, evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, setup_cancel.FIELD, setup_create.FIELD, setup_bind_credential.FIELD, static_create.FIELD, static_rotate.FIELD, static_custody.FIELD, jit_review_custody.FIELD, jit_review_open_custody.FIELD, jit_review_service_policy.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, finalization_policy.FIELD, native_readiness_policy.FIELD, native_activation.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD, recovery_configuration.FIELD, challenge_maintenance_policy.FIELD}
                 != required_payload_fields
             or payload.get("schema") != CONFIG_SCHEMA
             or payload.get("sourceRevision") != SOURCE_REVISION
@@ -1427,6 +1428,11 @@ class MeasuredConfiguration:
             )
         except (TypeError, ValueError) as exc:
             raise AuthorityServiceError("authority native JIT review opening policy is invalid") from exc
+        try:
+            jit_review_service_policy.validate_policy(
+                payload.get(jit_review_service_policy.FIELD), payload=payload, root_key=root_key)
+        except (TypeError, ValueError) as exc:
+            raise AuthorityServiceError("authority native JIT review service policy is invalid") from exc
         try:
             setup_native_enrollment_policy.validate_policy(payload.get(setup_native_enrollment_policy.FIELD), payload=payload, root_key=root_key)
             setup_native_ca.validate_policy(payload.get(setup_native_ca.FIELD), payload=payload, root_key=root_key)
@@ -3622,6 +3628,13 @@ class AuthorityRuntimeRelay:
                     "authority relay peer identity is not allowed"
                 )
             prefix = writer_transport._recv_prefix(connection, deadline_ns=deadline_ns)
+            from serverware import authority_native_jit_review_transport as native_review_wire
+            if prefix == native_review_wire.REQUEST_MAGIC:
+                from serverware import authority_native_jit_review_service
+                detached = True
+                authority_native_jit_review_service.serve_relay(
+                    trust, connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
             from serverware import authority_public_revocation_transport as public_revocation_wire
             if prefix in public_revocation_wire.REQUEST_MAGICS:
                 from serverware import authority_public_revocation_service
@@ -3981,6 +3994,8 @@ class AuthorityProcess:
         authority_public_revocation_terminal.initialize(self)
         from serverware import authority_native_jit_review_open_signers
         authority_native_jit_review_open_signers.initialize(self)
+        from serverware import authority_native_jit_review_service
+        authority_native_jit_review_service.initialize(self)
 
     def _trusted_host_local_consumption_receipt(
         self,
@@ -11142,12 +11157,20 @@ class AuthorityServer:
                 *transition_custody_read_transport.REQUEST_MAGICS,
                 *transition_custody_read_transport.FORWARD_REQUEST_MAGICS)
             from serverware import authority_public_revocation_transport as public_revocation_wire
+            from serverware import authority_native_jit_review_transport as native_review_wire
             if writer_reservation_peer and (
-                    detached or prefix in public_revocation_wire.REQUEST_MAGICS):
+                    detached or prefix in public_revocation_wire.REQUEST_MAGICS
+                    or prefix == native_review_wire.REQUEST_MAGIC):
                 detached = True
                 raise AuthorityServiceError(
                     "verifier writer peer cannot use detached protocols"
                 )
+            if prefix == native_review_wire.REQUEST_MAGIC:
+                from serverware import authority_native_jit_review_service
+                detached = True
+                authority_native_jit_review_service.serve_process(
+                    self.process, connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
             if prefix in public_revocation_wire.REQUEST_MAGICS:
                 from serverware import authority_public_revocation_service
                 detached = True

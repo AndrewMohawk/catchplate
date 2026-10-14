@@ -45,6 +45,7 @@ from serverware import authority_static_credential_rotate as static_rotate
 from serverware import authority_static_credential_custody as static_custody
 from serverware import authority_native_jit_review_custody as jit_review_custody
 from serverware import authority_native_jit_review_open_custody as jit_review_open_custody
+from serverware import authority_native_jit_review_service_policy as jit_review_service_policy
 from serverware import authority_oauth_revocation_policy as oauth_revocation_policy
 from serverware import authority_recovery_configuration as recovery_configuration
 from serverware import authority_challenge_policy as challenge_maintenance_policy
@@ -768,7 +769,7 @@ def validate_configuration_payload(
                 if optional_field in value:
                     expected_fields = expected_fields | {optional_field}
             for optional_field in (static_create.FIELD, static_rotate.FIELD, static_custody.FIELD,
-                    jit_review_custody.FIELD, jit_review_open_custody.FIELD):
+                    jit_review_custody.FIELD, jit_review_open_custody.FIELD, jit_review_service_policy.FIELD):
                 if optional_field in value:
                     expected_fields = expected_fields | {optional_field}
     payload = _closed(
@@ -1038,6 +1039,11 @@ def validate_configuration_payload(
             )
         except (TypeError, ValueError) as exc:
             raise GeneratorError("authority native JIT review opening policy is invalid") from exc
+        try:
+            jit_review_service_policy.validate_policy(
+                payload.get(jit_review_service_policy.FIELD), payload=payload, root_key=root_key)
+        except (TypeError, ValueError) as exc:
+            raise GeneratorError("authority native JIT review service policy is invalid") from exc
     payload_bytes = canonical_json_bytes(payload)
     if expected_payload_schema == SERVICE_CONFIGURATION_PAYLOAD_SCHEMA:
         # Service configuration identity uses the service protocol's NUL

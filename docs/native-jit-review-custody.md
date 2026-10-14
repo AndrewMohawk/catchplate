@@ -31,8 +31,17 @@ delivery routes are unchanged. The planner remains read-only. Cold startup must
 still admit the roles/enrollment and select this profile; the constructor alone
 does not establish that admission.
 
-This is source implementation, not activation. The cold HTTP service connection,
-key-backed decision join and same-attempt proxy continuation are still missing.
+The authorize-only authority connection now has an optional root-signed reviewer
+policy, separate generation-bound enrollment delivery, authenticated Unix
+transport, and actual startup/listener hooks. Its handler acquires and replays
+current state before signing an authorization and returning the four exact
+authenticated retained originals. The session token is not returned or retained.
+Focused checks cover these components and the actual replay/signing suffix;
+they do not establish a launched native authority or a live database exchange.
+
+This is source implementation, not activation. Provisioned native startup,
+receipt-service assembly, the cold HTTP service connection, key-backed decision
+join and same-attempt proxy continuation are still missing.
 `native_jit_review_open_service.selected()` remains disabled, and the deployed
 ordinary instance has not been migrated to this new schema contract.
 

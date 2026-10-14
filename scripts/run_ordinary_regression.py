@@ -100,6 +100,7 @@ SUITES = (
     Suite("backend", "test_native_jit_review_open_owner.py", seconds=60),
     Suite("backend", "test_authority_native_jit_review_current_chunks.py", seconds=60),
     Suite("backend", "test_authority_native_jit_review_current_read.py", seconds=60),
+    Suite("backend", "test_authority_native_jit_review_transport.py", seconds=60),
     Suite("backend", "test_authority_native_jit_review_open.py", seconds=60),
     Suite("backend", "test_authority_native_jit_review_plan.py", seconds=60),
     # Genuine synthetic replay now also derives complete before/after vectors.

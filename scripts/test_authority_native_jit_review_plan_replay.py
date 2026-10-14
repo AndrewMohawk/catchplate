@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 import sys
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -355,10 +356,55 @@ class NativeReviewPlanOriginalReplayTests(unittest.TestCase):
         self.assertNotEqual(case.originals["headQueryOriginal"], case.originals["finalHeadQueryOriginal"])
         self.assertNotIn(TOKEN, result.read_manifest_original + result.result_original + result.request_original)
         self.assertTrue(all(TOKEN not in raw for raw in result.read_frames))
+        self.assertEqual(result.retained_originals, tuple(case.opening.retained.row[name] for name in (
+            "parent_request_original", "child_request_original", "pair_original", "proof_original")))
+        self.assertTrue(all(TOKEN.decode("ascii") not in raw for raw in result.retained_originals))
         with self.assertRaises(FrozenInstanceError):
             result.operation = wire.RECEIPT
         with self.assertRaises(owner.NativeJitReviewPlanOwnerError):
             case.replay(selected)
+
+    def test_authorize_service_suffix_signs_actual_replay_and_returns_exact_retained_originals(self):
+        # This isolates the suffix: cold admission and SQL delivery are explicit
+        # test doubles. Original proof/row/native replay and signing are real;
+        # this is not evidence of a launched owner or a successful database read.
+        from serverware import authority_native_jit_review_service as service
+        case = OriginalFixture(self.pki)
+        seed = case.plan_owner()
+        checks = []
+        held = SimpleNamespace(role="planner", process=object(),
+            reader_settings=seed._reader_pins[1],
+            configuration=SimpleNamespace(payload=case.opening.configuration,
+                root_key=case.root_key.public_key()),
+            material=SimpleNamespace(enrollment_original=case.enrollment,
+                state_configuration=seed._reader_pins[4],
+                authentication_policy=case.reviewer.authn, trust_policy=case.reviewer.trust),
+            check=lambda work: checks.append(work))
+
+        @contextmanager
+        def synthetic_custody(process, *, purpose):
+            self.assertIs(process, held.process)
+            self.assertEqual(purpose, "authorize")
+            yield case.opening.grant_key
+
+        work = meter()
+        from serverware import authority_successor_execution_window as windows
+        window = windows._narrow(LIVE,
+            deadline_epoch_ns=wire.validate_challenge_original(case.challenge)["statement"]["expiresAtEpochNs"],
+            maximum_lifetime_ns=wire.MAX_INTERVAL_NS, maximum_clock_skew_ns=0)
+        with patch.object(reads.NativeJitReviewCurrentReader, "acquire", return_value=case.originals), \
+                patch.object(service.signers, "_borrow", side_effect=synthetic_custody):
+            returned = service._authorize(held, challenge_original=case.challenge,
+                session_id=case.reviewer.session["id"], token=TOKEN,
+                window=window, deadline_ns=window[4], work=work)
+        value = wire.verify_authorization_original(returned[0],
+            public_key=case.opening.grant_key.public_key(), now_epoch_ns=NOW)["payload"]
+        self.assertEqual(value["requestDigest"], case.request["requestDigest"])
+        self.assertEqual(returned[1:], tuple(case.opening.retained.row[name] for name in (
+            "parent_request_original", "child_request_original", "pair_original", "proof_original")))
+        self.assertTrue(all(TOKEN.decode("ascii") not in raw for raw in returned))
+        self.assertGreaterEqual(len(checks), 3)
+        self.assertTrue(all(item is work for item in checks))
 
     def test_actual_fractional_receipt_replay_derives_exactly_four_unsigned_uncommitted_effects(self):
         case = self.receipt_fixture(fractional=True)

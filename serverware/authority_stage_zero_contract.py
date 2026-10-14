@@ -67,6 +67,9 @@ NATIVE_REVIEW_CREDENTIAL_ROLES = {
     "SERVERWARE_NATIVE_JIT_REVIEW_AUTHORIZER_KEY_FD": "planner",
     "SERVERWARE_NATIVE_JIT_REVIEW_COMMIT_KEY_FD": "executor",
 }
+NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_NAME = "SERVERWARE_NATIVE_JIT_REVIEW_CURRENT_ROOT_ENROLLMENT_FD"
+NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_ROLES = ("verifier", "planner")
+MAX_NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_BYTES = 128 * 1024
 MAX_MUTABLE_STATE_DESCRIPTORS = 16
 MAX_ENVIRONMENT_ENTRIES = 256
 MAX_ARGUMENTS = 256
@@ -608,6 +611,12 @@ def _validate_credential(value: object) -> None:
             or credential["purpose"] != "role-signing-key"
             or credential["mode"] != 0o400 or not 0 < credential["size"] <= 64 * 1024):
         raise StageZeroContractError("native review credential purpose or metadata changed")
+    if credential["name"] == NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_NAME and (
+            credential["ownerRole"] not in NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_ROLES
+            or credential["purpose"] != "service-client-credential"
+            or credential["mode"] != 0o400
+            or not 0 < credential["size"] <= MAX_NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_BYTES):
+        raise StageZeroContractError("native review enrollment purpose or metadata changed")
 
 
 def _validate_bootstrap_control(value: object) -> Mapping[str, Any]:
@@ -1310,6 +1319,8 @@ def validate_stage_zero_request(
         _validate_credential(entry)
         if local and entry["name"] in NATIVE_REVIEW_CREDENTIAL_ROLES:
             raise StageZeroContractError("native review credentials forbid trusted-host-local delivery")
+        if local and entry["name"] == NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_NAME:
+            raise StageZeroContractError("native review enrollment forbids trusted-host-local delivery")
         if entry["ownerRole"] != role_name:
             raise StageZeroContractError(
                 "credential is assigned to another role"

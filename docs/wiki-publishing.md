@@ -13,10 +13,12 @@ GitHub before cloning. See [GitHub's publishing instructions](https://docs.githu
 
 The [publication handoff](project-completion.md#current-checkpoint--october-13-access-continuation-and-operator-guide)
 records an enabled Wiki whose authenticated Git repository returned
-`Repository not found`. The browser had no authenticated GitHub session, so
-missing initialization and an access problem were not distinguished. This is
-the previously observed state, not a new remote check or a publication-success
-claim.
+`Repository not found`. A fresh October 14 check confirmed `has_wiki: true`
+and administrator access to the private application repository, but the Wiki
+Git check using the existing GitHub CLI credential helper still returned
+`Repository not found` (exit 128). The earlier browser check had no authenticated
+GitHub session. Missing initialization and Wiki access remain undistinguished;
+the source guides have not been published to the Wiki.
 
 An authorized repository maintainer must open the Wiki while signed into
 GitHub. If it offers **Create the first page**, keep the title **Home**, paste
@@ -33,7 +35,8 @@ and Enterprise plans; Free supports Wikis on public repositories only. See
 [Wiki availability](https://docs.github.com/en/communities/documenting-your-project-with-wikis).
 An enabled Wiki setting and repository administrator access do not by themselves
 establish plan eligibility or initial-page creation. The current owner's plan
-has not been established, so plan eligibility is a check, not a diagnosed cause
+was not returned by the authenticated account API, so plan eligibility is a
+check, not a diagnosed cause
 of `Repository not found`. Do not change repository visibility, purchase a plan
 or create a replacement public repository to bypass this check.
 

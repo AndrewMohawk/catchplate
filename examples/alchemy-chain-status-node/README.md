@@ -95,8 +95,8 @@ Both TLS legs verify hostnames and certificates:
   connector CA sets are explicit; the inner set never inherits the outer root.
 
 There is no system trust-store modification or insecure fallback. Separate-root
-dual-TLS acceptance for this new transport is required separately from the
-historical Alchemy SDK run and the component checks below.
+dual-TLS acceptance passed for this transport in the isolated actual-proxy run
+at `8d07d66b`, separately from the component checks below.
 [Node extra-CA semantics](https://nodejs.org/download/release/v25.5.0/docs/api/cli.html#node_extra_ca_certsfile),
 [Undici tunnel implementation](https://github.com/nodejs/undici/blob/v8.12.1/lib/dispatcher/proxy-agent.js).
 
@@ -128,8 +128,12 @@ The Viem migration changes the SDK and HTTP transport. Its component suites
 passed at `692c2923` in [hosted run 38591966831](https://github.com/example/private-deployment):
 12 inert configuration tests and nine SDK/fixture tests, with no failures,
 cancellations or skips and verified cleanup. The preceding failed fixture
-attempt remains recorded. Matching-source SDK-through-proxy acceptance is
-still pending; package installation and component success are not that proof.
+attempt remains recorded. A fresh run at `8d07d66b` then passed all 12 actual
+Node/Python/Go SDK phases through the normal Rust proxy in 79.410 seconds:
+two reads per client, wrong-client/wrong-chain/revoked-permission refusals,
+exact credential replacement, separate verified TLS roots and audit checks.
+The existing Rust build was reused, and cleanup was verified. This is isolated
+synthetic-provider acceptance, not a real Alchemy account test.
 
 Historical acceptance remains preserved: the Alchemy SDK graph at `dcf70631`,
 with normal Rust SHA-256 prefix `0908732386fa`, passed the 12-phase isolated
@@ -138,7 +142,8 @@ separate TLS roots and audit controls. The later Jayson graph passed 15 componen
 tests but not a fresh connected run. Neither result covers this Viem migration.
 See the [current verification status](../../docs/operator-alchemy-verification.md)
 and [historical acceptance record](../../docs/operator-alchemy-verification.md#current-dependency-graph-acceptance).
-Real Alchemy, Actions, native-pilot and deployment acceptance remain unverified.
+Real Alchemy, real-provider Actions jobs, native-pilot and deployment acceptance
+remain unverified.
 
 ```sh
 npm test

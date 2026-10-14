@@ -38,7 +38,7 @@ pending consent or operation-recovery hold. A lost one-time client token still
 requires deliberate rotation; the warning does not retain the token or request.
 If session storage is unavailable, the page refuses new writes rather than
 sending an untracked save. Do not clear browser storage to bypass recovery.
-This repair has passed the isolated full-flow check but is not yet deployed;
+This repair passed the isolated full-flow check and was deployed on October 14;
 check the [current deployment record](https://github.com/AndrewMohawk/serverware/blob/main/docs/project-completion.md#current-live-deployment)
 for the installed version.
 

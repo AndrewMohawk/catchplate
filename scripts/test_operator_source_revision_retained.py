@@ -4,6 +4,7 @@ import ast
 import copy
 from datetime import datetime, timezone
 import io
+import json
 import os
 from pathlib import Path
 import stat
@@ -359,6 +360,60 @@ class MigratedDatabaseByteControls(unittest.TestCase):
                 'requiredPhaseReceipt': "'phase-freeze.json'"}.items():
             with self.subTest(field=name):
                 self.assertEqual(fields[name], expression)
+
+
+class PromotionHashHandoffControls(unittest.TestCase):
+    def test_prepare_reads_only_three_root_files_and_emits_only_hashes(self):
+        payload = b'synthetic private bytes that must never appear in stdout'
+        with patch.object(h, 'raw_file', return_value=payload) as read:
+            value = worker.phase_stdout('prepare')
+        expected = {'copy/source-proof.json', 'copy/prepared.json', 'copy/auxiliary-preserved.json'}
+        self.assertEqual(set(value), {'schema', 'ok', 'role', 'liveAccess', 'hostCleanupVerification', 'promotionFileSha256'})
+        self.assertEqual(value['promotionFileSha256'], {name: h.sha(payload) for name in expected})
+        self.assertEqual({str(call.args[0]) for call in read.call_args_list},
+            {'/job/source-proof.json', '/job/prepared.json', '/job/auxiliary-preserved.json'})
+        self.assertNotIn(payload.decode(), json.dumps(value))
+
+    def test_freeze_reads_exact_fourteen_out_files_including_saved_phase(self):
+        expected = {'plan.json', 'apply.json', 'migrated-database.json', 'migrated-database-bytes.json',
+            'freeze.json', 'expected-contract.json', 'serverware.sqlite3.baseline.json', 'baseline-contract.json',
+            'recovered-files.json', 'phase-prepare.json', 'phase-recover.json', 'phase-plan.json',
+            'phase-apply.json', 'phase-freeze.json'}
+        with patch.object(h, 'raw_file', side_effect=lambda path: str(path).encode()) as read:
+            value = worker.phase_stdout('freeze')
+        self.assertEqual(value['promotionFileSha256'],
+            {'copy/out/' + name: h.sha(('/out/' + name).encode()) for name in expected})
+        self.assertEqual({str(call.args[0]) for call in read.call_args_list}, {'/out/' + name for name in expected})
+        self.assertEqual(read.call_count, 14)
+        self.assertLess(len(json.dumps(value)), 4096)
+
+    def test_other_phases_do_not_read_or_emit_promotion_files(self):
+        with patch.object(h, 'raw_file') as read:
+            for role in set(worker.ROLES) - {'prepare', 'freeze'}:
+                with self.subTest(role=role):
+                    self.assertNotIn('promotionFileSha256', worker.phase_stdout(role))
+            with self.assertRaises(ValueError):
+                worker.phase_stdout('unrecognized')
+        read.assert_not_called()
+
+    def test_missing_or_unreadable_file_prevents_success_handoff(self):
+        for role, error in (('prepare', FileNotFoundError), ('freeze', PermissionError)):
+            with self.subTest(role=role), patch.object(h, 'raw_file', side_effect=error), self.assertRaises(error):
+                worker.phase_stdout(role)
+
+    def test_handoff_call_is_after_source_recheck_and_phase_receipt_save(self):
+        tree = ast.parse(Path(worker.__file__).read_text())
+        main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'main')
+        source_after = next(node.lineno for node in main.body if isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Constant) and node.value.value == 'source_after')
+        save_phase = next(node.lineno for node in main.body if isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute)
+            and node.value.func.attr == 'save' and ast.unparse(node.value.args[0]).startswith("output /"))
+        handoff = next(node.lineno for node in ast.walk(main) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name) and node.func.id == 'phase_stdout')
+        self.assertLess(source_after, save_phase)
+        self.assertLess(save_phase, handoff)
+        self.assertEqual(main.body[-1].lineno, handoff)
 
 
 if __name__ == '__main__':

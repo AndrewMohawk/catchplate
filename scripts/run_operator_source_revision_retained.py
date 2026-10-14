@@ -29,6 +29,10 @@ MAX_FILE_BYTES = 64 * 1024**2
 INPUT_KEYS = {"schema", "candidateCommit", "sourceFilesSha256", "sourceJoinSha256", "capturePins",
     "normalReceiptSha256", "normalSelectionSha256", "normalBinarySha256", "workerSha256", "helpersSha256"}
 INPUT_SCHEMA = "serverware.sourceRevisionRetainedInputs/v1"
+PROMOTION_ROOT_FILES = ("source-proof.json", "prepared.json", "auxiliary-preserved.json")
+PROMOTION_OUT_FILES = ("plan.json", "apply.json", "migrated-database.json", "migrated-database-bytes.json",
+    "freeze.json", "expected-contract.json", "serverware.sqlite3.baseline.json", "baseline-contract.json",
+    "recovered-files.json", "phase-prepare.json", "phase-recover.json", "phase-plan.json", "phase-apply.json", "phase-freeze.json")
 cfg = {}
 pinned = h.pinned
 selected_role = "unselected"
@@ -251,6 +255,20 @@ def final_result(inputs_sha, proof):
     h.save("/job/result.json", result, 1000)
 
 
+def phase_stdout(role):
+    """Hash-only handoff from each existing UID; never broaden private mounts."""
+    h.need(role in ROLES)
+    value = {"schema": "serverware.sourceRevisionRetainedPhase/v1", "ok": True, "role": role,
+        "liveAccess": False, "hostCleanupVerification": "required"}
+    if role == "prepare":
+        value["promotionFileSha256"] = {"copy/" + name: h.sha(h.raw_file(Path("/job") / name))
+            for name in PROMOTION_ROOT_FILES}
+    elif role == "freeze":
+        value["promotionFileSha256"] = {"copy/out/" + name: h.sha(h.raw_file(Path("/out") / name))
+            for name in PROMOTION_OUT_FILES}
+    return value
+
+
 def main():
     global cfg, SOURCE_ROOT, PROOFS, selected_role, stage
     h.need(len(sys.argv) == 3 and sys.argv[1] in ROLES)
@@ -306,8 +324,7 @@ def main():
     h.save(output / ("phase-" + role + ".json"), {"schema": "serverware.sourceRevisionRetainedPhase/v1",
         "ok": True, "role": role, "inputsSha256": inputs_sha, "workerSha256": cfg["workerSha256"],
         "sourceProof": proof, "liveAccess": False, "hostCleanupVerification": "required"}, 10001 if role == "prepare" else None)
-    print(json.dumps({"schema": "serverware.sourceRevisionRetainedPhase/v1", "ok": True, "role": role,
-        "liveAccess": False, "hostCleanupVerification": "required"}, sort_keys=True))
+    print(json.dumps(phase_stdout(role), sort_keys=True))
 
 
 if __name__ == "__main__":

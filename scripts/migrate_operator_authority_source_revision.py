@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fixed ordinary SQLite source-349 to source-350 transition on a stopped copy.
 
-Unavailable until independently derived pins and their exact digest are reviewed.
+Only independently derived pins and their reviewed exact digest are admitted.
 No caller-selected source/revision, live-store derivation, startup repair, native
 or PostgreSQL migration. Populated authority/history is refused unchanged.
 A lost COMMIT acknowledgement or external receipt is unknown: never auto-replay.
@@ -20,7 +20,9 @@ import migrate_operator_authority_contract as shared
 
 ROOT = shared.ROOT
 PIN_FILE = Path(__file__).with_name("operator_authority_source_revision_migration_pins.json")
-PIN_SHA256 = None  # Intentionally unavailable, not an accepted provisional digest.
+# Hosted derivation 38516997815; independently joined to both fixed Git sources.
+# This enables stopped-copy tests, not automatic migration or live promotion.
+PIN_SHA256 = "sha256:72ce5ebdb7f422e881987749310493451f6d19fa397bb39157313bb85b7472e4"
 OLD_COMMIT = "c11e75982ceeec516887c3db65a9d88eabf819a9"
 TARGET_COMMIT = "1052d0e8ae565956ca8d39df0859f2017f8c107b"
 OLD_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.349"

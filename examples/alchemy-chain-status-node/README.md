@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Alchemy chain status with Viem on Node
 
 This example uses **Viem 2.57.6** and **Undici 8.12.1** on **Node 25.5.0**.
@@ -122,9 +124,12 @@ proxy keeps its own strict request, response and audit checks.
 
 ## Verification and CI
 
-The Viem migration changes the SDK and HTTP transport. Its new component suites
-and matching-source SDK-through-proxy acceptance must pass before compatibility
-is claimed. Package versions or successful installation alone are not that proof.
+The Viem migration changes the SDK and HTTP transport. Its component suites
+passed at `692c2923` in [hosted run 38591966831](https://github.com/example/private-deployment):
+12 inert configuration tests and nine SDK/fixture tests, with no failures,
+cancellations or skips and verified cleanup. The preceding failed fixture
+attempt remains recorded. Matching-source SDK-through-proxy acceptance is
+still pending; package installation and component success are not that proof.
 
 Historical acceptance remains preserved: the Alchemy SDK graph at `dcf70631`,
 with normal Rust SHA-256 prefix `0908732386fa`, passed the 12-phase isolated

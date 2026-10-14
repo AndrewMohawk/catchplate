@@ -652,6 +652,10 @@ class RunnerTests(unittest.TestCase):
 
     def test_workflow_partitions_and_signer_job_are_independent(self):
         value = (runner.ROOT / ".github/workflows/ordinary-regression.yml").read_text()
+        events = value.split("\npermissions:\n", 1)[0]
+        self.assertIn("\n  pull_request:\n  push:\n", events)
+        self.assertIn("\n    paths-ignore:\n      - 'docs/**'\n      - 'goal.md'\n      - 'docker/**/README.md'\n  workflow_dispatch:\n", events)
+        self.assertEqual(events.count("paths-ignore:"), 1)
         components, signers = value.split("\n  signers:\n", 1)
         self.assertIn("\n  components:\n", components)
         self.assertIn("fail-fast: false", components)

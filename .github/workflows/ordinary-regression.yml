@@ -4,6 +4,12 @@ on:
   pull_request:
   push:
     branches: [main]
+    # Deployment notes do not change the runtime. Keep PR checks unconditional
+    # so a path-filtered workflow cannot leave required PR checks pending.
+    paths-ignore:
+      - 'docs/**'
+      - 'goal.md'
+      - 'docker/**/README.md'
   workflow_dispatch:
 
 permissions:

@@ -48,6 +48,7 @@ class Suite:
 # Deliberately reviewed, not wildcard discovery. A missing entry is a failure.
 # Several files named *_browser use an inert DOM; none below launches Chromium.
 SUITES = (
+    Suite("backend", "test_authority_api_classification.py", seconds=60),
     Suite("backend", "test_operator_demo_runtime.py"),
     Suite("backend", "test_operator_workspace_api.py"),
     Suite("backend", "test_approval_capabilities_http.py", seconds=120),
@@ -76,6 +77,12 @@ SUITES = (
     Suite("backend", "test_authority_native_jit_review_custody.py", seconds=60),
     Suite("backend", "test_authority_native_jit_review_registration.py", seconds=60),
     Suite("backend", "test_authority_transition_registry.py", seconds=60),
+    # Fixed schema and privilege-source contracts are ordinary regression gates;
+    # these pure controls do not assert PostgreSQL or native-role acceptance.
+    Suite("backend", "test_authority_schema_source.py", seconds=60),
+    Suite("backend", "test_authority_verifier_read_source.py", seconds=60),
+    Suite("backend", "test_authority_table_acl_source.py", seconds=60),
+    Suite("backend", "test_authority_revocation_proof_bundle.py", seconds=60),
     # Protected review components use synthetic authority/launch observations;
     # none establishes native admission, a database commit or private disclosure.
     # Root-owned FD metadata tests have a separate isolated root-only lane.

@@ -137,12 +137,18 @@ class CapabilityRouteTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(b"private-body-canary", result.content)
         self.assertEqual(self.auth_calls, 0)
 
-    async def test_route_has_no_bootstrap_private_reader_or_owner_calls(self):
-        # Keep the observational route honest even if new globals are added.
+    async def test_route_only_observes_opening_availability_without_bootstrap(self):
+        # Permit only the observational owner-availability API, never startup,
+        # private reads, authorization, receipt issuance or authority dispatch.
         calls = {ast.unparse(node.func) for node in ast.walk(ROUTE) if isinstance(node, ast.Call)}
         self.assertEqual(calls, {"app.get", "Depends", "request.scope.get", "request.headers.get",
-            "HTTPException", "identity.has_any_role", "JSONResponse"})
-        self.assertFalse(any(isinstance(node, (ast.Import, ast.ImportFrom, ast.Await)) for node in ast.walk(ROUTE)))
+            "HTTPException", "identity.has_any_role", "native_review.available", "JSONResponse"})
+        imports = [node for node in ast.walk(ROUTE) if isinstance(node, ast.ImportFrom)]
+        self.assertEqual(len(imports), 1)
+        self.assertEqual((imports[0].level, imports[0].module), (0, "serverware"))
+        self.assertEqual([(alias.name, alias.asname) for alias in imports[0].names],
+            [("control_plane_native_jit_review", "native_review")])
+        self.assertFalse(any(isinstance(node, (ast.Import, ast.Await)) for node in ast.walk(ROUTE)))
 
 
 class OrdinaryCapabilityHTTPTests(unittest.TestCase):

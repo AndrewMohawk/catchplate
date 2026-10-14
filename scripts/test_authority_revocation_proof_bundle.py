@@ -737,7 +737,9 @@ class RevocationProofBundleTests(unittest.TestCase):
         extra_sibling = copy.deepcopy(bundle)
         extra_sibling["inputs"]["beforeProofs"][0]["siblings"][0]["unadmitted"] = True
         too_many_reads = copy.deepcopy(bundle)
-        too_many_reads["inputs"]["queryReads"] = [too_many_reads["inputs"]["queryReads"][0]] * 46
+        # The source admits at most 50 read records. Keep this shape control
+        # above that exact ceiling, before any hashing or semantic replay.
+        too_many_reads["inputs"]["queryReads"] = [too_many_reads["inputs"]["queryReads"][0]] * 51
         too_many_addresses = copy.deepcopy(bundle)
         first = too_many_addresses["inputs"]["queryReads"][0]
         first["addresses"] = first["addresses"] * 193

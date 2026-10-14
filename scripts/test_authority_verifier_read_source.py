@@ -28,7 +28,12 @@ EVIDENCE_TABLES = frozenset({
     "webauthn_challenges", "webauthn_credentials",
     "webauthn_trust_publication_high_water", "webauthn_trust_publications",
 })
-TABLES = EVIDENCE_TABLES | frozenset({
+RECOVERY_TABLES = frozenset({
+    "policy_authority_writer_capabilities", "policy_authority_planner_transactions",
+    "policy_authority_execution_envelopes", "policy_authority_writer_receipts",
+    "policy_authority_consumed_envelopes",
+})
+TABLES = EVIDENCE_TABLES | RECOVERY_TABLES | frozenset({
     "policy_authority_authenticated_table_roots", "policy_authority_counted_index_heads",
 })
 CONTRACT = "serverware.policyAuthorityVerifierRead/v2"
@@ -104,8 +109,8 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         self.assertEqual(ast.dump(node), ast.dump(ast.parse(expression, mode="eval").body))
 
     def test_source_contract_is_exact_four_table_frozen_inventory(self):
-        # Preserve the approved historical ID; v2 has two additional root
-        # tables while the actual WebAuthn evidence SQL remains four-table.
+        # Preserve the historical test ID. The verifier has two root tables
+        # and five committed-v9 recovery SELECTs; WebAuthn SQL stays four-table.
         self.assertEqual(authority_contract.VERIFIER_READ_CONTRACT, CONTRACT)
         self.assertIs(type(authority_contract.VERIFIER_READ_TABLES), frozenset)
         self.assertEqual(authority_contract.VERIFIER_READ_TABLES, TABLES)
@@ -296,8 +301,13 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         digest = assignment(contract, "OPERATION_MANIFEST_DIGEST").value
         self.assert_shape(digest.func, "_digest")
         self.assert_shape(digest.args[0], "CONTRACT_SCHEMA")
-        self.assert_shape(dict_value(digest.args[1], "verifierReadContract"), "VERIFIER_READ_CONTRACT")
-        self.assert_shape(dict_value(digest.args[1], "verifierReadTables"), "sorted(VERIFIER_READ_TABLES)")
+        self.assertEqual(len(digest.args), 2)
+        self.assert_shape(digest.args[1], "operation_contract_document()")
+        document = function(contract, "operation_contract_document")
+        returned = [node for node in document.body if isinstance(node, ast.Return)]
+        self.assertEqual(len(returned), 1)
+        self.assert_shape(dict_value(returned[0].value, "verifierReadContract"), "VERIFIER_READ_CONTRACT")
+        self.assert_shape(dict_value(returned[0].value, "verifierReadTables"), "sorted(VERIFIER_READ_TABLES)")
 
     def test_all_four_metadata_sealers_supply_dedicated_role_and_closed_set(self):
         migration_source, migration = read_source("scripts/authority/migrate_v8_to_v9.py")
@@ -371,9 +381,10 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         self.assertLess(retry.lineno, extension[0].lineno)
 
     def test_pre_sql_guard_covers_canonical_and_scratch_scopes_without_runtime_fallback(self):
-        original, guard = self.seal.body[:2]
-        self.assertIsInstance(original, ast.If)
-        self.assertIsInstance(guard, ast.If)
+        original = raising_guard(self.seal, "metadata runtime read-only table closure is not source exact")
+        guard = raising_guard(self.seal, "metadata verifier role/read closure is not source exact")
+        self.assertIn(original, self.seal.body)
+        self.assertIn(guard, self.seal.body)
         self.assert_shape(original.test,
             "schema == _POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME and "
             "(type(runtime_read_only_tables) is not frozenset or "
@@ -391,6 +402,18 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         self.assert_shape(guard.body[0].exc,
             "error_type('metadata verifier role/read closure is not source exact')")
         self.assertEqual(guard.orelse, [])
+        self.assertLess(original.end_lineno, guard.lineno)
+        # Additional purpose-specific role guards are also before SQL; they do
+        # not replace either canonical runtime/verifier closure check.
+        for message in (
+            "metadata planner reader must be a separate fixed role",
+            "policy file materializers require separate fixed roles",
+            "metadata completion reader must be a separate fixed role",
+            "successor custody roles must be separate from all existing authority roles",
+        ):
+            separation = raising_guard(self.seal, message)
+            self.assertIn(separation, self.seal.body)
+            self.assertLess(separation.end_lineno, original.lineno)
         for call in calls(self.seal, "cursor") + calls(self.seal, "execute"):
             self.assertLess(guard.end_lineno, call.lineno)
         self.assertLess(guard.end_lineno, assignment(self.seal, "verifier_role").lineno)
@@ -427,11 +450,28 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         self.assert_shape(holders[0].test, "verifier_role not in {runtime_role, executor_role}")
         blocks = [node for node in self.seal.body if isinstance(node, ast.With)]
         self.assertEqual(len(blocks), 1)
-        self.assertIs(blocks[0].body[-1], holders[0])
+        siblings = blocks[0].body
+        self.assertIn(holders[0], siblings)
         earlier = raising_guard(self.seal, "PostgreSQL object owner or ACL contains unexpected authority")
-        self.assertIs(blocks[0].body[-3], earlier)
-        self.assert_shape(blocks[0].body[-2].test,
+        self.assertIn(earlier, siblings)
+        planner_check = assignment(self.seal, "planner_writer_privilege_violation")
+        planner_holders = [node for node in siblings if isinstance(node, ast.If)
+                           and planner_check in node.body]
+        self.assertEqual(len(planner_holders), 1)
+        self.assert_shape(planner_holders[0].test,
             "planner_writer_role not in {runtime_role, executor_role, verifier_role, capability_issuer_role}")
+        self.assertLess(siblings.index(earlier), siblings.index(planner_holders[0]))
+        self.assertLess(siblings.index(planner_holders[0]), siblings.index(holders[0]))
+        completion = siblings[-1]
+        self.assertIsInstance(completion, ast.If)
+        self.assert_shape(completion.test, "completion_enabled")
+        self.assertLess(siblings.index(holders[0]), siblings.index(completion))
+        for message in (
+            "PostgreSQL policy file materializer privileges are not source exact",
+            "PostgreSQL successor purpose privileges are not source exact",
+            "PostgreSQL completion reader effective privileges are not source exact",
+        ):
+            raising_guard(completion, message)
         self.assertLess(earlier.end_lineno, checked.lineno)
         self.assertLess(checked.lineno, denied.lineno)
 
@@ -451,18 +491,56 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         source_mapping = source_material.func.value.args[0]
         profile = function(self.db, "_policy_authority_owner_verification_profile_digest")
         session = assignment(profile, "verifier_session_contract").value
-        for mapping, table_expression, digest_expression in (
-            (source_mapping, "sorted(authority_contract.VERIFIER_READ_TABLES)", "VERIFIER_READ_PRIVILEGE_SQL_DIGEST"),
-            (session, "sorted(_POLICY_AUTHORITY_VERIFIER_READ_TABLES)",
+        for mapping, role_expression, table_expression, digest_expression in (
+            (source_mapping, "verifier_role", "sorted(authority_contract.VERIFIER_READ_TABLES)", "VERIFIER_READ_PRIVILEGE_SQL_DIGEST"),
+            (session, "_METADATA_STORE_AUTHORITY_VERIFIER_ROLE", "sorted(_POLICY_AUTHORITY_VERIFIER_READ_TABLES)",
              "_authority_verifier_read_sql.VERIFIER_READ_PRIVILEGE_SQL_DIGEST"),
         ):
             for key, expression in (
-                ("verifierReadRole", "_METADATA_STORE_AUTHORITY_VERIFIER_ROLE"),
+                ("verifierReadRole", role_expression),
                 ("verifierReadContract", "authority_contract.VERIFIER_READ_CONTRACT"),
                 ("verifierReadTables", table_expression),
                 ("verifierReadPrivilegeSqlDigest", digest_expression),
             ):
                 self.assert_shape(dict_value(mapping, key), expression)
+        source_roles = [node for node in source_contract.body if isinstance(node, ast.Assign)
+                        and any(isinstance(target, ast.Name) and target.id == "verifier_role"
+                                for target in node.targets)]
+        self.assertEqual(len(source_roles), 1)
+        self.assert_shape(source_roles[0].value, "_METADATA_STORE_AUTHORITY_VERIFIER_ROLE")
+        selected_scope = next(node for node in source_contract.body if isinstance(node, ast.If)
+                              and calls(node, "require"))
+        self.assert_shape(selected_scope.test, "database_configuration is not None")
+        source_admission = assignment(selected_scope, "database_configuration")
+        self.assert_shape(source_admission.value, "require(database_configuration)")
+        selected_role = assignment(selected_scope, "verifier_role")
+        self.assert_shape(selected_role.value, "database_configuration.verifier_pins[0]")
+        self.assertLess(source_admission.lineno, selected_role.lineno)
+        profile_admission = assignment(profile, "database_configuration")
+        self.assert_shape(profile_admission.value, "require(database_configuration)")
+        profile_guard = next(node for node in profile.body if isinstance(node, ast.If)
+                             and profile_admission in node.body)
+        self.assert_shape(profile_guard.test, "database_configuration is not None")
+        selected = assignment(profile, "selected")
+        self.assert_shape(selected.value, "database_configuration")
+        updates = [call for call in calls(profile, "update")
+                   if ast.dump(call.func) == ast.dump(ast.parse(
+                       "verifier_session_contract.update", mode="eval").body)]
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(len(updates[0].args), 1)
+        self.assert_shape(updates[0].args[0], "{"
+            "'attestationReceiptDigest': selected.verifier_attestation_receipt_digest, "
+            "'credentialIssuanceDigest': selected.verifier_credential_issuance_digest, "
+            "'executorRole': selected.executor_pins[0], "
+            "'verifierReadRole': selected.verifier_pins[0], "
+            "'tlsClientDn': selected.verifier_pins[1], "
+            "'tlsClientSerial': selected.verifier_pins[2], "
+            "'tlsIssuerDn': selected.verifier_pins[3]}")
+        selected_guard = next(node for node in profile.body if isinstance(node, ast.If)
+                              and selected in node.body)
+        self.assert_shape(selected_guard.test, "database_configuration is not None")
+        self.assertLess(profile_guard.end_lineno, selected.lineno)
+        self.assertLess(selected.lineno, updates[0].lineno)
         source_returns = [node for node in source_contract.body if isinstance(node, ast.Return)]
         self.assertEqual(len(source_returns), 1)
         self.assert_shape(source_returns[0].value,
@@ -534,7 +612,9 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         # methods have this read closure or that they are now authorized.
         self.assertTrue(EVIDENCE_TABLES.isdisjoint({"policy_authority_authenticated_table_roots",
                                                   "policy_authority_counted_index_heads"}))
-        self.assertTrue(TABLES.isdisjoint({"policy_authority_writer_capabilities", "credentials",
+        self.assertTrue(EVIDENCE_TABLES.isdisjoint(RECOVERY_TABLES))
+        self.assertEqual(len(TABLES), 11)
+        self.assertTrue(TABLES.isdisjoint({"credentials",
             "policy_authority_authenticated_tree_nodes", "policy_authority_authenticated_leaves",
             "policy_authority_counted_index_nodes", "policy_authority_counted_index_leaves",
             "policy_authority_webauthn_evidence_retained_plans"}))

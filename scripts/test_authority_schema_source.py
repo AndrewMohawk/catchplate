@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract, authority_native_activation_schema
+from serverware import authority_contract, authority_native_activation_schema, authority_native_jit_retention_schema
 from serverware.authority_store import schema as schema_module
 from serverware.authority_store.completed_v9_schema_source import (
     COMPLETED_V9_RECEIPT_TABLE,
@@ -134,7 +134,8 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
     def setUpClass(cls):
         cls.base = metadata_base_schema_source()
         cls.extension = authority_v9_schema_source()
-        cls.initial = cls.base + authority_native_activation_schema.source() + cls.extension
+        cls.initial = (cls.base + authority_native_activation_schema.source()
+                       + authority_native_jit_retention_schema.source() + cls.extension)
         cls.initialization_indexes = metadata_initialization_index_source()
         cls.complete = metadata_schema_source()
 
@@ -305,26 +306,97 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         # admission is supplied by matching these inventories.
         from serverware.authority_store import current_root_execution_sql as effects
 
-        expected = ("oidc.session.activate", "oidc.session.activation-delivery.consume",
+        installed = ("oidc.session.activate", "oidc.session.activation-delivery.consume",
             "webauthn.credential.revoke", "webauthn.registration.evidence.admit",
             "webauthn.registration.finalize", "webauthn.trust.complete",
             "webauthn.trust.installation.admit", "webauthn.trust.stage")
+        declared = ("oidc.session.activate", "oidc.session.activation-delivery.consume",
+            "jit.review-open.receipt.issue", "webauthn.credential.revoke",
+            "webauthn.registration.evidence.admit", "webauthn.registration.finalize",
+            "webauthn.trust.complete", "webauthn.trust.installation.admit", "webauthn.trust.stage")
+        typed = ("jit.assertion.issue", "jit.review-open.authorize", "jit.review-open.receipt.issue",
+            "oidc.session.activate", "oidc.session.activation-delivery.consume",
+            "webauthn.challenge.maintain", "webauthn.credential.revoke",
+            "webauthn.registration.evidence.admit", "webauthn.registration.finalize",
+            "webauthn.trust.complete", "webauthn.trust.installation.admit", "webauthn.trust.stage")
+        dedicated = ("jit.assertion.issue", "webauthn.challenge.maintain", "jit.review-open.authorize")
+        components = {"jit.review-open.authorize", "jit.review-open.receipt.issue"}
         planned = tuple(sorted(operation for operation, spec in authority_contract.OPERATIONS.items()
             if spec["planningMode"] == "typed-successor-planning"))
-        self.assertEqual(planned, expected)
-        self.assertEqual(authority_contract.CURRENT_ROOT_COMMIT_MARKER_CONTRACT["operations"], expected)
+        self.assertEqual(planned, typed)
+        self.assertEqual(authority_contract.CURRENT_ROOT_COMMIT_MARKER_CONTRACT["operations"], declared)
+        self.assertEqual(effects.OPERATIONS, declared)
+        self.assertEqual(effects._DEDICATED_PLANNING_OPERATIONS, dedicated)
+        self.assertTrue(set(declared).isdisjoint(dedicated))
+        self.assertEqual(set(typed), set(declared) | set(dedicated))
+        self.assertEqual(set(typed) - components,
+            set(installed) | {"jit.assertion.issue", "webauthn.challenge.maintain"})
         active = re.sub(r"/\*.*?\*/|--[^\n]*", "", self.complete, flags=re.DOTALL)
         tables = re.findall(r"\bCREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+"
             r"policy_authority_current_root_commit_markers\s*\((.*?)\)\s*;", active, re.DOTALL)
         self.assertEqual(len(tables), 1)
         checks = re.findall(r"\bCHECK\s*\(\s*operation\s+IN\s*\(([^)]*)\)\s*\)", tables[0])
         self.assertEqual(len(checks), 1)
-        self.assertEqual(tuple(re.findall(r"'([^']*)'", checks[0])), expected)
+        self.assertEqual(tuple(re.findall(r"'([^']*)'", checks[0])), installed)
+        # The native receipt's bridge is intentionally unfinished. Do not
+        # pretend its declared marker is installed, widen the existing DDL,
+        # or mistake a read/replay component for a plannable operation.
+        self.assertEqual(set(declared) - set(installed), {"jit.review-open.receipt.issue"})
+        self.assertEqual(set(installed) - set(declared), set())
+        _, registry = read_source("serverware/authority_transition_registry.py")
+        def registry_value(name):
+            matches = [node.value for node in registry.body if isinstance(node, ast.AnnAssign)
+                       and isinstance(node.target, ast.Name) and node.target.id == name]
+            self.assertEqual(len(matches), 1)
+            return matches[0]
+        self.assert_shape(registry_value("COMPONENT_ONLY_SUCCESSOR_OPERATIONS"),
+            "frozenset({'jit.review-open.authorize', 'jit.review-open.receipt.issue'})")
+        self.assert_shape(registry_value("SUCCESSOR_PLANNABLE_OPERATIONS"),
+            "frozenset(set(SUCCESSOR_PROGRAMS) - COMPONENT_ONLY_SUCCESSOR_OPERATIONS)")
+        self.assert_shape(registry_value("LEGACY_PLANNABLE_OPERATIONS"),
+            "frozenset(set(KERNELS) | set(WEBAUTHN_CHALLENGE_OPERATIONS))")
+        self.assert_shape(registry_value("PLANNABLE_OPERATIONS"),
+            "LEGACY_PLANNABLE_OPERATIONS | SUCCESSOR_PLANNABLE_OPERATIONS")
+        closure = function(registry, "_registry_closure_errors")
+        blocked = [node for node in ast.walk(closure) if isinstance(node, ast.Tuple)
+                   and len(node.elts) == 2 and isinstance(node.elts[0], ast.Constant)
+                   and node.elts[0].value == "component-only operations are plannable"]
+        self.assertEqual(len(blocked), 1)
+        self.assert_shape(blocked[0].elts[1], "COMPONENT_ONLY_SUCCESSOR_OPERATIONS & PLANNABLE_OPERATIONS")
+        self.assert_shape(assignment(registry, "_CLOSURE_ERRORS").value, "_registry_closure_errors()")
+        closure_guards = [node for node in registry.body if isinstance(node, ast.If)
+                          and isinstance(node.test, ast.Name) and node.test.id == "_CLOSURE_ERRORS"]
+        self.assertEqual(len(closure_guards), 1)
+        self.assertEqual(len(closure_guards[0].body), 1)
+        self.assertIsInstance(closure_guards[0].body[0], ast.Raise)
+        select = function(registry, "successor_program")
+        selection_guards = [node for node in select.body if isinstance(node, ast.If)]
+        self.assertEqual(len(selection_guards), 1)
+        self.assert_shape(selection_guards[0].test,
+            "type(operation) is not str or operation not in SUCCESSOR_PLANNABLE_OPERATIONS")
+        self.assertIsInstance(selection_guards[0].body[0], ast.Raise)
+        _, programs = read_source("serverware/authority_successor_programs.py")
+        program = function(programs, "_program")
+        self.assertEqual(program.args.args[-1].arg, "plan_factory")
+        self.assert_shape(program.args.defaults[-1], "None")
+        returned = [node for node in program.body if isinstance(node, ast.Return)]
+        self.assertEqual(len(returned), 1)
+        self.assert_shape(keyword(returned[0].value, "plan_factory"), "plan_factory")
+        for operation, reader, kernel in (
+            ("jit.review-open.authorize", "_native_review_authorize", "_native_review_authorize_kernel"),
+            ("jit.review-open.receipt.issue", "_native_review_receipt", "_native_review_receipt_kernel"),
+        ):
+            sites = [call for call in calls(programs, "_program")
+                     if call.args and isinstance(call.args[0], ast.Constant)
+                     and call.args[0].value == operation]
+            self.assertEqual(len(sites), 1)
+            self.assert_shape(sites[0], "_program(" + repr(operation) + ", " + reader
+                + ", 'read-replay-components', kernel_factory=" + kernel + ")")
         rendered = effects.current_root_execution_apply_body_sql('"serverware_metadata"')
         sources = re.findall(r"crx_source\s*:=\s*'((?:[^']|'')*)'::jsonb->crx_operation;", rendered)
         self.assertEqual(len(sources), 1)
         operations = json.loads(sources[0].replace("''", "'"))
-        self.assertEqual(tuple(sorted(operations)), expected)
+        self.assertEqual(tuple(sorted(operations)), tuple(sorted(declared)))
         for operation, writes in (
             ("oidc.session.activate", {"oidc_browser_sessions", "oidc_session_activation_deliveries",
                 "webauthn_credentials", "webauthn_challenges", "metadata_audit_outbox",
@@ -534,6 +606,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
                 ("__future__", "annotations", None),
                 ("serverware.authority_store.v9_schema_source", "authority_v9_schema_source", None),
                 ("serverware", "authority_native_activation_schema", None),
+                ("serverware", "authority_native_jit_retention_schema", None),
             },
             "v9_schema_source.py": {
                 ("__future__", "annotations", None), ("serverware", "authority_contract", None),
@@ -946,11 +1019,14 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
 
     def test_sqlite_retained_protocol_is_denied_while_v3_identity_stays_immutable(self):
         sql = planner_retention_sqlite_guards_sql()
-        self.assertEqual(sql.count("CREATE TRIGGER IF NOT EXISTS"), 6)
+        self.assertEqual(sql.count("CREATE TRIGGER IF NOT EXISTS"), 9)
         for name in ("serverware_planner_retention_insert_guard", "serverware_planner_retention_guard",
                      "serverware_retained_sqlite_insert_guard", "serverware_writer_request_sqlite_insert_guard",
                      "serverware_writer_ack_sqlite_insert_guard",
-                     "serverware_webauthn_evidence_retained_sqlite_insert_guard"):
+                     "serverware_webauthn_evidence_retained_sqlite_insert_guard",
+                     "serverware_webauthn_transition_retained_sqlite_insert_guard",
+                     "serverware_current_root_marker_sqlite_insert_guard",
+                     "serverware_successor_custody_sqlite_insert_guard"):
             self.assertIn(name, sql)
         self.assertIn("NEW.plan_protocol <> 'v3' OR NEW.retained_record_digest IS NOT NULL", sql)
         self.assertIn("BEFORE INSERT ON policy_authority_revocation_retained_plans", sql)
@@ -960,6 +1036,12 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         self.assertIn("SQLite writer acknowledgment custody is disabled", sql)
         self.assertIn("BEFORE INSERT ON policy_authority_webauthn_evidence_retained_plans", sql)
         self.assertIn("SQLite retained WebAuthn evidence admission is disabled", sql)
+        self.assertIn("BEFORE INSERT ON policy_authority_webauthn_transition_retained_plans", sql)
+        self.assertIn("SQLite retained WebAuthn transition admission is disabled", sql)
+        self.assertIn("BEFORE INSERT ON policy_authority_current_root_commit_markers", sql)
+        self.assertIn("SQLite current-root commit marker admission is disabled", sql)
+        self.assertIn("BEFORE INSERT ON policy_authority_successor_execution_custody", sql)
+        self.assertIn("SQLite successor execution custody admission is disabled", sql)
         for field in (*authority_contract.PLANNER_RESERVATION_IMMUTABLE_COLUMNS,
                       *authority_contract.PLANNER_PAYLOAD_IMMUTABLE_COLUMNS,
                       *authority_contract.PLANNER_TERMINAL_IMMUTABLE_COLUMNS):

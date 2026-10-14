@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused generic-API classification controls; no app startup or authority calls."""
+"""Real app import and generic refusal controls; no lifespan or authority effects."""
 from __future__ import annotations
 
 import ast
@@ -90,9 +90,9 @@ class AuthorityApiClassificationTests(unittest.TestCase):
     def test_actual_registry_has_explicit_disjoint_classifications(self):
         namespace = classifications()
         groups = [set(namespace[name]) for name in CATEGORIES]
-        # Current inventory adds three static rotation and six Setup lifecycle
-        # operations to the original 147 dedicated-workflow classifications.
-        self.assertEqual(len(namespace[CATEGORIES[-1]]), 156)
+        # Current inventory adds three static rotation, six Setup lifecycle and
+        # two native review-opening operations to the original 147 classifications.
+        self.assertEqual(len(namespace[CATEGORIES[-1]]), 158)
         for index, group in enumerate(groups):
             for other in groups[index + 1:]:
                 self.assertFalse(group & other)
@@ -107,6 +107,42 @@ class AuthorityApiClassificationTests(unittest.TestCase):
         for operation in denied:
             with self.subTest(operation=operation):
                 self.assertIsNone(namespace["_authority_operator_roles"](operation))
+
+    def test_native_review_routes_do_not_activate_or_allow_generic_dispatch(self):
+        # Use actual imported handlers, not a substitute owner or route prefix.
+        # Incomplete arguments and role traps must never be reached on refusal.
+        from serverware import app, native_jit_review_open_service
+
+        self.assertIsNone(native_jit_review_open_service.selected())
+        operations = {"jit.review-open.authorize", "jit.review-open.receipt.issue"}
+        namespace = classifications()
+        self.assertTrue(operations <= namespace[CATEGORIES[-1]])
+        for category in CATEGORIES[:-1]:
+            self.assertFalse(operations & set(namespace[category]))
+        routes = {(route.path, method) for route in app._fastapi_app.routes
+                  for method in getattr(route, "methods", ())}
+        self.assertTrue({("/approvals/review/native", "GET"),
+            ("/approvals/review/native", "HEAD"),
+            ("/api/approvals/review/native/authorize", "POST"),
+            ("/api/approvals/review/native/receipt", "POST")} <= routes)
+
+        def roles_must_not_be_consulted(_):
+            raise AssertionError("native opening reached generic role evaluation")
+
+        identity = SimpleNamespace(has_any_role=roles_must_not_be_consulted)
+        for operation in sorted(operations):
+            with self.subTest(operation=operation):
+                self.assertIsNone(app._authority_operator_roles(operation))
+                payload = SimpleNamespace(operation=operation)
+                with self.assertRaises(HTTPException) as denied:
+                    app.execute_control_plane_authority_operation(SimpleNamespace(), payload, identity)
+                self.assertEqual(denied.exception.status_code, 400)
+                self.assertEqual(denied.exception.detail,
+                    "control-plane authority operation is not allowlisted")
+                with self.assertRaises(HTTPException) as denied:
+                    app.authority_webauthn_challenge(payload, identity)
+                expected = 403 if authority_contract.operation_spec(operation)["assertionRequired"] else 400
+                self.assertEqual(denied.exception.status_code, expected)
 
     def test_both_generic_routes_deny_dedicated_operations_before_effects(self):
         namespace = classifications()

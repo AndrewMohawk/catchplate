@@ -1998,6 +1998,8 @@ _DEDICATED_WORKFLOW_AUTHORITY_OPERATIONS = frozenset(
         "credential.currentness.challenge",
         "credential.currentness.quiesce",
         "credential.currentness.register",
+        "jit.review-open.authorize",
+        "jit.review-open.receipt.issue",
         "native-policy-activation.consume",
         "native-policy-activation.decide",
         "native-policy-activation.finalize",

@@ -332,6 +332,69 @@ preservation-aware migration, including unchanged historical native-pair rows.
 Do not rebuild current-only constraints around old rows or rewrite signed
 historical identities. The running instance is unchanged by this source batch.
 
+### Opening component checkpoint and startup repair
+
+The source batch was committed and pushed as `950701ae`. Separately frozen
+local batches passed 44 registry/broker/codec tests, 70 reader/kernel/launcher/
+private-request tests, 31 portal/runner Python tests, 15 inert JavaScript groups
+and 22 purpose-signer tests. The signer lane used actual file-descriptor and
+cryptographic controls with synthetic admission observations, not native
+admission. These are results across multiple snapshots, not one complete run
+of the final checkout. The original import, codec-fixture, reader-fixture and
+portal-completion failures remain preserved.
+
+Hosted [run 38510282856](https://github.com/example/private-deployment)
+at that exact commit completed in 739.026 seconds: **84/96 suites passed and
+12 failed**, with no budget non-runs or observed skips. Its 81 Python suites
+reported 1,023 executions including failures; all 15 Node suites passed 265
+groups. The separate signer step was skipped after the ordinary step failed.
+Eight failing suites show the actual app import error at the closed API
+classification guard. Four expose only parent assertions, so the same cause
+is not established for those four. The capability suite also has a stale
+source assertion that excludes the new observational availability call.
+
+The repair adds exactly the two review purposes to the dedicated-workflow
+classification. The generic handlers still reject them, the completeness
+guard remains strict and the opening selector still returns `None`. Seven
+classification controls, including actual app import and actual handler
+refusals, are now registered alongside the existing two ordinary HTTP startup
+checks. The capability source check permits only the exact availability
+observer, not startup, private reads or authority dispatch.
+
+The focused continuation also exposed older verifier, ACL, schema and
+revocation-fixture drift outside ordinary CI. Their fixed inventories and
+guards have been updated against unchanged production counterparts, retaining
+all 116 test IDs. The schema test explicitly distinguishes the installed
+eight-operation marker roster from the declared native receipt and requires
+the unfinished review components to remain non-plannable. This does not install
+the missing receipt bridge. Those four suites are now CI gates. Follow-up
+classification, fixture and runner changes have source review but not yet a
+successful execution result.
+
+The final local 171-test attempt never started: Docker creation exceeded its
+270-second setup ceiling, and only its owned CLI was terminated. Exact-name
+and label checks found no container; late daemon completion remains uncertain.
+The pending Rust verification likewise has not compiled or executed anything.
+Its existing 846-file, 26,564,282-byte source export passed exact Git/blob and
+frozen-metadata readback after a filesystem-wide flush timed out. No second
+source copy or dependency installation was needed. Source receipt SHA-256:
+`32022082aba8c2be12dd83803881f5fe1f35a9d6849deb93b2ffab7e043bd369`.
+The old flush child was still waiting for writeback at the last observation;
+its cleanup and source durability are not established. Keep these test-only
+host failures separate from the unchanged application deployment.
+
+The hosted artifact digest, all 96 script hashes, both dependency locks and
+individual receipts were verified against the immutable Git commit. The first
+local extraction timed out during per-file writeback; its partial evidence is
+preserved. The bounded continuation used NVMe without a durability claim:
+`/srv/catchplate-fast/tmp/serverware-hosted-ci-38510282856-cont.0JpZb3eH`.
+Its aggregate result SHA-256 is
+`6162273f9a3a66eb9bcfe499ce77254afe055a866c8ec144351ebb857b6f7b2d`.
+The local batches remain under `serverware-native-review-*` and
+`serverware-review-signers-direct.00dvooTf` in the operator evidence root;
+the signer result SHA-256 is
+`efa73e7807cba73ab7661e7487fc30c4b9490dde2421deccf9184c602ce59397`.
+
 The following older checkpoints retain their original source and evidence scope.
 
 Hosted [CI 38465762551](https://github.com/example/private-deployment)

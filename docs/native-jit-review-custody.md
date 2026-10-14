@@ -192,6 +192,10 @@ must keep `can_decide` false; hiding its controls alone is insufficient.
   and [native signing/quote join](../data-plane/decision-gate-rs/src/native_jit_review_custody.rs).
 - [Python assignment verification](../serverware/authority_native_jit_review_assignment.py)
   and [custody verification](../serverware/authority_native_jit_review_custody.py).
+- [Fixed historical storage validator](../serverware/authority_native_jit_retained_history.py)
+  preserves v349 originals and expiry; it grants no opening authority.
+- [Private native browser transport](../data-plane/decision-gate-rs/src/native_browser_transport_v1.rs)
+  owns the actual TLS/VSOCK connection without adding review or decision authority.
 - [HTTP submission](../serverware/native_release_jit_submission.py),
   [independent admission channel](../serverware/authority_native_jit_submission.py),
   [pending kernel](../serverware/authority_transition_native_jit_pending.py) and
@@ -207,6 +211,41 @@ retention, private review opening, provider behavior or a live deployment. This 
 turn v26 into a combined all-purpose operator workspace.
 
 ### Current component verification
+
+At exact `0eba227d`, the fixed historical validator, explicit HTTP/kernel native
+decision refusals and private TLS transport extraction are implemented without
+enabling opening or decisions. Genuine pending rows use a SHA URL; decision-only
+SQL derives a refusal bit from the stored references without returning those
+private values. Ordinary metadata reads remain unchanged.
+
+The isolated Python batch passed **12 suites / 189 tests / zero skips** in
+80.843 seconds. It covers historical originals, fresh SQLite metadata and the
+four ASGI decision routes, legacy approval/denial, receipts, pending retention,
+submission, custody and regression-runner controls. All 5,537 frozen source files
+and 1,962 dependency files were unchanged; the owned container exited zero and
+was removed. No dependency installation, real provider, PostgreSQL, native
+hardware or live deployment was involved. Evidence is private under
+`/srv/catchplate-archive/homelab_data/serverware-native-jit-python.aO1M816l`;
+`results/result.json` SHA-256 is
+`0a9c32ae6258c7aa91fae0aec54a4fedd161c26f01463ee0222276dca3c4324c`.
+
+The same frozen commit passed fresh Rust normal-library and test-library
+compilation in 611.536 seconds, then **seven tests and two external API compile
+checks**, with zero skips. The private transport import failed with the required
+`E0603`; the public creation/rotation API compiled. The emitted library and test
+dep-info joined 213 and 222 own-crate inputs to the frozen source. Both containers
+were removed, and the retained build cache was unchanged. This was not a proxy
+binary build or an actual native TLS connection test. Evidence is private under
+`/srv/catchplate-archive/homelab_data/serverware-native-tls-tests.ohSn7EDJ`;
+`result.json` SHA-256 is
+`a469394fc51cede993cff0f895428b5966cefd4db86699981bec9c199d42e4d0`.
+
+The opening integration contract above remains an implementation target. These
+prerequisites do not provide a current reviewer authorization, broker opening,
+committed disclosure acknowledgment or exact approved-request continuation.
+The running instance is unchanged by this source batch.
+
+The following older checkpoints retain their original source and evidence scope.
 
 Hosted [CI 38465762551](https://github.com/example/private-deployment)
 passed at exact `aca8e74e`: **74 suites, 737 Python tests, 210 Node groups,

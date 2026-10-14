@@ -237,6 +237,7 @@ class NormalArtifactParsers(unittest.TestCase):
         self.assertIn('default: engineering', workflow)
         self.assertIn('timeout-minutes: 65', workflow)
         normal = workflow.split('  normal-proxy:\n', 1)[1]
+        self.assertIn('timeout-minutes: 50', normal)
         self.assertIn('--mode normal', normal)
         self.assertNotIn('if: always()', normal)
         upload = normal.split('name: Upload only the normal executable and public provenance', 1)[1]
@@ -244,6 +245,10 @@ class NormalArtifactParsers(unittest.TestCase):
         self.assertEqual(paths, ['${{ runner.temp }}/normal-proxy-rust/artifact/serverware-decision-gate',
                                  '${{ runner.temp }}/normal-proxy-rust/artifact/normal.json'])
         self.assertNotIn('/results/', upload)
+        failure = normal.split('name: Retain only closed normal failure metadata', 1)[1]
+        self.assertIn('if: failure()', failure)
+        self.assertEqual([line.strip() for line in failure.splitlines() if line.strip().startswith('path:')],
+                         ['path: ${{ runner.temp }}/normal-proxy-rust/normal-failure.json'])
 
     def orchestrate(self, *, terminal=True, library_root=False):
         # This tests the real producer wiring, not a genuine compilation. Only
@@ -268,7 +273,7 @@ class NormalArtifactParsers(unittest.TestCase):
                 'cleanupUncertain': not terminal, 'exitCode': 0, 'oomKilled': False,
                 'runningBeforeCleanup': False, 'token': phase})
             if phase == 'provision': return
-            self.assertEqual(seconds, 900)
+            self.assertEqual(seconds, 1800)
             self.assertTrue(argv[-1].endswith('exec ' + runner.shlex.join(runner.NORMAL_COMMAND)))
             deps = output / 'target/release/deps'; deps.mkdir(parents=True)
             executable = output / 'target/release/serverware-decision-gate'
@@ -316,11 +321,85 @@ class NormalArtifactParsers(unittest.TestCase):
                 self.assertEqual(receipt['sourceRevision'], 'a' * 40)
                 self.assertFalse(receipt['tested'])
                 self.assertTrue(run.receipt['normalProxyBinaryBuilt'])
+                runner.save_normal_failure(run)
+                self.assertFalse((run.root / 'normal-failure.json').exists())
 
     def test_actual_producer_wiring_refuses_export_on_uncertain_cleanup(self):
         run, _ = self.orchestrate(terminal=False)
         self.assertFalse((run.root / 'artifact').exists())
         self.assertFalse(run.receipt['normalProxyBinaryBuilt'])
+
+    def test_failure_receipt_retains_observed_worker_state_and_no_private_metadata(self):
+        for index, (code, oom, cleanup) in enumerate(((101, False, 'removed'), (137, True, 'removed'),
+                (124, False, 'removed'), (101, False, 'remove-failed'), (101, False, 'inspect-failed'))):
+            with self.subTest(code=code, oom=oom, cleanup=cleanup):
+                output = self.repo / ('failure-' + str(index)); output.mkdir()
+                run = runner.HostedRun(self.repo, output, 'a' * 40); run.normal_phase = 'normal'
+                def command(label, argv, seconds, **kwargs):
+                    exit_code = code if label == 'normal' else 1 if label == 'normal-' + cleanup.split('-')[0] and cleanup != 'removed' else 0
+                    run.command_results.append({'command': label, 'exitCode': exit_code, 'reason': 'completed'})
+                    if label == 'normal-create': return 0, b'c' * 64
+                    if label == 'normal': return code, b'private compile output'
+                    if label == 'normal-inspect':
+                        if cleanup == 'inspect-failed': return 1, b''
+                        return 0, json.dumps({'Id': 'c' * 64, 'Image': runner.IMAGE_ID,
+                            'Labels': {runner.LABEL: 'private-token'},
+                            'State': {'ExitCode': code, 'OOMKilled': oom, 'Running': False}}).encode()
+                    self.assertEqual(label, 'normal-remove')
+                    if cleanup == 'remove-failed': raise ValueError('private removal diagnostic')
+                    return 0, b'c' * 64
+                run.command = command
+                with patch.object(runner.secrets, 'token_hex', return_value='private-token'), self.assertRaises(ValueError):
+                    run.container('normal', ['private argv'], 1800)
+                run.receipt.update(ok=False, error='private exception', pendingChildren=[{'pid': 999, 'command': 'private'}])
+                runner.save_normal_failure(run)
+                value = json.loads((output / 'normal-failure.json').read_bytes())
+                self.assertEqual(set(value), {'schema', 'ok', 'sourceRevision', 'phase', 'normalBuildLimitSeconds',
+                    'failedCommands', 'workers', 'pendingChildren', 'normalBinaryPublished', 'automaticRetry', 'cacheRestored'})
+                self.assertEqual(value['phase'], 'normal'); self.assertEqual(value['pendingChildren'], 1)
+                self.assertEqual(value['failedCommands'][0], {'command': 'normal', 'exitCode': code, 'reason': 'completed'})
+                self.assertEqual(value['workers'], [{'phase': 'normal', 'limitSeconds': 1800,
+                    'exitCode': None if cleanup == 'inspect-failed' else code,
+                    'oomKilled': None if cleanup == 'inspect-failed' else oom,
+                    'runningBeforeCleanup': None if cleanup == 'inspect-failed' else False,
+                    'removed': cleanup == 'removed', 'cleanupUncertain': cleanup != 'removed'}])
+                self.assertNotIn('private', json.dumps(value)); self.assertNotIn('c' * 64, json.dumps(value))
+                self.assertFalse(value['normalBinaryPublished']); self.assertFalse((output / 'artifact').exists())
+
+    def test_failure_command_timeout_disk_floor_and_pending_are_direct_observations(self):
+        for reason in ('timeout', 'disk_floor', 'pending_child'):
+            with self.subTest(reason=reason):
+                output = self.repo / reason; output.mkdir()
+                run = runner.HostedRun(self.repo, output, 'a' * 40); run.normal_phase = 'normal'
+                class Child:
+                    pid = 999999999
+                    code = None
+                    def poll(self): return self.code
+                    def kill(self): self.code = -9
+                    def wait(self, timeout):
+                        if reason == 'pending_child': raise runner.subprocess.TimeoutExpired('private argv', timeout)
+                        return self.code
+                with patch.object(runner.subprocess, 'Popen', return_value=Child()), \
+                        patch.object(runner.time, 'monotonic', side_effect=[0, 0 if reason == 'disk_floor' else 2, 2]), \
+                        patch.object(runner.os, 'statvfs', return_value=SimpleNamespace(
+                            f_bavail=0 if reason == 'disk_floor' else 10 * 1024**3, f_frsize=1)), self.assertRaises(ValueError):
+                    run.command('normal', ['private argv'], 1)
+                run.receipt['ok'] = False
+                value = runner.normal_failure_receipt(run)
+                self.assertEqual(value['failedCommands'], [{'command': 'normal',
+                    'exitCode': None if reason == 'pending_child' else -9, 'reason': reason}])
+                self.assertEqual(value['pendingChildren'], int(reason == 'pending_child'))
+                self.assertNotIn('private', json.dumps(value)); self.assertNotIn('999999999', json.dumps(value))
+
+    def test_failure_projection_refuses_unknown_public_scope_and_success(self):
+        output = self.repo / 'closed-failure'; output.mkdir()
+        run = runner.HostedRun(self.repo, output, 'a' * 40); run.receipt['ok'] = False
+        run.command_results = [{'command': '/private/path', 'exitCode': 1, 'reason': 'completed'}]
+        with self.assertRaises(ValueError): runner.normal_failure_receipt(run)
+        run.command_results = []; run.normal_phase = 'private diagnostic'
+        with self.assertRaises(ValueError): runner.normal_failure_receipt(run)
+        run.normal_phase = 'prepare'; run.receipt['ok'] = True
+        with self.assertRaises(ValueError): runner.normal_failure_receipt(run)
 
 
 if __name__ == '__main__':

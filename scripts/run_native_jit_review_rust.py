@@ -38,6 +38,12 @@ NORMAL_FILES = ('scripts/discard_headers_parity.v1.json', 'policies/credential-l
 NORMAL_SCHEMA = 'serverware.hostedNormalRust/v1'
 NORMAL_WORKFLOW = '.github/workflows/native-review-rust.yml'
 NORMAL_RUNNER = 'scripts/run_native_jit_review_rust.py'
+NORMAL_BUILD_SECONDS = 1800
+NORMAL_PHASES = ('prepare', 'source', 'provision', 'normal', 'artifact-validation', 'cleanup', 'source-check', 'export', 'complete')
+NORMAL_COMMAND_LABELS = ('revision', 'source-before', 'git-inputs', 'pull', 'image',
+    'provision-create', 'provision', 'provision-inspect', 'provision-remove',
+    'normal-create', 'normal', 'normal-inspect', 'normal-remove',
+    'provision-remaining', 'normal-remaining', 'source-after')
 APIS = (
     ('old-pass', 'native_browser_transport_api_tests/pass.rs', None, None),
     ('old-private', 'native_browser_transport_api_tests/private_transport.rs', 'E0603', 1),
@@ -76,6 +82,45 @@ def save(path, document):
     with path.open('x', encoding='utf-8') as stream:
         json.dump(document, stream, sort_keys=True, separators=(',', ':'))
         stream.write('\n')
+
+
+def normal_failure_receipt(run):
+    """Fresh public projection only; CLI outcomes are not worker exit/OOM state."""
+    require(run.receipt.get('ok') is False and run.normal_phase in NORMAL_PHASES
+            and re.fullmatch('[0-9a-f]{40}', run.revision), 'not a normal failure')
+    commands = []
+    require(len(run.command_results) <= len(NORMAL_COMMAND_LABELS), 'failure command bound')
+    for row in run.command_results:
+        require(row['command'] in NORMAL_COMMAND_LABELS and row['reason'] in
+                ('unavailable', 'completed', 'timeout', 'disk_floor', 'pending_child'), 'failure command scope')
+        require(row['exitCode'] is None or type(row['exitCode']) is int, 'failure command exit type')
+        if row['reason'] != 'completed' or row['exitCode'] != 0:
+            commands.append({'command': row['command'], 'exitCode': row['exitCode'], 'reason': row['reason']})
+    workers = []
+    require(len(run.receipt['containers']) <= 2, 'failure worker bound')
+    for row in run.receipt['containers']:
+        require(row['phase'] in ('provision', 'normal'), 'failure worker scope')
+        require(row.get('exitCode') is None or type(row['exitCode']) is int, 'failure worker exit type')
+        require(all(row.get(key) is None or type(row[key]) is bool
+                    for key in ('oomKilled', 'runningBeforeCleanup'))
+                and all(type(row[key]) is bool for key in ('removed', 'cleanupUncertain')), 'failure worker state type')
+        workers.append({'phase': row['phase'], 'limitSeconds': 300 if row['phase'] == 'provision' else NORMAL_BUILD_SECONDS,
+            'exitCode': row.get('exitCode'), 'oomKilled': row.get('oomKilled'),
+            'runningBeforeCleanup': row.get('runningBeforeCleanup'),
+            'removed': row['removed'], 'cleanupUncertain': row['cleanupUncertain']})
+    # An inner timeout's 124 is retained as an exit code, not inferred as proof
+    # of timeout. Only the outer supervisor directly observes reason=timeout.
+    pending = len(run.receipt.get('pendingChildren', []))
+    require(pending <= len(NORMAL_COMMAND_LABELS), 'failure pending bound')
+    return {'schema': 'serverware.hostedNormalRustFailure/v1', 'ok': False,
+        'sourceRevision': run.revision, 'phase': run.normal_phase, 'normalBuildLimitSeconds': NORMAL_BUILD_SECONDS,
+        'failedCommands': commands, 'workers': workers, 'pendingChildren': pending,
+        'normalBinaryPublished': False, 'automaticRetry': False, 'cacheRestored': False}
+
+
+def save_normal_failure(run):
+    if run.receipt.get('ok') is False:
+        save(run.root / 'normal-failure.json', normal_failure_receipt(run))
 
 
 def check_tests(listed, output, expected):
@@ -301,6 +346,7 @@ def verify_normal_receipt(receipt, binary_bytes, current_identity):
 class HostedRun:
     def __init__(self, repository, output, revision):
         self.repo, self.root, self.revision = repository, output, revision
+        self.normal_phase, self.command_results = 'prepare', []
         self.results = output / 'results'
         self.results.mkdir(mode=0o700)
         for name in ('target', 'vendor', 'cargo-home'):
@@ -313,6 +359,8 @@ class HostedRun:
             'limits': {'cpus': 2, 'memoryBytes': 6 * 1024**3, 'swapAdditionalBytes': 0, 'pids': 256, 'cargoJobs': 1}}
 
     def command(self, label, argv, seconds, *, check=True, watch_disk=True):
+        outcome = {'command': label, 'exitCode': None, 'reason': 'unavailable'}
+        self.command_results.append(outcome)
         save(self.results / (label + '.command.json'), {'argv': argv, 'timeoutSeconds': seconds})
         started = time.monotonic(); reason = 'completed'
         def bounds():
@@ -328,8 +376,10 @@ class HostedRun:
                     identity['identityUnavailable'] = True
                 while child.poll() is None:
                     available = os.statvfs(self.root)
-                    if time.monotonic() - started >= seconds or (watch_disk and available.f_bavail * available.f_frsize < RESERVE):
-                        reason = 'timeout_or_disk_floor'; child.kill(); break
+                    if time.monotonic() - started >= seconds:
+                        reason = 'timeout'; child.kill(); break
+                    if watch_disk and available.f_bavail * available.f_frsize < RESERVE:
+                        reason = 'disk_floor'; child.kill(); break
                     time.sleep(0.2)
             finally:
                 if child.poll() is None: child.kill()
@@ -340,6 +390,7 @@ class HostedRun:
                     pending = {'command': label, **identity, 'reapTimeoutSeconds': 10, 'automaticRetry': False}
                     self.receipt.setdefault('pendingChildren', []).append(pending)
                     save(self.results / (label + '.pending-child.json'), pending)
+        outcome.update({'exitCode': code, 'reason': reason})
         save(self.results / (label + '.exit.json'), {'exitCode': code, 'reason': reason, 'seconds': round(time.monotonic() - started, 3)})
         require(code is not None, 'child remains pending after bounded reap: ' + label)
         require(not check or (code == 0 and reason == 'completed'), 'command failed: ' + label)
@@ -383,10 +434,11 @@ class HostedRun:
             if raw.strip():
                 row = json.loads(raw); require(row['Labels'].get(LABEL) == token and row['Image'] == IMAGE_ID, 'cleanup ownership mismatch')
                 attempt['id'] = row['Id']
+                state = row['State']; attempt.update({'exitCode': state['ExitCode'], 'oomKilled': state['OOMKilled'],
+                    'runningBeforeCleanup': state['Running']})
                 _, removed = self.command(phase + '-remove', ['docker', 'rm', '--force', row['Id']], 20, watch_disk=False)
                 require(removed.decode().strip() == row['Id'], 'container removal mismatch')
-                state = row['State']; attempt.update({'exitCode': state['ExitCode'], 'oomKilled': state['OOMKilled'],
-                    'runningBeforeCleanup': state['Running'], 'removed': True, 'cleanupUncertain': False})
+                attempt.update({'removed': True, 'cleanupUncertain': False})
                 require(not state['Running'] and state['ExitCode'] == 0 and not state['OOMKilled'], 'worker failed: ' + phase)
 
     def artifact(self, phase, git_files):
@@ -481,6 +533,7 @@ class HostedRun:
 
     def run_normal(self):
         """One normal build, never an alias for a test artifact or cached target."""
+        self.normal_phase = 'source'
         self.receipt['scope'] = 'normal release ELF build; no runtime acceptance'
         _, head = self.command('revision', ['git', '-C', str(self.repo), 'rev-parse', 'HEAD'], 15)
         require(head.decode().strip() == self.revision, 'checkout revision differs')
@@ -504,12 +557,15 @@ class HostedRun:
         self.command('pull', ['docker', 'pull', '--platform', 'linux/amd64', IMAGE], 180)
         _, image = self.command('image', ['docker', 'image', 'inspect', '--format', '{{.Id}}', IMAGE], 15)
         require(image.decode().strip() == IMAGE_ID, 'Rust image identity differs')
+        self.normal_phase = 'provision'
         self.container('provision', ['cargo', 'vendor', '--locked', '--versioned-dirs', '/vendor'], 300, offline=False)
         space = os.statvfs(self.root)
         require(space.f_bavail * space.f_frsize >= 8 * 1024**3, 'need 8 GiB free after provisioning')
+        self.normal_phase = 'normal'
         self.container('normal', ['/bin/sh', '-c', 'set -eu\n'
             'rustc --version --verbose > /results/normal-rustc.txt\n'
-            'cargo --version > /results/normal-cargo.txt\nexec ' + shlex.join(NORMAL_COMMAND)], 900)
+            'cargo --version > /results/normal-cargo.txt\nexec ' + shlex.join(NORMAL_COMMAND)], NORMAL_BUILD_SECONDS)
+        self.normal_phase = 'artifact-validation'
         rows = normal_cargo_rows(read(self.results / 'normal.stdout.log'))
         binary_path = self.root / 'target/release/serverware-decision-gate'
         binary_bytes = read(binary_path, 512 * 1024**2)
@@ -551,6 +607,7 @@ class HostedRun:
                 'artifactSha256': hashlib.sha256(artifact_bytes).hexdigest(),
                 'depInfoPath': dep_path, 'depInfoSha256': hashlib.sha256(raw).hexdigest(),
                 'files': {name: identity['files'][name] for name in sorted(names)}, 'environment': environment}
+        self.normal_phase = 'cleanup'
         require(not self.receipt.get('pendingChildren') and len(self.receipt['containers']) == 2
                 and [row['phase'] for row in self.receipt['containers']] == ['provision', 'normal']
                 and all(row['removed'] is True and row['cleanupUncertain'] is False and row['exitCode'] == 0
@@ -560,6 +617,7 @@ class HostedRun:
             _, remaining = self.command(row['phase'] + '-remaining', ['docker', 'ps', '-aq', '--no-trunc', '--filter',
                 'label=' + LABEL + '=' + row['token']], 15, watch_disk=False)
             require(not remaining.strip(), 'normal owned container remains')
+        self.normal_phase = 'source-check'
         _, dirty = self.command('source-after', ['git', '-C', str(self.repo), 'status', '--porcelain=v1', '--untracked-files=all'], 30)
         require(not dirty and normal_input_identity(self.repo, git_files) == identity
                 and read(self.root / 'cargo-config.toml') == CONFIG.encode(), 'normal source/config changed')
@@ -577,12 +635,14 @@ class HostedRun:
             'normalBinary': True, 'tested': False, 'deployed': False, 'nativeAdmission': False,
             'cacheRestored': False, 'automaticRetry': False}
         verify_normal_receipt(receipt, binary_bytes, identity)
+        self.normal_phase = 'export'
         export = self.root / 'artifact'; export.mkdir(mode=0o700)
         with (export / 'serverware-decision-gate').open('xb') as stream:
             stream.write(binary_bytes); stream.flush(); os.fsync(stream.fileno()); os.fchmod(stream.fileno(), 0o555)
         save(export / 'normal.json', receipt)
         self.receipt.update({'ok': True, 'normalProxyBinaryBuilt': True,
                              'buildInputIdentity': receipt['buildInputIdentity'], 'publicArtifact': 'artifact'})
+        self.normal_phase = 'complete'
 
 
 def main():
@@ -606,6 +666,8 @@ def main():
         run.receipt.update({'ok': False, 'errorType': type(error).__name__, 'error': str(error)[:512]})
         raise
     finally:
+        if args.mode == 'normal':
+            save_normal_failure(run)
         save(run.results / 'result.json', run.receipt)
 
 

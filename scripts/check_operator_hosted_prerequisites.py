@@ -112,6 +112,30 @@ def stream_limit():
     resource.setrlimit(resource.RLIMIT_FSIZE, (65536, 65536))
 
 
+def command_operation(args):
+    prefixes = {
+        ("/usr/bin/docker","image","inspect"):"docker_image_inspect",
+        **{("/usr/bin/docker",name):"docker_"+name for name in ("ps","create","inspect","start","logs","wait","rm")},
+        **{("/usr/bin/systemctl","--user",name):"systemctl_"+name.replace("-","_")
+            for name in ("list-units","list-unit-files","show","stop")},
+    }
+    for prefix, operation in prefixes.items():
+        if tuple(args[:len(prefix)]) == prefix:
+            return operation
+    raise ValueError("hosted command operation refused")
+
+
+class NonzeroCommand(ValueError):
+    def __init__(self, operation, exit_code, stderr):
+        require(type(exit_code) is int and -64 <= exit_code <= 255
+            and type(stderr) is bytes and len(stderr) <= 65536)
+        self.diagnostic = {"operation":operation,"exitCode":exit_code,"stderrLength":len(stderr),
+            "stderrSha256":hashlib.sha256(stderr).hexdigest(),"category":
+                "local_log_compression_invalid" if b"compression cannot be enabled when max file count is 1" in stderr
+                else "other_nonzero"}
+        super().__init__("hosted command exited nonzero")
+
+
 class Probe:
     def __init__(self, directory, namespace, environment):
         self.directory, self.namespace, self.environment = directory, namespace, environment
@@ -123,17 +147,20 @@ class Probe:
         self.deadline = time.monotonic() + WORK_SECONDS
 
     def command(self, args, seconds=4):
+        operation = command_operation(args)
         remaining = min(seconds, self.deadline-time.monotonic()-2)
         require(remaining > 0)
         with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
             process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
                 env=self.environment, start_new_session=True, preexec_fn=stream_limit)
             try:
-                require(process.wait(timeout=remaining) == 0)
+                status = process.wait(timeout=remaining)
             finally:
                 if process.poll() is None:
                     os.killpg(process.pid, signal.SIGKILL); process.wait(timeout=2)
             require(out.tell() <= 65536 and err.tell() <= 65536)
+            if status != 0:
+                err.seek(0); raise NonzeroCommand(operation,status,err.read(65537))
             out.seek(0); return out.read(65537)
 
     def json_file(self, name):
@@ -181,7 +208,7 @@ class Probe:
             and host["NanoCpus"] == 1000000000 and host["PidsLimit"] == 32
             and host["CapDrop"] == ["ALL"] and host["SecurityOpt"] == ["no-new-privileges"]
             and host["RestartPolicy"]["Name"] == "no" and host["LogConfig"]["Type"] == "local"
-            and host["LogConfig"]["Config"] == {"max-size":"32k","max-file":"1"}
+            and host["LogConfig"]["Config"] == {"max-size":"32k","max-file":"1","compress":"false"}
             and host["Tmpfs"] == {"/tmp":"rw,nosuid,nodev,size=16m,mode=1777"}
             and len(row["mounts"]) <= 1 and all(mount.get("Type") == "tmpfs"
                 and mount.get("Destination") == "/tmp" and mount.get("RW") is True for mount in row["mounts"])
@@ -248,7 +275,8 @@ class Probe:
                 "--label", LABEL+"="+self.namespace, "--network", network, "--read-only", "--cap-drop", "ALL",
                 "--security-opt", "no-new-privileges", "--memory", "128m", "--memory-swap", "128m", "--cpus", "1",
                 "--pids-limit", "32", "--restart", "no", "--log-driver", "local", "--log-opt", "max-size=32k",
-                "--log-opt", "max-file=1", "--tmpfs", "/tmp:rw,nosuid,nodev,size=16m,mode=1777", "--user", "65534:65534",
+                "--log-opt", "max-file=1", "--log-opt", "compress=false",
+                "--tmpfs", "/tmp:rw,nosuid,nodev,size=16m,mode=1777", "--user", "65534:65534",
                 "--entrypoint", "/usr/local/bin/python", IMAGE, "-I", "-S", "-B", "-c", code, *([nonce] if ordinal else [])], 6).decode().strip()
             require(re.fullmatch(r"[0-9a-f]{64}",identity)); self.identities[name] = identity
             self.effective_container(self.inspect(identity,name),network,image)
@@ -351,6 +379,8 @@ def main():
             result["workPassed"] = True
         except Exception as error:
             result.update(workPassed=False,failureStage=stage,failureType=type(error).__name__)
+            if isinstance(error,NonzeroCommand):
+                result["commandFailure"] = error.diagnostic.copy()
             trace = error.__traceback__; line = None
             while trace is not None:
                 if trace.tb_frame.f_code.co_filename == __file__ and trace.tb_frame.f_code.co_name != "require":

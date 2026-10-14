@@ -181,7 +181,39 @@ def environment(root, scratch, python, node, dependencies=None):
         "SERVERWARE_RELEASE_CHANNEL": "dev", "SERVERWARE_DATA_DIR": str(scratch / "data")}
 
 
-def diagnostics(raw):
+def unique_json_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError
+        value[key] = item
+    return value
+
+
+def node_failure(script, raw):
+    """Only this reviewed suite emits a closed, numeric failure receipt."""
+    if script != "test_operator_github_app_ui.mjs":
+        return None
+    lines = raw.splitlines()
+    if not lines or not 0 < len(lines[-1]) <= 512:
+        return None
+    try:
+        value = json.loads(lines[-1].decode("utf-8"), object_pairs_hook=unique_json_object)
+    except (ValueError, UnicodeError):
+        return None
+    if type(value) is not dict or set(value) != {"ok", "group", "frames"} or value["ok"] is not False \
+            or type(value["group"]) is not int or not 0 <= value["group"] <= 10000 \
+            or type(value["frames"]) is not list or len(value["frames"]) > 5:
+        return None
+    if any(type(frame) is not list or len(frame) != 2 or any(
+            type(number) is not int or not 1 <= number <= 9999999 for number in frame)
+            for frame in value["frames"]):
+        return None
+    return {"script": "test_operator_github_app_ui.mjs", "group": value["group"],
+        "frames": [{"line": line, "column": column} for line, column in value["frames"]]}
+
+
+def diagnostics(raw, *, completion_script=None):
     """Closed structural diagnostics, not a blacklist of possible secret values."""
     text = raw.decode("utf-8", "replace")
     failures = re.findall(r"^(?:FAIL|ERROR): (test_[A-Za-z0-9_]+)(?:\s|$)", text, re.M)
@@ -192,11 +224,15 @@ def diagnostics(raw):
     exceptions = re.findall(r"^([A-Za-z][A-Za-z0-9_.]*(?:Error|Exception))(?::|$)", text, re.M)
     totals = re.findall(r"^Ran ([0-9]+) tests? in [0-9.]+s$", text, re.M)
     skips = re.findall(r"^(?:OK|FAILED) \([^\n]*\bskipped=([0-9]+)[^\n]*\)$", text, re.M)
-    return {"failedTests": list(dict.fromkeys(failures))[:64], "frames": frames[-64:],
+    result = {"failedTests": list(dict.fromkeys(failures))[:64], "frames": frames[-64:],
         "exceptionTypes": list(dict.fromkeys(exceptions))[:32],
         "observedUnittestCounts": [int(v) for v in totals[-32:]],
         "observedSkippedTests": sum(int(v) for v in skips),
         "outputBytes": len(raw), "outputSha256": hashlib.sha256(raw).hexdigest()}
+    failure = node_failure(completion_script, raw)
+    if failure is not None:
+        result["observedNodeFailure"] = failure
+    return result
 
 
 def child_exit_status(process):
@@ -261,13 +297,6 @@ def node_completion(script, raw):
             "nativeReviewAcceptance": False,
             "scope": "public queue module with inert DOM and synthetic GET responses"},
     }
-    def unique(pairs):
-        value = {}
-        for key, item in pairs:
-            if key in value:
-                raise ValueError
-            value[key] = item
-        return value
     try:
         lines = raw.decode("utf-8").splitlines()
         if not lines:
@@ -280,7 +309,7 @@ def node_completion(script, raw):
             if script == "test_operator_pending_actions_ui.cjs":
                 expected = {**expected, "sourceSha256": hashlib.sha256(
                     (ROOT / "serverware/operator_demo_web/workspace_pending_actions.js").read_bytes()).hexdigest()}
-            result = json.loads(lines[-1], object_pairs_hook=unique)
+            result = json.loads(lines[-1], object_pairs_hook=unique_json_object)
             if type(result) is not dict or set(result) != set(expected) | {"groups"} \
                     or any(type(result[key]) is not type(value) or result[key] != value for key, value in expected.items()):
                 return None
@@ -334,7 +363,7 @@ def run_process(command, *, cwd, env, seconds, completion_script=None):
             stop_group(process)
         finally:
             process.stdout.close()
-    detail = diagnostics(bytes(raw))
+    detail = diagnostics(bytes(raw), completion_script=completion_script)
     if outcome == "passed" and detail["observedSkippedTests"]:
         outcome = "required_tests_skipped"
     if completion_script is not None:

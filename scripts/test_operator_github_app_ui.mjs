@@ -400,15 +400,41 @@ const tests = [
       await f.event('github-app-replace-form', 'submit'); assert.equal(f.posts().length, 0); f.clean();
     }
   }],
-  ['uncertain replacement preserves committed state without replay and requires explicit review acknowledgement', async () => {
-    for (const mode of [401, 409, 422, 503, 'lost', 'lost-after-commit']) {
+  ['uncertain replacement requires manual auth recovery and explicit review acknowledgement without replay', async () => {
+    for (const mode of [401, 403, 409, 422, 503, 'lost', 'lost-after-commit']) {
       const f = await fixture({replacement: REPLACEMENT, mode}); f.replacementView.open(IDS.credential);
+      const initialGets = f.requests.filter(row => row.method === 'GET').length;
       f.node('github-app-replace-private-key').value = PEM; await f.event('github-app-replace-form', 'submit');
       assert.equal(f.workspace.state.uncertain, true); assert(f.node('github-app-replace-panel').hidden);
+      assert.equal(f.node('github-app-replace-private-key').value, ''); assert.equal(f.bodies[0].private_key_pem, '');
       f.replacementView.open(IDS.credential); assert(f.node('github-app-replace-panel').hidden);
-      await f.event('github-app-replace-form', 'submit'); await f.workspace.refresh();
+      await f.event('github-app-replace-form', 'submit');
+      if ([401, 403].includes(mode)) {
+        assert.equal(f.workspace.state.catalog, null); assert.equal(f.node('load-error').hidden, false);
+        assert.match(f.node('load-error-text').textContent, /session or request origin could not be verified/);
+        assert.equal(f.node('mutation-review-confirm').disabled, true);
+        assert.equal(f.requests.filter(row => row.method === 'GET').length, initialGets);
+        const afterDeniedWrite = f.requests.length;
+        assert.equal(await f.workspace.refresh(), false);
+        await f.event('mutation-review-confirm');
+        assert.equal(f.workspace.state.catalog, null); assert.equal(f.workspace.state.uncertain, true);
+        assert.equal(f.node('mutation-review-confirm').disabled, true);
+        assert.equal(f.requests.length, afterDeniedWrite); assert.equal(f.posts().length, 1);
+        f.replacementView.open(IDS.credential); assert(f.node('github-app-replace-panel').hidden); f.clean();
+        assert.equal(await f.workspace.refresh({manual: true}), true);
+        assert(f.workspace.state.catalog); assert.equal(f.node('load-error').hidden, true);
+        assert.equal(f.requests.filter(row => row.method === 'GET').length, initialGets + 1);
+        assert.equal(f.requests.length, afterDeniedWrite + 1); assert.equal(f.posts().length, 1);
+        assert.equal(f.workspace.state.uncertain, true); assert.equal(f.workspace.ready('credentials'), false);
+        f.replacementView.open(IDS.credential); assert(f.node('github-app-replace-panel').hidden);
+        await f.event('github-app-replace-form', 'submit'); assert.equal(f.posts().length, 1);
+        assert.equal(f.node('github-app-replace-private-key').value, ''); f.clean();
+      } else {
+        await f.workspace.refresh();
+      }
       assert.equal(f.posts().length, 1); assert.equal(f.raw.credentials[0].credential_generation, mode === 'lost-after-commit' ? 2 : 1);
       assert.equal(f.node('mutation-review-confirm').disabled, false); await f.event('mutation-review-confirm');
+      assert.equal(f.workspace.state.uncertain, false);
       f.replacementView.open(IDS.credential); assert(!f.node('github-app-replace-panel').hidden);
       assert.equal(f.node('github-app-replace-private-key').value, ''); assert.equal(f.posts().length, 1); f.clean();
     }

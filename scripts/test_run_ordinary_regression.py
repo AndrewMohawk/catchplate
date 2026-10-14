@@ -167,6 +167,62 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(self.child("import os; os.write(1,b'x'*200000)")["status"], "output_limit")
         self.assertEqual(self.child("print('OK (skipped=1)')")["status"], "required_tests_skipped")
 
+    def test_known_node_failure_projects_only_bounded_numeric_receipt(self):
+        script = "test_operator_github_app_ui.mjs"
+        canary = "PRIVATE_CANARY_DO_NOT_RETAIN"
+        prefix = ("PASS prior group\n" + canary + "\n").encode()
+        def wire(value):
+            return prefix + json.dumps(value).encode() + b"\n"
+        valid = {"ok": False, "group": 18, "frames": [[411, 14], [447, 44]]}
+        raw = wire(valid)
+        baseline = runner.diagnostics(raw)
+        observed = runner.diagnostics(raw, completion_script=script)
+        self.assertEqual(observed.pop("observedNodeFailure"), {"script": script, "group": 18,
+            "frames": [{"line": 411, "column": 14}, {"line": 447, "column": 44}]})
+        self.assertEqual(observed, baseline)
+        self.assertNotIn(canary, json.dumps(observed))
+        for group, frames in ((0, []), (10000, [[9999999, 9999999]] * 5)):
+            value = runner.diagnostics(wire({"ok": False, "group": group, "frames": frames}), completion_script=script)
+            self.assertEqual(value["observedNodeFailure"]["group"], group)
+            self.assertEqual(len(value["observedNodeFailure"]["frames"]), len(frames))
+        for other in (None, "test_operator_pending_actions_ui.cjs", "../" + script):
+            self.assertNotIn("observedNodeFailure", runner.diagnostics(raw, completion_script=other))
+
+    def test_known_node_failure_rejects_extra_duplicate_typed_and_unbounded_fields(self):
+        script = "test_operator_github_app_ui.mjs"
+        canary = "PRIVATE_CANARY_DO_NOT_RETAIN"
+        valid = {"ok": False, "group": 18, "frames": [[411, 14]]}
+        changed = [None, [], {**valid, "message": canary}, {**valid, "script": canary},
+            *({key: item for key, item in valid.items() if key != missing} for missing in valid),
+            *({**valid, "ok": value} for value in (True, 0, None, "false")),
+            *({**valid, "group": value} for value in (-1, 10001, True, 1.0, None, canary)),
+            *({**valid, "frames": value} for value in (None, {}, canary, [[1, 1]] * 6, [[1]], [[1, 1, 1]],
+                [[0, 1]], [[1, -1]], [[10000000, 1]], [[1, 10000000]], [[True, 1]], [[1, 1.0]],
+                [[canary, 1]], [{"line": 1, "column": 1}]))]
+        invalid = [json.dumps(value).encode() + b"\n" for value in changed]
+        terminal = json.dumps(valid).encode()
+        invalid += [b"", terminal + b"\nextra\n", terminal + b"\n\n", b" " * 513 + terminal,
+            b'{"ok":false,"group":18,"group":19,"frames":[]}',
+            b'{"ok":true,"ok":false,"group":18,"frames":[]}',
+            b'{"ok":false,"group":18,"frames":[],"frames":[]}',
+            b'{"ok":false,"group":18,"frames":[],"message":"\xff"}']
+        for raw in invalid:
+            with self.subTest(raw_sha256=hashlib.sha256(raw).hexdigest()):
+                result = runner.diagnostics(raw, completion_script=script)
+                self.assertNotIn("observedNodeFailure", result)
+                self.assertNotIn(canary, json.dumps(result))
+                self.assertEqual(result["outputSha256"], hashlib.sha256(raw).hexdigest())
+
+    def test_known_node_failure_child_keeps_failed_exit_and_no_completion_claim(self):
+        terminal = json.dumps({"ok": False, "group": 18, "frames": [[411, 14]]})
+        code = "print('PRIVATE_CANARY'); print(" + repr(terminal) + "); raise SystemExit(1)"
+        result = runner.run_process([sys.executable, "-I", "-B", "-c", code], cwd=runner.ROOT,
+            env={"PATH": os.defpath}, seconds=3, completion_script="test_operator_github_app_ui.mjs")
+        self.assertEqual((result["status"], result["exitCode"]), ("failed", 1))
+        self.assertEqual(result["observedNodeFailure"]["group"], 18)
+        self.assertIsNone(result["observedNodeGroups"])
+        self.assertNotIn("PRIVATE_CANARY", json.dumps(result))
+
     def test_exited_leader_cleanup_preserves_owned_group_with_or_without_inherited_pipe(self):
         for inherited_pipe in (False, True):
             with self.subTest(inherited_pipe=inherited_pipe), tempfile.TemporaryDirectory() as directory:

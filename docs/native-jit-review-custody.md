@@ -182,6 +182,40 @@ paths. Those paths require explicit native-family refusal until native decision
 and exact approved-request continuation are implemented. The shared workspace
 must keep `can_decide` false; hiding its controls alone is insufficient.
 
+### Implementation constraints for opening
+
+The authorize read needs nine authenticated rows: OIDC session, its bound
+WebAuthn credential, current trust high-water and matching published bundle,
+RBAC authority and user binding, current policy high-water, pending approval,
+and retained pair. Derive dependent selectors only after authenticating their
+source row. Hash the original session token inside the measured owner; do not
+accept a caller-supplied reviewer or successful-authentication flag. Preserve
+the portal's exact activation trust generation and authenticator-class checks.
+Unsigned current-root observations are not independent current-root admission.
+
+Receipt issuance repeats those checks and adds the deterministic receipt,
+receipt-capacity, audit and audit-capacity selections: thirteen logical rows
+across twelve tables. It needs a separate fixed read schedule and byte budget.
+The generic reader's 1 MiB row limit and the old compound reader's fixed
+seven-row schedule plus derived receipt query and 4 MiB selected aggregate
+cannot cover the permitted retained originals and trust bundle together.
+Bound the complete acquisition, replay and commit path; raising one collector
+limit is insufficient.
+
+Registering the new purposes changes the installed manifest used by fresh
+sealing. Extend the historical validator with an explicit frozen profile for
+that new sealing format while retaining v349 unchanged. Test a newly produced
+pending request as well as old retained originals; do not infer compatibility
+from an old-format fixture or reconstruct historical requests with current IDs.
+
+Native attempts must survive distinct actual TLS connections while retaining
+the same cookie, recipient and immutable prepared view. The transport's
+per-connection response fence is not the attempt's one-use disclosure fence.
+Portal routes must establish their authenticated owner before reading the body;
+the older static-credential wrapper's body-first ordering is not a template.
+The acknowledgment must follow actual commit and current-root completion,
+not a generic verifier-signed response or a reserved-writer acknowledgment.
+
 ### Source map and evidence limits
 
 - [Startup contract](../data-plane/decision-gate-rs/src/native_startup_config/jit_review.rs),
@@ -239,6 +273,20 @@ binary build or an actual native TLS connection test. Evidence is private under
 `/srv/catchplate-archive/homelab_data/serverware-native-tls-tests.ohSn7EDJ`;
 `result.json` SHA-256 is
 `a469394fc51cede993cff0f895428b5966cefd4db86699981bec9c199d42e4d0`.
+
+Hosted [CI 38501166733](https://github.com/example/private-deployment)
+at `1353068b` passed 87/88 suites. Its sole failing suite extracted the actual
+approval route without its new decision guard. The test-only repair at
+`96a7ca9e` includes that guard, updates the decision-metadata expectation and
+checks that native requests cannot reach grant publication. Production guards
+are unchanged. The focused publication, HTTP decision-fence and denial suites
+passed **36 tests / zero skips** in 24.742 seconds. This check used the retained
+read-only `0eba227d` source with the single reviewed test overlay, not a fresh
+whole-tree or dependency rehash. Selected pins were unchanged and the isolated
+container was removed. The original hosted failure remains preserved; this
+focused result is not full successor CI acceptance. Private receipt:
+`/srv/catchplate-archive/homelab_data/serverware-grant-publication-fix.xFo0wj7q/results/result.json`,
+SHA-256 `5600a329b4abcc5abb84eca6bfbd84f6ad96c725c9e6ecc854f4ecc82b0030ac`.
 
 The opening integration contract above remains an implementation target. These
 prerequisites do not provide a current reviewer authorization, broker opening,

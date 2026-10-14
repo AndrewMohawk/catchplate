@@ -29,6 +29,19 @@ A timeout or lost acknowledgement does not prove rollback. If the page offers **
 
 Do not repeat a create, rotation, provider verification, consent start or notification test just because the receipt is missing. The UI may hold further writes until the saved state is reviewed. Preserve the displayed public operation reference; do not capture secrets, callback codes or authorization URLs in a support ticket. [Managed configuration recovery](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-provider-configuration.md#operator-configuration-workflow), [key replacement recovery](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-key-replacement.md#transaction-and-api).
 
+The save-review repair in `07d54103` keeps a public warning across reloads in the
+same tab. After refreshing, inspect **Credentials**, **Clients** and
+**Permissions** for the saved change, then select **I reviewed the saved state**.
+If the credential already exists, use that credential instead of creating it
+again. This acknowledgement clears only the ordinary warning, not a provider's
+pending consent or operation-recovery hold. A lost one-time client token still
+requires deliberate rotation; the warning does not retain the token or request.
+If session storage is unavailable, the page refuses new writes rather than
+sending an untracked save. Do not clear browser storage to bypass recovery.
+This repair has passed the isolated full-flow check but is not yet deployed;
+check the [current deployment record](https://github.com/AndrewMohawk/serverware/blob/main/docs/project-completion.md#current-live-deployment)
+for the installed version.
+
 ## Google setup appears to block other changes
 
 A selected pending/exchanging consent attempt holds changes while its state is checked. Reopen the existing setup panel and use its status action. **Leave Google setup** is an explicit navigation action; it does not cancel consent at Google or prove an uncertain operation failed.

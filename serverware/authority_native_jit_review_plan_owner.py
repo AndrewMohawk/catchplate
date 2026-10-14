@@ -10,6 +10,8 @@ replays decoded original bytes, including current roots, native evidence and
 transient session possession. Returned immutable material is uncommitted data,
 never an accepted success carrier. Replaying it requires the original token
 again under the unchanged live window; it cannot support unattended recovery.
+The receipt's complete after vector is reconstructed from those same authenticated
+rows and four effects, not a caller-proposed root or a previous plan result.
 """
 from __future__ import annotations
 
@@ -20,8 +22,11 @@ import time
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from serverware import authority_current_root_delta as delta
+from serverware import authority_current_root_plan_replay as root_replay
 from serverware import authority_native_jit_review_current_read as reads
 from serverware import authority_native_jit_review_plan_stream as stream
+from serverware import authority_radix_mutation as primary
 from serverware import authority_revocation_configuration as configuration_capture
 from serverware import authority_transition_native_jit_review_open as kernel
 from serverware.authority_query_read_work import _ValidationWork
@@ -69,6 +74,65 @@ def _configuration(raw, work):
         configuration_capture.capability.capture._SharedLedger(work), maximum_bytes=maximum).visit(value)
 
 
+def _complete_vectors(operation, acquired, effects, budget):
+    """Pure continuation of this invocation's actual original replay, not admission."""
+    before_original = acquired.complete_root_vector_original
+    if operation == wire.AUTHORIZE:
+        _require(effects.mutations == ())
+        return before_original, before_original
+    with budget.stage("receipt-roots") as work:
+        _require(budget.current(work) < effects.result["expiresAtEpochNs"])
+        contracts = reads.primary_contract.primary_table_contracts(operation)
+        writable = frozenset(item.table for item in contracts if item.write_access)
+        _require(writable == {"approval_review_receipts", "metadata_audit_outbox",
+            reads.audit_capacity.AGGREGATE_TABLE}
+            and all(not reads.vector.projection.index_ids_for_table(table) for table in writable))
+        # The other nine rows were already authenticated by the same kernel.
+        # Only select pointers by their bounded identities here: do not copy or
+        # encode large retained ciphertext/trust documents in a generic batch.
+        work.charge(input_bytes=512 * (len(acquired.selected_rows) + len(acquired.before_proofs)),
+            json_nodes=5 * (len(acquired.selected_rows) + len(acquired.before_proofs)))
+        selected = tuple(row for row in acquired.selected_rows if row["table"] in writable)
+        proofs = tuple(proof for proof in acquired.before_proofs if proof["table"] in writable)
+        _require(len(selected) == len(proofs) == len(effects.mutations) == 4)
+        business = root_replay._primary_documents(acquired.business_before_roots, work)
+        authorization = root_replay._primary_documents(acquired.authorization_before_roots, work)
+        work.charge(input_bytes=512 * len(contracts), json_nodes=12 * len(contracts))
+        sizes = {"contracts": [item.json_projection() for item in contracts],
+            "businessRoots": business, "authorizationRoots": authorization,
+            "selected": selected, "proofs": proofs, "mutations": effects.mutations}
+        size, nodes = work.measure(sizes)
+        # The radix engine's historical metrics count one input snapshot, not
+        # its hidden scalar encodings, full-row CAS/key comparisons or hash
+        # material. Reserve those walks plus four cold proof/union paths before
+        # entering it, then debit its actual metrics without a refund/reset.
+        work.charge(input_bytes=8 * size + 4 * 2 * 1024 * 1024,
+            json_nodes=4 * nodes + 4 * 16384)
+        limits = primary.PrimaryRadixLimits(4, 4, 4 * 64, 4 * 1024,
+            min(66 + 4 * 136, work.limits.max_hashes - work.hash_work),
+            min(reads.vector.authority.MAX_RESULT_BYTES, work.limits.max_input_bytes - work.input_bytes),
+            128, work.limits.max_json_nodes - work.json_nodes)
+        written = primary.evaluate_primary_radix_batch(table_contracts=contracts,
+            business_before_roots=acquired.business_before_roots,
+            authorization_before_roots=acquired.authorization_before_roots,
+            selected_rows=selected, before_proofs=proofs, mutations=effects.mutations, limits=limits)
+        metrics = written.metrics
+        work.charge(hashes=metrics.hash_work, input_bytes=metrics.input_bytes, json_nodes=metrics.json_nodes)
+        _require(metrics.selected_rows == metrics.mutations == 4
+            and budget.current(work) < effects.result["expiresAtEpochNs"])
+    with budget.stage("complete-vector") as work:
+        _require(budget.current(work) < effects.result["expiresAtEpochNs"])
+        before = reads.vector._decode_on_work(before_original, work=work)
+        after = root_replay._merge(operation, before, business, authorization,
+            root_replay._primary_documents(written.business_after_roots, work),
+            root_replay._primary_documents(written.authorization_after_roots, work), [], [], work)
+        after_original = reads.vector._encode_on_work(after, work=work)
+        delta._validate_on_work(operation=operation, before_vector_bytes=before_original,
+            after_vector_bytes=after_original, work=work)
+        _require(budget.current(work) < effects.result["expiresAtEpochNs"])
+    return before_original, after_original
+
+
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
 class PreparedNativeJitReviewPlan:
     """Output-only literal material, deliberately unsigned and uncommitted."""
@@ -82,6 +146,8 @@ class PreparedNativeJitReviewPlan:
     read_frames: tuple[bytes, ...]
     result_original: bytes
     mutations_original: bytes
+    before_vector_original: bytes
+    after_vector_original: bytes
 
 
 class NativeJitReviewPlanOwner:
@@ -200,7 +266,7 @@ class NativeJitReviewPlanOwner:
             trust = _json(self._trust_original, reads.vector.authority.MAX_REQUEST_BYTES, work)
             budget = reads.NativeJitReviewReadBudget(operation, parent_work=work,
                 live_window=self._window, deadline_ns=self._deadline)
-            effects = kernel.evaluate_on_work(operation=operation, request=request,
+            effects, acquired = kernel._evaluate_with_reads_on_work(operation=operation, request=request,
                 read_originals=originals, session_token_original=session_token_original,
                 challenge_original=challenge_original, configuration_payload=configuration,
                 configuration_root_key=self._root_key, current_root_public_key=self._reader_pins[2],
@@ -216,11 +282,16 @@ class NativeJitReviewPlanOwner:
                 and effects.result["operation"] == operation
                 and effects.result["requestDigest"] == request["requestDigest"]
                 and effects.result["canDecide"] is False)
+            before, after = _complete_vectors(operation, acquired, effects, budget)
+            budget._check()
+            self._check()
             result = _json_original(effects.result, wire.MAX_AUTHORITY_ORIGINAL, work)
             mutations = _json_original(list(effects.mutations), reads.vector.authority.MAX_RESULT_BYTES, work)
             self._check()
+            _require(self._last_epoch < effects.result["expiresAtEpochNs"])
             return PreparedNativeJitReviewPlan(operation, request_original, challenge_original,
-                authorization_original, preparation_original, read_manifest_original, read_frames, result, mutations)
+                authorization_original, preparation_original, read_manifest_original, read_frames,
+                result, mutations, before, after)
         except BaseException as exc:
             self._failed = True
             if isinstance(exc, Exception):

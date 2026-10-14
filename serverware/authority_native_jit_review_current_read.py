@@ -57,7 +57,7 @@ _TOKEN_CHARACTERS = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuv
 _BASE_NAMES = tuple(chunks._QUERIES)[:9]
 _NAMES = tuple(chunks._QUERIES)
 _KERNEL_STAGES = frozenset({"input-capture", "native-challenge", "current-reviewer", "retained-history",
-    "native-preparation", "receipt-effects"})
+    "native-preparation", "receipt-effects", "receipt-roots", "complete-vector"})
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _ORIGINAL_FIELDS = frozenset({"schema", "operation", "requestDigest", "databaseNowEpochNs",
     "completeRootVectorOriginal", "headQueryOriginal", "headObservationOriginal",

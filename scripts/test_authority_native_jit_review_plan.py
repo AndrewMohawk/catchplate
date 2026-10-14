@@ -307,6 +307,27 @@ class PlanOwnerRefusals(unittest.TestCase):
         with self.assertRaises(owner.NativeJitReviewPlanOwnerError):
             selected.produce({}, session_token_original=TOKEN, challenge_original="{}")
 
+    def test_vector_preparation_stage_is_single_use_and_keeps_parent_ledger_pinned(self):
+        for name in ("receipt-roots", "complete-vector"):
+            parent, live = meter(), window()
+            budget = reads.NativeJitReviewReadBudget(wire.RECEIPT, parent_work=parent,
+                live_window=live, deadline_ns=live[4])
+            with budget.stage(name) as work:
+                work.charge(input_bytes=100, hashes=2, json_nodes=5)
+            self.assertIs(budget.parent_work, parent)
+            self.assertEqual((parent.hash_work, parent.input_bytes, parent.json_nodes), (0, 0, 0))
+            with self.subTest(stage=name), self.assertRaises(ValueError):
+                with budget.stage(name):
+                    pass
+            self.assertTrue(budget._failed)
+
+    def test_callers_cannot_supply_prepared_vectors_effects_or_read_verdicts(self):
+        for field in ("before_vector_original", "after_vector_original", "effects", "acquired"):
+            selected = self.configured()
+            with self.subTest(field=field), self.assertRaises(TypeError):
+                selected.replay({}, session_token_original=TOKEN, challenge_original="{}",
+                    read_manifest_original=b"{}", read_frames=(), **{field: b"{}"})
+
 
 def no_external_effects(event, _arguments):
     if event.startswith(("socket.", "sqlite3.")) or event in {

@@ -3,7 +3,9 @@
 
 Independent primary/count trees, real Ed25519 enrollment/head signatures and
 the existing synthetic Nitro PKI cross the actual stream, reader and kernel.
-Only clocks are replaced; no successful reader, proof or kernel is mocked.
+Positive observations delegate to the actual implementations; no successful
+reader, proof or kernel is mocked. Negative fault injections corrupt only
+already replayed writer inputs or consume the original work/time allowance.
 Configuration/trust policies are explicit test inputs, not cold admission.
 There is no SQL acquisition, real OIDC/WebAuthn ceremony, hardware, authorized
 service selection, commit, ACK, disclosure, decision or provider execution.
@@ -276,6 +278,25 @@ class OriginalFixture:
             authorization_original=self.authorization, preparation_original=self.preparation,
             read_manifest_original=manifest, read_frames=chunks)
 
+    def rebuilt_after(self, mutations):
+        """Apply full rows to independent trees, not the production radix writer."""
+        trees = dict(self.trees)
+        for table in {mutation["table"] for mutation in mutations}:
+            old = self.trees[table]
+            rows = copy.deepcopy(old.rows)
+            changes = [mutation for mutation in mutations if mutation["table"] == table]
+            for mutation in changes:
+                key = sql_json(mutation["key"])
+                if rows.get(key) != mutation["expectedRow"]:
+                    raise AssertionError("independent rebuild old row differs from genuine effect")
+                if mutation["row"] is None:
+                    del rows[key]
+                else:
+                    rows[key] = copy.deepcopy(mutation["row"])
+            trees[table] = IndependentTree(list(rows.values()), table=table, columns=old.columns,
+                revision=old.root.root_revision + len(changes))
+        return full_vector(trees)
+
 
 class NativeReviewPlanOriginalReplayTests(unittest.TestCase):
     @classmethod
@@ -326,6 +347,8 @@ class NativeReviewPlanOriginalReplayTests(unittest.TestCase):
         self.assertEqual(json.loads(selected._configuration_original)["roles"]["planner"]["requestTimeoutSeconds"], 1.25)
         self.assertIs(value["canDecide"], False)
         self.assertEqual(json.loads(result.mutations_original), [])
+        self.assertEqual(result.before_vector_original, case.vector_original)
+        self.assertIs(result.after_vector_original, result.before_vector_original)
         self.assertEqual(len(json.loads(result.read_manifest_original)["rowChunkCounts"]), 9)
         self.assertNotEqual(case.originals["headQueryOriginal"], case.originals["finalHeadQueryOriginal"])
         self.assertNotIn(TOKEN, result.read_manifest_original + result.result_original + result.request_original)
@@ -349,6 +372,131 @@ class NativeReviewPlanOriginalReplayTests(unittest.TestCase):
         self.assertNotIn("signatureBase64Url", value)
         self.assertEqual(value["authorizationSha256"], sha(case.authorization.encode("ascii")))
         self.assertEqual(value["preparationSha256"], sha(case.preparation.encode("ascii")))
+        self.assertEqual(result.before_vector_original, case.vector_original)
+        before, after = json.loads(result.before_vector_original), json.loads(result.after_vector_original)
+        self.assertEqual(after, case.rebuilt_after(mutations))
+        self.assertEqual(result.after_vector_original, canonical(after))
+        self.assertEqual(after["countedRoots"], before["countedRoots"])
+        changes = {"approval_review_receipts": (1, 1), "metadata_audit_outbox": (1, 1),
+            reads.audit_capacity.AGGREGATE_TABLE: (2, 0)}
+        for old, new in zip(before["primaryRoots"], after["primaryRoots"], strict=True):
+            if old["table"] in changes:
+                revisions, leaves = changes[old["table"]]
+                self.assertEqual(new["rootRevision"] - old["rootRevision"], revisions)
+                self.assertEqual(new["leafCount"] - old["leafCount"], leaves)
+                self.assertNotEqual(old["rootDigest"], new["rootDigest"])
+            else:
+                self.assertEqual(new, old)
+        self.assertNotIn(TOKEN, result.before_vector_original + result.after_vector_original + result.mutations_original)
+
+    def test_receipt_writer_uses_same_replay_and_only_four_authenticated_effect_rows(self):
+        case = self.receipt_fixture()
+        with patch.object(reads, "admit_original_reads_on_work", wraps=reads.admit_original_reads_on_work) as replay, \
+                patch.object(owner.primary, "evaluate_primary_radix_batch",
+                    wraps=owner.primary.evaluate_primary_radix_batch) as writer:
+            actual = case.replay()
+        self.assertEqual(replay.call_count, 1)
+        self.assertEqual(writer.call_count, 1)
+        inputs = writer.call_args.kwargs
+        self.assertEqual(len(inputs["selected_rows"]), 4)
+        self.assertEqual(len(inputs["before_proofs"]), 4)
+        self.assertEqual(len(inputs["mutations"]), 4)
+        self.assertEqual({value.table for value in inputs["table_contracts"]},
+            {value.table for value in reads.primary_contract.primary_table_contracts(wire.RECEIPT)})
+        self.assertEqual({value["table"] for value in inputs["selected_rows"]},
+            {"approval_review_receipts", "metadata_audit_outbox", reads.audit_capacity.AGGREGATE_TABLE})
+        self.assertEqual(json.loads(actual.after_vector_original),
+            case.rebuilt_after(json.loads(actual.mutations_original)))
+
+    def test_writer_refuses_corruption_after_genuine_original_replay(self):
+        case = self.receipt_fixture()
+        actual_writer = owner.primary.evaluate_primary_radix_batch
+        for fault in ("duplicate-effect", "old-row", "proof"):
+            def corrupted(**inputs):
+                if fault == "proof":
+                    proofs = copy.deepcopy(inputs["before_proofs"])
+                    proofs[0]["rootDigest"] = "sha256:" + "f" * 64
+                    inputs["before_proofs"] = proofs
+                else:
+                    mutations = list(copy.deepcopy(inputs["mutations"]))
+                    if fault == "duplicate-effect":
+                        mutations[-1] = mutations[0]
+                    else:
+                        changed = next(value for value in mutations if value["operation"] == "UPDATE")
+                        changed["expectedRow"]["live_count"] += 1
+                    inputs["mutations"] = tuple(mutations)
+                return actual_writer(**inputs)
+            selected = case.plan_owner()
+            with self.subTest(fault=fault), patch.object(owner.primary, "evaluate_primary_radix_batch",
+                    side_effect=corrupted) as writer:
+                with self.assertRaises(owner.NativeJitReviewPlanOwnerError):
+                    case.replay(selected)
+                self.assertEqual(writer.call_count, 1)
+                self.assertTrue(selected._used and selected._failed)
+
+    def test_complete_vector_rejects_changed_unrelated_and_counted_descriptors(self):
+        case = self.receipt_fixture()
+        actual_merge = owner.root_replay._merge
+        for fault in ("unrelated-primary", "counted"):
+            def corrupted(*args):
+                after = actual_merge(*args)
+                if fault == "counted":
+                    after["countedRoots"][0]["indexRevision"] += 1
+                else:
+                    next(value for value in after["primaryRoots"]
+                        if value["table"] == "credentials")["rootRevision"] += 1
+                return after
+            with self.subTest(fault=fault), patch.object(owner.root_replay, "_merge", side_effect=corrupted):
+                with self.assertRaises(owner.NativeJitReviewPlanOwnerError):
+                    case.replay()
+
+    def test_writer_budget_exhaustion_refuses_before_engine_without_replacing_parent(self):
+        case = self.receipt_fixture()
+        actual_stage = reads.NativeJitReviewReadBudget.stage
+        for field, maximum in (("hashes", "max_hashes"), ("input_bytes", "max_input_bytes"),
+                ("json_nodes", "max_json_nodes")):
+            @contextmanager
+            def exhausted(budget, name):
+                with actual_stage(budget, name) as work:
+                    if name == "receipt-roots":
+                        counter = "hash_work" if field == "hashes" else field
+                        work.charge(**{field: getattr(work.limits, maximum) - getattr(work, counter)})
+                    yield work
+            selected = case.plan_owner()
+            with self.subTest(field=field), patch.object(reads.NativeJitReviewReadBudget, "stage", exhausted), \
+                    patch.object(owner.primary, "evaluate_primary_radix_batch",
+                        wraps=owner.primary.evaluate_primary_radix_batch) as writer:
+                with self.assertRaises(owner.NativeJitReviewPlanOwnerError):
+                    case.replay(selected)
+                self.assertEqual(writer.call_count, 0)
+                self.assertTrue(selected._failed)
+
+    def test_original_shorter_expiry_still_bounds_root_and_vector_work(self):
+        case = self.receipt_fixture()
+        actual_kernel = kernel._evaluate_with_reads_on_work
+        for module, name in ((owner.primary, "evaluate_primary_radix_batch"),
+                (owner.delta, "_validate_on_work")):
+            observed = {"epoch": NOW}
+            actual = getattr(module, name)
+            def kernel_observation(**arguments):
+                result = actual_kernel(**arguments)
+                observed["expiry"] = result[0].result["expiresAtEpochNs"]
+                return result
+            def late(*args, **kwargs):
+                result = actual(*args, **kwargs)
+                observed["epoch"] = observed["expiry"]
+                return result
+            selected = case.plan_owner()
+            with self.subTest(stage=name), \
+                    patch.object(time, "time_ns", new=lambda: observed["epoch"]), \
+                    patch.object(time, "monotonic_ns", new=lambda: MONO + observed["epoch"] - NOW), \
+                    patch.object(kernel, "_evaluate_with_reads_on_work", side_effect=kernel_observation), \
+                    patch.object(module, name, side_effect=late) as completed:
+                with self.assertRaises(owner.NativeJitReviewPlanOwnerError):
+                    case.replay(selected)
+                self.assertEqual(completed.call_count, 1)
+                self.assertLess(observed["expiry"], LIVE[3])
+                self.assertTrue(selected._failed)
 
     def test_fractional_configuration_change_without_new_signed_assignment_refuses(self):
         case = OriginalFixture(self.pki, opening=fractional_opening(self.pki))

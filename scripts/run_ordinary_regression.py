@@ -32,11 +32,12 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 MAX_SECONDS = 900
 MAX_PARTITION_SECONDS = 600
-PARTITIONS = ("all", "python-1", "python-2", "python-3", "node")
+PARTITIONS = ("all", "python-1", "python-2", "python-3", "native-review", "node")
 # Fixed source boundaries, not timing-dependent discovery. Historical hosted
 # observations were roughly 335/277/308s, before two new direct suites per shard.
 # The last includes an incomplete notification run; these are not acceptance.
 PYTHON_PARTITION_BOUNDARIES = ("test_operator_workload_renewal.py", "test_native_jit_prepare.py")
+NATIVE_REVIEW_SUITE = "test_authority_native_jit_review_plan_replay.py"
 MAX_OUTPUT_BYTES = 100 * 1024
 SCHEMA = "serverware.ordinaryRegression/v1"
 EXCLUDED = ("rendered_browser", "stock_sdk", "rust_data_plane", "live_deployment", "native_admission")
@@ -101,7 +102,9 @@ SUITES = (
     Suite("backend", "test_authority_native_jit_review_current_read.py", seconds=60),
     Suite("backend", "test_authority_native_jit_review_open.py", seconds=60),
     Suite("backend", "test_authority_native_jit_review_plan.py", seconds=60),
-    Suite("backend", "test_authority_native_jit_review_plan_replay.py", seconds=180),
+    # Genuine synthetic replay now also derives complete before/after vectors.
+    # Keep its finite larger allowance in one dedicated fixed CI partition.
+    Suite("backend", NATIVE_REVIEW_SUITE, seconds=360),
     Suite("backend", "test_authority_launcher_native_review_credentials.py", seconds=60),
     Suite("backend", "test_native_jit_review_portal.py", seconds=60),
     # Synthetic pending, writer-boundary, legacy-reader and ASGI controls only;
@@ -196,10 +199,15 @@ def partition_suites(partition):
         raise Refused("invalid_suite_roster")
     if partition == "all":
         return SUITES, MAX_SECONDS
-    if partition == "node":
+    if partition == "native-review":
+        selected = tuple(suite for suite in SUITES if suite.script == NATIVE_REVIEW_SUITE)
+        if selected != (Suite("backend", NATIVE_REVIEW_SUITE, seconds=360),):
+            raise Refused("invalid_native_review_suite")
+    elif partition == "node":
         selected = tuple(suite for suite in SUITES if suite.runtime == "node")
     else:
-        python = tuple(suite for suite in SUITES if suite.runtime == "python")
+        python = tuple(suite for suite in SUITES
+            if suite.runtime == "python" and suite.script != NATIVE_REVIEW_SUITE)
         names = tuple(suite.script for suite in python)
         if any(boundary not in names for boundary in PYTHON_PARTITION_BOUNDARIES):
             raise Refused("partition_boundary_missing")

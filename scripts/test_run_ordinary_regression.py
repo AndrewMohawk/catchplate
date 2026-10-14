@@ -4,6 +4,7 @@ import json
 import hashlib
 import io
 import os
+import re
 from contextlib import redirect_stderr
 from pathlib import Path
 import sys
@@ -61,8 +62,8 @@ class RunnerTests(unittest.TestCase):
                 "test_authority_release_private_ingress.py", "test_native_jit_prepare.py",
                 "test_approval_history_metadata.py"):
             denial = next(row for row in runner.SUITES if row.script == script)
-            expected_seconds = 180 if script in {"test_authority_revocation_proof_bundle.py",
-                "test_authority_native_jit_review_plan_replay.py"} else 60
+            expected_seconds = {"test_authority_revocation_proof_bundle.py": 180,
+                "test_authority_native_jit_review_plan_replay.py": 360}.get(script, 60)
             self.assertEqual((denial.category, denial.runtime, denial.arguments, denial.seconds),
                 ("backend", "python", (), expected_seconds))
         self.assertIn("test_operator_notification_google_events.py", paths)
@@ -153,32 +154,94 @@ class RunnerTests(unittest.TestCase):
         for row in runner.SUITES:
             self.assertTrue((runner.ROOT / "scripts" / row.script).is_file())
             self.assertTrue(row.script.startswith("test_"))
-            self.assertLessEqual(row.seconds, 240)
+            self.assertLessEqual(row.seconds,
+                360 if row.script == "test_authority_native_jit_review_plan_replay.py" else 240)
             self.assertNotIn("/", row.script)
         catalog = next(row for row in runner.SUITES if row.script == "test_operator_catalog_browser.cjs")
         self.assertEqual(catalog.arguments, ("--self-test",))
         self.assertNotIn("test_operator_ordinary_modes_browser.cjs", paths)
 
     def test_fixed_partitions_are_disjoint_complete_ordered_and_bounded(self):
-        self.assertEqual(runner.PARTITIONS, ("all", "python-1", "python-2", "python-3", "node"))
+        self.assertEqual(runner.PARTITIONS, ("all", "python-1", "python-2", "python-3", "native-review", "node"))
         self.assertEqual(runner.partition_suites("all"), (runner.SUITES, 900))
         shards = {name: runner.partition_suites(name) for name in runner.PARTITIONS[1:]}
         names = [suite.script for selected, _ in shards.values() for suite in selected]
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(set(names), {suite.script for suite in runner.SUITES})
         python = tuple(suite for suite in runner.SUITES if suite.runtime == "python")
-        self.assertEqual(shards["python-1"][0] + shards["python-2"][0] + shards["python-3"][0], python)
+        ordinary_python = tuple(suite for suite in python
+            if suite.script != "test_authority_native_jit_review_plan_replay.py")
+        self.assertEqual(shards["python-1"][0] + shards["python-2"][0] + shards["python-3"][0], ordinary_python)
         self.assertEqual(shards["python-1"][0][-1].script, "test_operator_workload_renewal.py")
         self.assertEqual(shards["python-2"][0][0].script, "test_managed_client.py")
         self.assertEqual(shards["python-2"][0][-1].script, "test_native_jit_prepare.py")
         self.assertEqual(shards["python-3"][0][0].script, "test_authority_complete_read_write.py")
-        self.assertEqual(tuple(len(selected) for selected, _ in shards.values()), (12, 41, 43, 17))
+        self.assertEqual(tuple(len(selected) for selected, _ in shards.values()), (12, 40, 43, 1, 17))
         self.assertEqual((len(runner.SUITES), len(python)), (113, 96))
         self.assertEqual(shards["node"][0], tuple(suite for suite in runner.SUITES if suite.runtime == "node"))
         for partition, (selected, budget) in shards.items():
             self.assertTrue(selected)
             self.assertEqual(budget, 600)
             self.assertEqual(runner.partition_suites(partition), (selected, budget))
+            selected_names = {suite.script for suite in selected}
+            self.assertEqual(selected, tuple(suite for suite in runner.SUITES if suite.script in selected_names))
+
+    def test_native_review_partition_has_exact_suite_and_unchanged_outer_limits(self):
+        name = "test_authority_native_jit_review_plan_replay.py"
+        self.assertEqual(runner.NATIVE_REVIEW_SUITE, name)
+        selected, budget = runner.partition_suites("native-review")
+        self.assertEqual(selected, (runner.Suite("backend", name, seconds=360),))
+        self.assertEqual((budget, runner.MAX_SECONDS, runner.MAX_PARTITION_SECONDS,
+            runner.MAX_OUTPUT_BYTES), (600, 900, 600, 100 * 1024))
+        for partition in ("python-1", "python-2", "python-3", "node"):
+            self.assertNotIn(name, [suite.script for suite in runner.partition_suites(partition)[0]])
+
+    def test_native_review_missing_duplicate_wrong_runtime_and_changed_profile_refuse(self):
+        name = "test_authority_native_jit_review_plan_replay.py"
+        native = runner.Suite("backend", name, seconds=360)
+        invalid = ((runner.SUITES[0],), (native, native),
+            (runner.Suite("backend", name, runtime="node", seconds=360),),
+            (runner.Suite("backend", name, seconds=180),),
+            (runner.Suite("backend", name, seconds=361),),
+            (runner.Suite("backend", name, arguments=("--extra",), seconds=360),))
+        for suites in invalid:
+            with self.subTest(suites=suites), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "new"
+                args = SimpleNamespace(partition="native-review", output=output)
+                with patch.object(runner, "SUITES", suites), \
+                        patch.object(runner, "require_offline_network") as offline, \
+                        patch.object(runner.subprocess, "Popen") as child, self.assertRaises(runner.Refused):
+                    runner.run(args)
+                offline.assert_not_called()
+                child.assert_not_called()
+                self.assertFalse(output.exists())
+
+    def test_native_review_execution_clips_360_seconds_to_remaining_600_second_partition(self):
+        native = next(suite for suite in runner.SUITES
+            if suite.script == "test_authority_native_jit_review_plan_replay.py")
+        synthetic = {"status": "passed", "exitCode": 0, "observedUnittestCounts": [14]}
+        for elapsed, expected_seconds in ((0, 360), (598, 2), (600, None)):
+            with self.subTest(elapsed=elapsed), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "results"
+                args = SimpleNamespace(python=sys.executable, node=sys.executable,
+                    dependency_root=None, output=output, partition="native-review")
+                with patch.object(runner, "require_offline_network"), \
+                        patch.object(runner.time, "monotonic", side_effect=[10, 10 + elapsed, 10 + elapsed]), \
+                        patch.object(runner, "run_process", return_value=synthetic) as run, patch("builtins.print"):
+                    self.assertEqual(runner.run(args), int(expected_seconds is None))
+                if expected_seconds is None:
+                    run.assert_not_called()
+                else:
+                    run.assert_called_once()
+                    self.assertEqual(run.call_args.kwargs["seconds"], expected_seconds)
+                    self.assertEqual(run.call_args.args[0], [str(Path(sys.executable).resolve()), "-B",
+                        str(runner.ROOT / "scripts" / native.script)])
+                receipt = json.loads((output / "result.json").read_text())
+                self.assertEqual((receipt["partition"], receipt["maximumSeconds"], receipt["totalSuiteCount"]),
+                    ("native-review", 600, 113))
+                self.assertEqual([suite["script"] for suite in receipt["suites"]], [native.script])
+                self.assertEqual(receipt["suites"][0]["status"],
+                    "not_run_budget" if expected_seconds is None else "passed")
 
     def test_revocation_proof_bundle_deadline_preserves_roster_and_partition_budget(self):
         selected, budget = runner.partition_suites("python-2")
@@ -592,7 +655,9 @@ class RunnerTests(unittest.TestCase):
         components, signers = value.split("\n  signers:\n", 1)
         self.assertIn("\n  components:\n", components)
         self.assertIn("fail-fast: false", components)
-        self.assertIn("partition: [python-1, python-2, python-3, node]", components)
+        matrices = re.findall(r"(?m)^        partition: \[([^\]\n]+)\]$", components)
+        self.assertEqual(matrices, ["python-1, python-2, python-3, native-review, node"])
+        self.assertEqual(tuple(matrices[0].split(", ")), runner.PARTITIONS[1:])
         self.assertIn('--partition "${{ matrix.partition }}"', components)
         self.assertIn("timeout --kill-after=10s 660s docker run", components)
         self.assertIn("name: ordinary-component-results-${{ matrix.partition }}", components)

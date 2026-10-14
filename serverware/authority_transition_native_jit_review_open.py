@@ -266,6 +266,25 @@ def evaluate_on_work(*, operation, request, read_originals, session_token_origin
         current_root_enrollment_original, authn_policy, trust_policy, live_window, read_budget, work,
         authorization_original=None, preparation_original=None):
     """Replay real admitted originals and derive effects; never sign a grant/ACK."""
+    effects, _reads = _evaluate_with_reads_on_work(operation=operation, request=request,
+        read_originals=read_originals, session_token_original=session_token_original,
+        challenge_original=challenge_original, configuration_payload=configuration_payload,
+        configuration_root_key=configuration_root_key, current_root_public_key=current_root_public_key,
+        current_root_enrollment_original=current_root_enrollment_original, authn_policy=authn_policy,
+        trust_policy=trust_policy, live_window=live_window, read_budget=read_budget, work=work,
+        authorization_original=authorization_original, preparation_original=preparation_original)
+    return effects
+
+
+def _evaluate_with_reads_on_work(*, operation, request, read_originals, session_token_original,
+        challenge_original, configuration_payload, configuration_root_key, current_root_public_key,
+        current_root_enrollment_original, authn_policy, trust_policy, live_window, read_budget, work,
+        authorization_original=None, preparation_original=None):
+    """Keep same-call authenticated inputs for the actual plan owner's writer.
+
+    This still invokes original replay itself. Neither a read verdict nor a
+    precomputed transition is an input; returned observations are not authority.
+    """
     from serverware import authority_native_jit_review_current_read as reader
     from serverware.authority_policy_canary_policy import full_configuration_digest
 
@@ -334,7 +353,7 @@ def evaluate_on_work(*, operation, request, read_originals, session_token_origin
                 "requestDigest": context.request_digest, "scope": scope,
                 "currentRootVectorDigest": head["vectorDigest"], "currentRootHeadDigest": head["headDigest"],
                 "currentRootSequence": head["sequence"], "issuedAtEpochNs": now,
-                "expiresAtEpochNs": expires, "canDecide": False}, 9 + 8 + 9)
+                "expiresAtEpochNs": expires, "canDecide": False}, 9 + 8 + 9), acquired
     with read_budget.stage("native-preparation") as stage:
         _same(values["authorization_sha256"], _sha(authorization_original))
         _same(values["preparation_sha256"], _sha(preparation_original))
@@ -358,4 +377,4 @@ def evaluate_on_work(*, operation, request, read_originals, session_token_origin
         result = _receipt_effects(context, scope=scope, authorization_original=authorization_original,
             preparation_original=preparation_original, review_digest=display_digest, expires=expires, work=stage)
         _require(session_support.clock._check_on_work(live_window, work=stage) < expires)
-        return result
+        return result, acquired

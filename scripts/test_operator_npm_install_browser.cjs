@@ -3,6 +3,7 @@
 // denies unknown requests/WebSockets. No real backend, registry, proxy, CA,
 // package manager, generated recipe or provider operation is exercised.
 const assert = require('node:assert/strict');
+const {withoutMutationReview} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {createHash} = require('node:crypto');
 const {readFile, readdir, mkdtemp} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
@@ -42,7 +43,7 @@ async function privateSurfaces(page, held = false) {
     local: Object.entries(localStorage), session: Object.entries(sessionStorage)}));
   assert(!JSON.stringify(surfaces).includes(PROVIDER), 'provider token never enters browser surfaces');
   assert(!surfaces.html.includes(TOKEN) && !surfaces.text.includes(TOKEN), 'app token stays out of text/HTML');
-  assert.deepEqual(surfaces.local, []); assert.deepEqual(surfaces.session, []);
+  assert.deepEqual(surfaces.local, []); assert.deepEqual(withoutMutationReview(surfaces.session), []);
   for (const input of surfaces.inputs) if (input.value.includes(TOKEN)) {
     assert(held); assert.equal(input.id, 'client-token'); assert.equal(input.type, 'password'); assert.equal(input.value, TOKEN);
   }

@@ -161,10 +161,16 @@ def private_configuration(raw, application, rule, token):
     return value
 
 
-def validate_browser(value, *, get_count=None):
+def validate_browser(value, *, get_count=None, document_count=None):
+    recovery = {key: 1 for key in ("lostReplyCount", "abortedRequests", "networkConsoleErrors", "reloadCount", "acknowledgements")}
+    recovery.update({key: True for key in ("markerBeforeDispatch", "holdBeforeReload", "holdAfterReload",
+        "freshCatalogReviewed", "reusedSavedCredential", "privateStorageClean")})
     expected = {"postCount": 6, "pageErrors": 0, "consoleErrors": 0, "refusedRequests": 0,
-        "downloadCount": 1, "downloadDeleted": True, "tokenCleared": True, "steps": STEPS}
+        "documentCount": 2, "downloadCount": 1, "downloadDeleted": True, "tokenCleared": True,
+        "steps": STEPS, "credentialRecovery": recovery}
     require(type(value) is dict and set(value) == set(expected) | {"getCount"}
             and all(encoded(value[key]) == encoded(item) for key, item in expected.items())
             and type(value["getCount"]) is int and 1 <= value["getCount"] <= 80
-            and (get_count is None or value["getCount"] == get_count), "browser terminal observations refused")
+            and (get_count is None or value["getCount"] == get_count)
+            and (document_count is None or value["documentCount"] == document_count),
+            "browser terminal observations refused")

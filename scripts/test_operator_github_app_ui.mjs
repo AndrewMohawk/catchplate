@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 const require = createRequire(import.meta.url);
+const {mutationReviewStorage} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {context, clone, IDS} = require('./test_operator_npm_ui.cjs');
 const {credential, application, rule} = require('./test_operator_catalog_browser.cjs');
 const {publicCatalog, digest} = require('./test_operator_ordinary_modes_browser.cjs');
@@ -71,7 +72,8 @@ async function fixture(options = {}) {
   const created = []; const createElement = current.dom.createElement;
   current.dom.createElement = tag => { const node = createElement(tag); created.push(node); return node; };
   const forbidden = kind => { violations.push(kind); throw new Error('Forbidden test effect'); };
-  for (const name of ['sessionStorage', 'localStorage']) Object.defineProperty(current.value, name, {get: () => forbidden('storage')});
+  current.value.sessionStorage = mutationReviewStorage();
+  Object.defineProperty(current.value, 'localStorage', {get: () => forbidden('storage')});
   current.value.AbortSignal = {timeout: value => { assert.equal(value, 30000); return undefined; }};
   current.value.TextEncoder = TextEncoder; current.value.clearTimeout = () => {};
   current.value.setTimeout = () => forbidden('timer');

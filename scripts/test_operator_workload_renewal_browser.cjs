@@ -2,6 +2,7 @@
 // Reuses the existing real-renderer/intercepted-catalog fixture; no live API,
 // provider, proxy, private key, token issuance or deployment is exercised.
 const assert = require('node:assert/strict');
+const {withoutMutationReview} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {createHash} = require('node:crypto');
 const {readFile, mkdtemp} = require('node:fs/promises');
 const {join} = require('node:path');
@@ -59,7 +60,7 @@ async function noPrivateMaterial(page) {
     fields: [...document.querySelectorAll('input,textarea')].map(node => node.value), local: Object.entries(localStorage), session: Object.entries(sessionStorage)}));
   assert(!JSON.stringify(value).includes(PRIVATE));
   assert.equal(await page.locator('#client-token').inputValue(), '');
-  assert.equal(value.local.length, 0); assert.equal(value.session.length, 0);
+  assert.equal(value.local.length, 0); assert.equal(withoutMutationReview(value.session).length, 0);
 }
 async function fixture(browser, options, exercise) {
   return baseFixture(browser, {credentials: [credential({secret: PRIVATE})],

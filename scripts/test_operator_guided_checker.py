@@ -39,8 +39,11 @@ def frame(identifier, method="GET", path="/", value=None):
 
 
 def browser():
-    return {"postCount": 6, "getCount": 14, "pageErrors": 0, "consoleErrors": 0, "refusedRequests": 0,
+    return {"postCount": 6, "getCount": 14, "documentCount": 2, "pageErrors": 0, "consoleErrors": 0, "refusedRequests": 0,
         "downloadCount": 1, "downloadDeleted": True, "tokenCleared": True,
+        "credentialRecovery": {"lostReplyCount": 1, "abortedRequests": 1, "networkConsoleErrors": 1,
+            "reloadCount": 1, "acknowledgements": 1, "markerBeforeDispatch": True, "holdBeforeReload": True,
+            "holdAfterReload": True, "freshCatalogReviewed": True, "reusedSavedCredential": True, "privateStorageClean": True},
         "steps": ["credential", "application", "permission", "download", "proxy_success", "rule_revoked",
                   "proxy_denied", "application_revoked", "credential_revoked"]}
 
@@ -385,11 +388,50 @@ class GuidedProtocolTests(unittest.TestCase):
             with self.assertRaises(CheckFailure): wire.decode(text, 16)
 
     def test_browser_completion_is_positive_closed_and_type_exact(self):
-        wire.validate_browser(browser(), get_count=14)
+        wire.validate_browser(browser(), get_count=14, document_count=2)
         for key, change in (("postCount", 5), ("pageErrors", False), ("downloadDeleted", 1),
-                            ("tokenCleared", False), ("getCount", 15), ("steps", []), ("secret", "private-canary")):
+                            ("tokenCleared", False), ("getCount", 15), ("documentCount", 1),
+                            ("documentCount", True), ("steps", []), ("secret", "private-canary")):
             with self.subTest(key=key), self.assertRaises(CheckFailure):
-                wire.validate_browser({**browser(), key: change}, get_count=14)
+                wire.validate_browser({**browser(), key: change}, get_count=14, document_count=2)
+        with self.assertRaises(CheckFailure):
+            wire.validate_browser(browser(), get_count=14, document_count=1)
+
+    def test_reload_recovery_requires_every_actual_closed_observation(self):
+        original = browser()
+        for key, value in original["credentialRecovery"].items():
+            for invalid in (False, 0, 2, "1", None):
+                changed = deepcopy(original)
+                changed["credentialRecovery"][key] = invalid
+                with self.subTest(key=key, invalid=invalid), self.assertRaises(CheckFailure):
+                    wire.validate_browser(changed)
+            changed = deepcopy(original)
+            del changed["credentialRecovery"][key]
+            with self.subTest(missing=key), self.assertRaises(CheckFailure):
+                wire.validate_browser(changed)
+            changed = deepcopy(original)
+            changed["credentialRecovery"][key] = 1 if type(value) is bool else True
+            with self.subTest(type=key), self.assertRaises(CheckFailure):
+                wire.validate_browser(changed)
+        changed = deepcopy(original)
+        changed["credentialRecovery"]["private"] = "private-canary"
+        with self.assertRaises(CheckFailure):
+            wire.validate_browser(changed)
+
+    def test_reload_after_one_committed_save_never_reopens_credential_post(self):
+        protocol = self.protocol()
+        first = self.create_key(protocol)
+        protocol.admit(first, INITIAL)
+        current = {"revision": 2, "policy": INITIAL["policy"]}
+        protocol.identifiers["credential"] = IDS["credential"]
+        protocol.admit(frame(3), current)  # The same browser tab's one reload.
+        protocol.admit(frame(4, path=wire.CATALOG), current)
+        retry = deepcopy(first); retry["id"] = 5
+        retry["body"] = base64.b64encode(wire.encoded({**wire.document(wire.decode(first["body"], 8192)),
+            "expected_revision": 2})).decode()
+        with self.assertRaises(CheckFailure):
+            protocol.admit(retry, current)
+        self.assertEqual((protocol.documents, protocol.posts), (2, 1))
 
     def test_real_wire_and_audit_pair_shape_matches_attempt_not_list_order(self):
         rows = audit_rows()

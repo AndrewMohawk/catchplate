@@ -2,6 +2,7 @@
 // Actual public JS with inert DOM and intercepted fetch. No browser, network,
 // backend, proxy, private-key creation, token issuance or deployment.
 const assert = require('node:assert/strict');
+const {mutationReviewStorage} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {readFileSync} = require('node:fs');
 const {resolve} = require('node:path');
 const {webcrypto, createHash} = require('node:crypto');
@@ -85,7 +86,7 @@ async function fixture(options = {}) {
     if (options.result) options.result(result);
     return response(result);
   };
-  const c = context({element: node, fetch, AbortSignal, setTimeout: () => 1, clearTimeout() {},
+  const c = context({element: node, fetch, AbortSignal, sessionStorage: mutationReviewStorage(), setTimeout: () => 1, clearTimeout() {},
     Option: class extends Node { constructor(text, value) { super(); this.textContent = text; this.value = value; } },
     document: {getElementById: node}, location: {hash: '#applications', origin: 'https://operator.example.test'},
     window: {addEventListener(name, callback) { events[name] = callback; }, confirm(text) {

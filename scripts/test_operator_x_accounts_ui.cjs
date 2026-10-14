@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Inert DOM and synthetic fetch only. No browser, provider, consent or post.
 const assert = require('node:assert/strict');
+const {MUTATION_REVIEW_KEY, MUTATION_REVIEW_VALUE} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {readFileSync} = require('node:fs');
 const {resolve} = require('node:path');
 const vm = require('node:vm');
@@ -32,26 +33,35 @@ function catalog() {
   const value = rawCatalog({credentials: [account()], rules: [postRule()], capability: null, allowed: ['https://api.x.com']});
   value.capabilities.x_oauth = cap(); value.capabilities.x_post = postCap(); return value;
 }
-function fixture({saved = null, returned = null, response = operation(), onFetch = null, value = catalog()} = {}) {
+function fixture({saved = null, returned = null, response = operation(), onFetch = null, value = catalog(), catalogResponse = null} = {}) {
   const f = context();
   for (const name of ['workspace_upstreams.js', 'workspace_x_accounts.js', 'workspace_x_post.js', 'workspace_x_configuration.js'])
     vm.runInContext(readFileSync(resolve(__dirname, '../serverware/operator_demo_web', name), 'utf8'), f.value, {timeout: 2000});
-  const storage = new Map(saved === null ? [] : [[KEY, saved]]); const calls = []; const navigations = []; const replacements = [];
+  const storage = new Map(saved === null ? [] : [[KEY, saved]]); const calls = [], catalogReads = []; const navigations = []; const replacements = [];
   Object.assign(f.value, {sessionStorage: {getItem: key => storage.get(key) ?? null, setItem: (key, val) => storage.set(key, val), removeItem: key => storage.delete(key)},
-    AbortSignal: {timeout: () => undefined}, clearTimeout() {}, crypto: {randomUUID: () => OP},
+    AbortSignal: {timeout: () => undefined}, clearTimeout() {},
+    setTimeout(_callback, delay) { assert.equal(delay, 2000); return 0; }, // Admit, never run, bounded catalog activation polling.
+    crypto: {randomUUID: () => OP},
     location: {origin: ORIGIN, protocol: 'https:', hash: '#overview', href: ORIGIN + '/' + (returned ? '?serverware_x_operation=' + returned : '') + '#overview',
       assign: url => navigations.push(url)}, history: {replaceState: (_a, _b, url) => replacements.push(url)},
     fetch: async (path, init) => {
       assert.equal(init.credentials, 'same-origin'); assert.equal(init.cache, 'no-store'); assert.equal(init.redirect, 'error');
-      const call = {path, method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null}; calls.push(call);
+      const call = {path, method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null};
+      // Real core refresh advances its private freshness epoch. Count these
+      // separately from provider operations, rather than replacing refresh with
+      // a no-op that could falsely allow acknowledgement against stale state.
+      if (path === '/api/operator-demo/catalog') {
+        assert.equal(call.method, 'GET'); assert.equal(call.body, null); catalogReads.push(call);
+        return {ok: true, status: 200, headers: {get: () => 'application/json'}, json: async () => clone(catalogResponse ? catalogResponse() : value)};
+      }
+      calls.push(call);
       const result = onFetch ? await onFetch(call) : response;
       return {ok: true, status: 200, headers: {get: () => 'application/json'}, json: async () => clone(result)};
     }});
   const workspace = f.run('createOperatorWorkspace()');
   workspace.state.catalog = f.run('projectCatalog(input)', value);
-  workspace.refresh = async () => { workspace.emit(); return true; };
   f.value.workspace = workspace; f.value.apps = {}; f.value.connect = {selectXAccountCredential: id => navigations.push('selected:' + id)};
-  return {...f, storage, calls, navigations, replacements, workspace, start: () => f.run('createXAccountsView(workspace, apps, connect)'),
+  return {...f, storage, calls, catalogReads, navigations, replacements, workspace, start: () => f.run('createXAccountsView(workspace, apps, connect)'),
     node: id => f.dom.nodes.get(id) || f.dom.getElementById('mutation-review').descendants().find(node => node.id === id),
     event: async id => f.dom.getElementById(id).events.click?.()};
 }
@@ -92,8 +102,11 @@ const tests = [
     const f = fixture({saved: OP}); f.start(); await f.event('x-account-check');
     assert.deepEqual(f.calls, [{path: '/api/operator-demo/oauth/x/operations/' + OP, method: 'GET', body: null}]);
     assert.equal(f.workspace.state.consentHold, false); assert.equal(f.workspace.state.uncertain, true);
-    await f.event('x-account-acknowledge'); assert.equal(f.storage.size, 0); assert.equal(f.calls.length, 1);
-    assert.equal(f.workspace.state.uncertain, true); await f.event('mutation-review-confirm');
+    await f.event('x-account-acknowledge'); assert.equal(f.storage.has(KEY), false); assert.equal(f.calls.length, 1);
+    assert.deepEqual([...f.storage], [[MUTATION_REVIEW_KEY, MUTATION_REVIEW_VALUE]]);
+    assert.equal(f.workspace.state.uncertain, true);
+    await f.workspace.refresh({manual: true}); assert(f.catalogReads.length >= 1);
+    await f.event('mutation-review-confirm'); assert.equal(f.storage.size, 0);
     assert.equal(f.workspace.state.uncertain, false); await f.event('x-account-use');
     assert.deepEqual(f.navigations, ['selected:' + IDS.credential]);
     const reload = fixture(); reload.start(); assert.equal(reload.workspace.state.busy, false); assert.equal(reload.calls.length, 0);
@@ -229,7 +242,7 @@ const tests = [
   }],
   ['actual saved-account wizard grants only fixed posting and recovers pending-null policy without replay', async () => {
     const initial = catalog(); initial.access_rules = [];
-    const f = fixture({value: initial, onFetch: call => {
+    const f = fixture({value: initial, catalogResponse: () => pending, onFetch: call => {
       if (call.method === 'GET') { assert.equal(call.path, '/api/operator-demo/catalog'); return pending; }
       assert.equal(call.path, '/api/operator-demo/access-rules/x-post'); assert.equal(call.method, 'POST');
       assert.deepEqual(call.body, {name: 'Publish text · @fixture_user', application_id: IDS.application, credential_id: IDS.credential,

@@ -454,14 +454,102 @@ function projectCatalog(value) {
     credentials, applications, access_rules: accessRules, limits: value.limits, capabilities,
     observed_activity: projectObservedAccountActivity(value.observed_activity, credentials, applications, accessRules)};
 }
+// This is a same-tab warning, not an operation receipt or a retry journal. Its
+// only value is a fixed public constant: never retain a route, resource ID,
+// message, request body, credential or one-time token in browser storage.
+function createOperatorMutationRecovery() {
+  const key = 'serverware.operator.mutation.review.v1', value = 'required';
+  let retained = null, blocked = false;
+  try {
+    retained = sessionStorage.getItem(key);
+    if (retained !== null && retained !== value) throw new Error();
+  } catch (_) { blocked = true; }
+  function retain() {
+    if (blocked) return false;
+    try {
+      if (sessionStorage.getItem(key) !== retained) throw new Error();
+      if (retained === null) {
+        sessionStorage.setItem(key, value);
+        if (sessionStorage.getItem(key) !== value) throw new Error();
+        retained = value;
+      }
+      return true;
+    } catch (_) { blocked = true; return false; }
+  }
+  function retire() {
+    if (blocked) return false;
+    try {
+      if (sessionStorage.getItem(key) !== retained) throw new Error();
+      if (retained !== null) {
+        sessionStorage.removeItem(key);
+        if (sessionStorage.getItem(key) !== null) throw new Error();
+        retained = null;
+      }
+      return true;
+    } catch (_) { blocked = true; return false; }
+  }
+  return {retain, retire, pending: () => retained !== null, blocked: () => blocked};
+}
+// The four ordinary callers without a specialized receipt callback still need
+// an exact saved-resource join. Policy activation may advance between the POST
+// and GET; it is observation, not part of the durable resource identity.
+function operatorOrdinaryMutationConfirmation(path, body, before) {
+  const contract = {'credentials/revoke': ['credentials', 'credential'],
+    'applications/revoke': ['applications', 'application'], 'access-rules': ['access_rules', 'access_rule'],
+    'access-rules/revoke': ['access_rules', 'access_rule']}[path];
+  const invalid = () => operatorError('The exact saved change could not be confirmed. Review refreshed state; do not repeat the request.');
+  if (!contract) throw invalid();
+  const [collection, key] = contract, creating = path === 'access-rules';
+  const submitted = JSON.parse(JSON.stringify(body));
+  const affected = path === 'applications/revoke' ? before.access_rules.filter(item =>
+    item.status === 'active' && item.application_id === body.id).map(item => item.id).sort() : [];
+  const changesPolicy = collection === 'access_rules' || affected.length > 0;
+  // The catalog projection intentionally omits record.version and rotation
+  // timestamps. Exact catalog revision + policy joins below bind the saved
+  // snapshot instead. AWS expiry, enforcement and access status are live
+  // observations and may change between POST and GET without another save.
+  const stable = item => Object.fromEntries(Object.entries(item).filter(([name, value]) =>
+    value !== undefined && !['version', 'enforcement', 'access_status', 'token_rotated_at', 'expired'].includes(name)));
+  let received = null;
+  return {
+    receive(result) {
+      const item = result?.[key], policy = result?.policy;
+      if (!result || Object.keys(result).some(name => ![key, 'revision', 'policy',
+          ...(path === 'applications/revoke' ? ['affected_rule_ids'] : [])].includes(name)) ||
+          result.revision !== before.revision + 1 || !Number.isSafeInteger(policy?.sequence) ||
+          policy.sequence !== before.policy.sequence + Number(changesPolicy) ||
+          !/^sha256:[0-9a-f]{64}$/.test(policy.policy_hash || '') ||
+          (policy.policy_hash !== before.policy.policy_hash) !== changesPolicy ||
+          !['active', 'pending'].includes(policy.activation) || !item ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(item.id || '') ||
+          item.status !== (creating ? 'active' : 'revoked') ||
+          (creating ? before[collection].some(row => row.id === item.id) || item.route_id !== 'operator.' + item.id ||
+            !Object.entries(submitted).every(([name, value]) => operatorExact(item[name], value)) :
+            item.id !== submitted.id || !before[collection].some(row => row.id === item.id && row.status === 'active')) ||
+          Object.hasOwn(result, 'affected_rule_ids') && !operatorExact([...result.affected_rule_ids].sort(), affected)) throw invalid();
+      received = {item: stable(item), revision: result.revision, hash: policy.policy_hash, sequence: policy.sequence};
+    },
+    confirm(after) {
+      const item = after?.[collection].find(row => row.id === received?.item.id);
+      if (!received || !item || after.revision !== received.revision || after.policy.policy_hash !== received.hash ||
+          after.policy.sequence !== received.sequence || !operatorExact(stable(item), received.item) ||
+          affected.some(id => !after.access_rules.some(rule => rule.id === id && rule.status === 'revoked'))) throw invalid();
+    }
+  };
+}
 function createOperatorWorkspace() {
-  let writeInFlight = false, authenticationRequired = false;
+  const recovery = createOperatorMutationRecovery();
+  let writeInFlight = false, authenticationRequired = false, mutationLifetime = 0;
   const consentOwners = new Set();
   const state = {catalog: null, consentHold: false, uncertain: false,
     get busy() { return writeInFlight || this.consentHold; }, set busy(value) { writeInFlight = value; }};
   const listeners = [], authenticationListeners = []; let epoch = 0; let poll; let polls = 0;
+  let reviewAfterEpoch = 0, reviewedCatalogEpoch = 0;
+  const canAcknowledge = () => state.uncertain && state.catalog && !state.busy &&
+    !recovery.blocked() && reviewedCatalogEpoch > reviewAfterEpoch;
   const emit = () => {
     listeners.forEach(callback => callback());
+    element('mutation-review-confirm').disabled = !canAcknowledge();
     if (!state.catalog) for (const id of ['credentials-list', 'applications-list', 'access-rules-list']) {
       const list = element(id);
       for (const control of list.querySelectorAll('[data-action], select')) control.disabled = true;
@@ -475,7 +563,7 @@ function createOperatorWorkspace() {
   }
   function loaded() { const policy = state.catalog?.policy; return Boolean(policy && policy.activation === 'active' && policy.loaded_policy_hash === policy.policy_hash); }
   function authenticationLost() {
-    ++epoch; clearTimeout(poll); authenticationRequired = true; state.catalog = null;
+    ++mutationLifetime; ++epoch; clearTimeout(poll); authenticationRequired = true; state.catalog = null;
     element('load-error-text').textContent = 'Your session or request origin could not be verified. Reload and sign in again.';
     element('load-error').hidden = false; element('mutation-review-confirm').disabled = true;
     try { authenticationListeners.forEach(callback => callback()); } finally { emit(); }
@@ -505,8 +593,7 @@ function createOperatorWorkspace() {
     try {
       const next = projectCatalog(await api('/api/operator-demo/catalog'));
       if (version !== epoch) return false;
-      authenticationRequired = false; state.catalog = next; element('load-error').hidden = true;
-      element('mutation-review-confirm').disabled = !state.uncertain;
+      authenticationRequired = false; state.catalog = next; reviewedCatalogEpoch = version; element('load-error').hidden = true;
       emit();
       if (!loaded() && polls++ < 15) poll = setTimeout(() => refresh(), 2000);
       return true;
@@ -517,34 +604,75 @@ function createOperatorWorkspace() {
     }
   }
   function requireReview(message) {
+    recovery.retain();
+    reviewAfterEpoch = epoch;
     state.uncertain = true; element('mutation-review').hidden = false;
-    element('mutation-review-text').textContent = message + ' No automatic retry was sent. Review the resource lists below before allowing another change. A lost one-time token cannot be recovered; replacing it requires explicit rotation.';
+    element('mutation-review-text').textContent = (recovery.blocked() ?
+      'This tab cannot safely retain or clear its public save-review warning. No further change is allowed. Reload with working session storage, then inspect saved state. ' : '') +
+      message + ' No automatic retry was sent. Refresh and review the resource lists below before allowing another change. A lost one-time token cannot be recovered; replacing it requires explicit rotation.';
     element('mutation-review-confirm').disabled = true;
     emit();
   }
-  async function mutate(path, body, statusId, onSuccess = () => {}) {
+  async function mutate(path, body, statusId, onSuccess) {
     if (!state.catalog || state.busy || state.uncertain) return false;
+    const clearPrivateBody = () => {
+      for (const name of ['secret', 'private_key_pem', 'access_key_id', 'secret_access_key', 'session_token'])
+        if (Object.hasOwn(body, name)) body[name] = '';
+    };
+    // Synchronous retain + readback must finish before fetch can dispatch. A
+    // storage refusal sends no request, including if setItem silently failed.
+    if (!recovery.retain()) {
+      clearPrivateBody();
+      const message = 'The public save-review warning could not be retained. No change request was sent.';
+      requireReview(message); element(statusId).textContent = message; return false;
+    }
+    let confirmation;
+    try { confirmation = onSuccess === undefined ? operatorOrdinaryMutationConfirmation(path, body, state.catalog) : null; }
+    catch (error) { clearPrivateBody(); requireReview(operatorMessage(error)); element(statusId).textContent = operatorMessage(error); return false; }
     const reviewed = {expected_revision: state.catalog.revision, expected_policy_hash: state.catalog.policy.policy_hash};
+    const lifetime = mutationLifetime;
     state.busy = true; ++epoch; clearTimeout(poll); emit(); element(statusId).textContent = 'Saving...';
     let success = false;
     try {
       const pending = api('/api/operator-demo/' + path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({...body, ...reviewed})});
-      for (const name of ['secret', 'private_key_pem', 'access_key_id', 'secret_access_key', 'session_token'])
-        if (Object.hasOwn(body, name)) body[name] = '';
-      const result = await pending; await onSuccess(result); success = true;
+      clearPrivateBody();
+      const result = await pending;
+      if (lifetime !== mutationLifetime) throw operatorError('The page or authenticated session changed while saving. Inspect saved state; no private reply was restored.');
+      if (confirmation) confirmation.receive(result); else await onSuccess(result);
+      if (lifetime !== mutationLifetime) throw operatorError('The page or authenticated session changed while confirming the save. Inspect saved state before another change.');
+      success = true;
       element(statusId).textContent = 'Saved. Refreshing the current state and proxy enforcement...';
     } catch (error) {
       requireReview(operatorMessage(error));
       element(statusId).textContent = operatorMessage(error);
-    } finally { for (const name of ['secret', 'private_key_pem', 'access_key_id', 'secret_access_key', 'session_token'])
-      if (Object.hasOwn(body, name)) body[name] = ''; }
-    await refresh(); state.busy = false; emit(); return success;
+    } finally { clearPrivateBody(); }
+    const refreshed = await refresh();
+    // A valid reply alone does not settle a failed catalog read. Known HTTP
+    // rejections retain the same review boundary; none is retried implicitly.
+    if (success && !state.uncertain) {
+      if (!refreshed) requireReview('The change was acknowledged, but refreshed saved state could not be confirmed.');
+      else {
+        try { if (confirmation) confirmation.confirm(state.catalog); }
+        catch (error) { success = false; requireReview(operatorMessage(error)); element(statusId).textContent = operatorMessage(error); }
+        if (!state.uncertain && !recovery.retire()) requireReview('The change was acknowledged, but its public save-review warning could not be cleared safely.');
+      }
+    }
+    state.busy = false; emit(); return success;
   }
   element('mutation-review-confirm').addEventListener('click', () => {
-    if (!state.catalog || state.busy) return;
+    if (!canAcknowledge()) return;
+    // This retires only our warning. Provider operation references and each
+    // independent consent owner's hold remain under their existing controller.
+    if (!recovery.retire()) { requireReview('The public save-review warning could not be cleared safely.'); return; }
     state.uncertain = false; element('mutation-review').hidden = true; emit();
   });
-  window.addEventListener('pagehide', () => clearTimeout(poll));
+  window.addEventListener('pagehide', () => {
+    ++mutationLifetime; ++epoch;
+    clearTimeout(poll);
+    if (writeInFlight) requireReview('A save was in progress when this page was left. Its outcome must be reviewed.');
+  });
+  if (recovery.pending() || recovery.blocked())
+    requireReview('An earlier save or saved-state review was not completed in this tab. Inspect the current resources; do not assume the change failed.');
   return {state, api, refresh, mutate, requireReview, ready, loaded, emit, authenticationLost, writeInFlight: () => writeInFlight,
     onAuthenticationLost: callback => authenticationListeners.push(callback),
     setConsentHold(value, owner = 'google-consent') {

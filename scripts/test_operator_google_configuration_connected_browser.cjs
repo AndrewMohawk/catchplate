@@ -2,6 +2,7 @@
 // One actual browser form -> byte-preserving stdin -> real full ASGI story.
 // No provider, restart, synthetic successful API response or deployed-TCP claim.
 const assert = require('node:assert/strict');
+const {withoutMutationReview} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {createHash} = require('node:crypto');
 const {spawn, execFileSync} = require('node:child_process');
 const {mkdtemp, writeFile, realpath, stat} = require('node:fs/promises');
@@ -146,13 +147,14 @@ async function noMaterial(page, draft = false) {
     local: Object.entries(localStorage), session: Object.entries(sessionStorage)}));
   clean(value.html); assert.deepEqual(value.local, []);
   for (const item of value.fields) if (!(draft && item.id === 'google-configuration-client-secret')) clean(item.value);
-  assert(value.session.length <= 1);
-  for (const [key, raw] of value.session) {
+  const references = withoutMutationReview(value.session);
+  assert(references.length <= 1);
+  for (const [key, raw] of references) {
     assert.equal(key, STORAGE); clean(raw); assert(!raw.includes(CLIENT));
     const ref = JSON.parse(raw); assert.deepEqual(Object.keys(ref).sort(), ['kind', 'operation_id']);
     assert(UUID.test(ref.operation_id) && ['prepare', 'cancel'].includes(ref.kind));
   }
-  return value.session.length ? JSON.parse(value.session[0][1]) : null;
+  return references.length ? JSON.parse(references[0][1]) : null;
 }
 
 async function story(context, bridge, directory, evidence, progress) {

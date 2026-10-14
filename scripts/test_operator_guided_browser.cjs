@@ -7,7 +7,8 @@ const {Readable} = require('node:stream');
 const groups = [];
 const test = (name, run) => groups.push({name, run});
 const {readyFrame, requestFrame, responseFrame, continueFrame, checkerFailureFrame, stderrCollector,
-  failureReceipt, publicFailureReceipt, applicationRevocationDialog, downloadedBytes, validateChecker} =
+  failureReceipt, publicFailureReceipt, applicationRevocationDialog, downloadedBytes, validateChecker,
+  credentialReplyFault, recoveryEvidence, validateRecovery} =
   require('./check_operator_guided_browser.cjs');
 const origin = 'https://serverware-guided.example.com', prefix = '/api/operator-demo';
 const digest = 'sha256:' + 'a'.repeat(64), runId = 'operator-check-' + 'b'.repeat(32);
@@ -29,8 +30,11 @@ const ready = () => ({kind: 'ready', schema: 'serverware.privateGuidedBrowser/v1
 const request = (url, method = 'GET', body = null, headers = {}) => ({url: () => url, method: () => method,
   postDataBuffer: () => body, headers: () => headers});
 const headers = {origin, 'content-type': 'application/json'};
-const browser = () => ({postCount: 6, getCount: 12, pageErrors: 0, consoleErrors: 0, refusedRequests: 0,
-  downloadCount: 1, downloadDeleted: true, tokenCleared: true, steps: [...steps]});
+const recovery = () => ({lostReplyCount: 1, abortedRequests: 1, networkConsoleErrors: 1, reloadCount: 1,
+  acknowledgements: 1, markerBeforeDispatch: true, holdBeforeReload: true, holdAfterReload: true,
+  freshCatalogReviewed: true, reusedSavedCredential: true, privateStorageClean: true});
+const browser = () => ({postCount: 6, getCount: 12, documentCount: 2, pageErrors: 0, consoleErrors: 0, refusedRequests: 0,
+  downloadCount: 1, downloadDeleted: true, tokenCleared: true, steps: [...steps], credentialRecovery: recovery()});
 function result() {
   const eventCounts = Object.fromEntries(['credential', 'application', 'access_rule'].flatMap(kind =>
     ['created', 'revoked'].map(action => ['operator_catalog.' + kind + '.' + action, 1])));
@@ -93,6 +97,52 @@ test('response admits bounded original bytes and rejects redirect/cookie/encodin
     const changed = clone(value); change(changed); assert.throws(() => responseFrame(changed, 2, 201));
   }
 });
+test('lost committed reply admits only one exact request failure and its exact network console event', () => {
+  const failedRequest = (changes = {}) => ({...request(origin + routes[0], 'POST'),
+    failure: () => ({errorText: 'net::ERR_FAILED'}), ...changes});
+  const consoleEvent = (changes = {}) => ({type: () => 'error', location: () => ({url: origin + routes[0]}),
+    text: () => 'Failed to load resource: net::ERR_FAILED', ...changes});
+  for (const consoleFirst of [false, true]) {
+    const fault = credentialReplyFault(), selected = failedRequest(), message = consoleEvent();
+    assert.equal(fault.requestFailed(selected), false); assert.equal(fault.consoleError(message), false);
+    assert.throws(() => fault.finish()); fault.arm(selected); assert.throws(() => fault.arm(selected));
+    assert.throws(() => fault.finish());
+    // Same URL/method does not identify the selected physical browser request.
+    assert.equal(fault.requestFailed(failedRequest()), false);
+    for (const change of [{type: () => 'warning'}, {location: () => ({url: origin + routes[1]})},
+      {location: () => ({url: origin + routes[0] + '?other=1'})}, {location: () => ({})},
+      {text: () => 'Failed to load resource: net::ERR_CONNECTION_RESET'}, {text: () => 'private-canary'}])
+      assert.equal(fault.consoleError(consoleEvent(change)), false);
+    const original = selected.failure;
+    for (const value of [null, {errorText: 'net::ERR_ABORTED'}, {errorText: 'private-canary'}]) {
+      selected.failure = () => value; assert.equal(fault.requestFailed(selected), false);
+    }
+    selected.failure = original;
+    if (consoleFirst) assert.equal(fault.consoleError(message), true);
+    assert.equal(fault.requestFailed(selected), true); assert.equal(fault.requestFailed(selected), false);
+    if (!consoleFirst) assert.equal(fault.consoleError(message), true);
+    assert.equal(fault.consoleError(message), false); fault.finish();
+    assert.equal(fault.matchesRequest(selected), false); assert.equal(fault.matchesConsole(message), false);
+    assert.equal(fault.requestFailed(selected), false); assert.equal(fault.consoleError(message), false);
+    assert.throws(() => fault.finish()); assert.throws(() => fault.arm(failedRequest()));
+  }
+  for (const selected of [failedRequest({method: () => 'GET'}), failedRequest({url: () => origin + routes[1]}),
+    failedRequest({url: () => 'https://other.example.com' + routes[0]})])
+    assert.throws(() => credentialReplyFault().arm(selected));
+});
+test('recovery acceptance requires every typed observation and never accepts missing or arbitrary fields', () => {
+  assert.deepEqual(recoveryEvidence(true), recovery()); assert.equal(validateRecovery(recovery()).reloadCount, 1);
+  assert.throws(() => validateRecovery(recoveryEvidence()));
+  for (const [key, value] of Object.entries(recovery())) {
+    for (const invalid of [0, false, 2, '1', null, typeof value === 'boolean' ? 1 : true])
+      assert.throws(() => validateRecovery({...recovery(), [key]: invalid}));
+    const missing = recovery(); delete missing[key]; assert.throws(() => validateRecovery(missing));
+  }
+  assert.throws(() => validateRecovery({...recovery(), private: 'private-canary'}));
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname,
+    '../serverware/operator_demo_web/workspace_core.js'), 'utf8');
+  assert(source.includes("const key = 'serverware.operator.mutation.review.v1', value = 'required'"));
+});
 test('checkpoints bind checker continuation to the exact phase, frame, and created IDs', () => {
   const value = {kind: 'continue', id: 8, phase: 'revoke_rule', resourceIds: {...ids}};
   assert.equal(continueFrame(value, 8, 'revoke_rule', ids), value);
@@ -122,6 +172,10 @@ test('closed failure receipt never retains source errors or secret-bearing arbit
   const value = failureReceipt('private-canary', {postCount: 2, getCount: 'private-canary', pageErrors: 0,
     consoleErrors: 0, refusedRequests: 0, downloadCount: 1, error: 'private-canary'});
   assert.equal(value.stage, 'inputs'); assert.equal(value.getCount, null); assert(!JSON.stringify(value).includes('private-canary'));
+  const recoveryFailure = failureReceipt('credential_reload', {credentialRecovery: {
+    ...recovery(), private: 'private-canary', lostReplyCount: 'private-canary', holdAfterReload: 'private-canary'}});
+  assert.equal(recoveryFailure.stage, 'credential_reload'); assert.equal(recoveryFailure.credentialRecovery.lostReplyCount, null);
+  assert.equal(recoveryFailure.credentialRecovery.holdAfterReload, null); assert(!JSON.stringify(recoveryFailure).includes('private-canary'));
   // A terminal failure before ready has no request ID or pending checkpoint.
   const frame = {kind: 'result', result: {schema: 'serverware.privateGuidedCheck/v1', ok: false,
     error: 'guided_check_failed', stage: 'preflight', exceptionType: 'CheckFailure', failureSite: null}};
@@ -171,7 +225,9 @@ test('public failure projection validates canonical closed evidence and omits st
   assert(!JSON.stringify(projected).includes(digest));
   for (const change of [v => v.stage = 'private-canary', v => v.ok = true, v => v.error = 'private-canary',
     v => v.extra = 'private-canary', v => delete v.getCount, v => v.postCount = true,
-    v => v.postCount = 101, v => v.getCount = 0.5, v => v.checkerFailure.private = 'private-canary',
+    v => v.postCount = 101, v => v.getCount = 0.5, v => v.documentCount = true,
+    v => v.credentialRecovery.private = 'private-canary', v => v.credentialRecovery.reloadCount = 'private-canary',
+    v => v.credentialRecovery.holdAfterReload = 1, v => v.checkerFailure.private = 'private-canary',
     v => v.checkerFailure.failureSite.module = 'scripts.private_canary',
     v => v.checkerStderr.capturedBytes = 65537, v => v.checkerStderr.truncated = 1,
     v => v.checkerStderr.sha256 = 'private-canary']) {
@@ -198,6 +254,11 @@ test('terminal admits only exact public evidence and preserves no real-provider 
     v => v.audit.eventIds[0] = 'private-canary', v => v.audit.attemptIds = [], v => v.audit.chainVerified = false]) {
     const changed = result(); change(changed); assert.throws(() => validateChecker(changed, browser(), ids));
   }
+  for (const change of [v => v.documentCount = 1, v => v.credentialRecovery.acknowledgements = 0,
+    v => v.credentialRecovery.private = 'private-canary']) {
+    const observed = browser(); change(observed); const changed = result(); changed.browser = clone(observed);
+    assert.throws(() => validateChecker(changed, observed, ids));
+  }
 });
 test('client revocation retains the full current renewal warning and exact confirmation', () => {
   const prompt = applicationRevocationDialog(runId + '-app', ids.application);
@@ -214,7 +275,7 @@ test('client revocation retains the full current renewal warning and exact confi
 });
 
 async function main() {
-  assert.equal(groups.length, 11);
+  assert.equal(groups.length, 13);
   for (const {name, run} of groups) {
     await run();
     process.stdout.write('PASS ' + name + '\n');

@@ -33,7 +33,7 @@ const application = (changes = {}) => ({id: IDS.application, name: 'Reporting ap
 const rule = (changes = {}) => ({id: IDS.rule, name: 'Read status', status: 'active', application_id: IDS.application,
   credential_id: IDS.credential, route_id: 'operator.' + IDS.rule, upstream_url: UPSTREAM + '/v1/status', methods: ['GET'],
   request_fields: [], response_fields: ['id', 'status'], query_keys: [], allowed_headers: ['accept', 'user-agent'],
-  response_mode: 'projected_json', enforcement: 'active', created_at: new Date(NOW).toISOString(), ...changes});
+  response_mode: 'projected_json', credential_input: 'insert', enforcement: 'active', created_at: new Date(NOW).toISOString(), ...changes});
 
 function generatorChecks() {
   const {buildCurlCommand} = require('../serverware/operator_demo_web/app.js');

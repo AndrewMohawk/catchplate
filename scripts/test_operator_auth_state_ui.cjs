@@ -3,6 +3,7 @@
 // Actual workspace + notification + audit controllers, inert DOM, deterministic
 // deferred synthetic GETs. No browser, backend, network, provider or mutation.
 const assert = require('node:assert/strict');
+const {MUTATION_REVIEW_KEY, MUTATION_REVIEW_VALUE} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {readFileSync} = require('node:fs');
 const {resolve} = require('node:path');
 const vm = require('node:vm');
@@ -75,7 +76,7 @@ function fixture({retained = false} = {}) {
     assert.equal(delay, 2000, 'only catalog activation polling is expected');
     const entry = {id: ++timerId, callback, delay}; timers.set(entry.id, entry); allTimers.push(entry); return entry.id;
   }, sessionStorage: {getItem: key => storage.get(key) ?? null,
-    setItem(key, value) { storageWrites.push(['set', key]); storage.set(key, value); },
+    setItem(key, value) { storageWrites.push(['set', key, value]); storage.set(key, value); },
     removeItem(key) { storageWrites.push(['remove', key]); storage.delete(key); }},
   crypto: {randomUUID() { throw new Error('no operation may be created'); }},
   fetch(path, options) {
@@ -118,7 +119,10 @@ function fixture({retained = false} = {}) {
     verify(paths) {
       assert.deepEqual(faults, []); assert.equal(planned.length, 0, 'every planned response was consumed');
       assert.deepEqual(calls.map(call => call.path), paths); assert(calls.every(call => call.method === 'GET'));
-      assert.deepEqual(storageWrites, [], 'public recovery reference is neither replaced nor cleared');
+      assert.deepEqual(storageWrites.filter(([, key]) => key !== MUTATION_REVIEW_KEY), [],
+        'provider recovery reference is neither replaced nor cleared');
+      for (const entry of storageWrites) assert.deepEqual(entry, ['set', MUTATION_REVIEW_KEY, MUTATION_REVIEW_VALUE],
+        'only the exact public shared-review marker may be retained');
     }};
 }
 function auditCleared(f) {
@@ -189,9 +193,11 @@ const tests = [
     assert.equal(f.node('audit-list').children.length, 1); assert(!f.node('audit-more').hidden);
     f.workspace.requireReview('Synthetic mutation outcome remains unknown.');
     await f.notify({detail: PRIVATE}, 401); authHeld(f); await blockedAuditReads(f);
-    assert.equal(await f.workspace.mutate('credentials', {}, 'notifications-status'), false);
+    assert.equal(await f.workspace.mutate('credentials', {}, 'notifications-status',
+      () => assert.fail('authentication-held mutation must not reach success callback')), false);
     await f.catalog(); f.audit.open(); await flush(); auditCleared(f);
-    assert(f.workspace.state.uncertain); assert.equal(await f.workspace.mutate('credentials', {}, 'notifications-status'), false);
+    assert(f.workspace.state.uncertain); assert.equal(await f.workspace.mutate('credentials', {}, 'notifications-status',
+      () => assert.fail('uncertain mutation must not reach success callback')), false);
     f.expect(SEARCH, history('after-explicit-refresh')); await f.fire('audit-refresh');
     assert.equal(f.node('audit-list').children.length, 1); assert(text(f.node('audit-list')).includes('after-explicit-refresh'));
     f.expect(VERIFY, {ok: true, complete: true}); await f.fire('audit-verify');

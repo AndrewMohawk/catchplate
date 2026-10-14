@@ -2,6 +2,7 @@
 // Rendered, intercepted AWS custody UI only. Reuses the catalog/ordinary fixture
 // and its deny-all HTTP/WebSocket boundary; no backend, AWS, proxy or SDK proof.
 const assert = require('node:assert/strict');
+const {withoutMutationReview} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {createHash} = require('node:crypto');
 const {readFile, readdir, mkdtemp} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
@@ -43,7 +44,7 @@ async function privateAbsent(page) {
     fields: [...document.querySelectorAll('input,textarea')].map(node => node.value),
     local: Object.entries(localStorage), session: Object.entries(sessionStorage), writes: window.__awsStorageWrites}));
   for (const value of PRIVATE) assert(!JSON.stringify(surfaces).includes(value), 'write-only tuple or private error escaped');
-  assert.deepEqual(surfaces.local, []); assert.deepEqual(surfaces.session, []); assert.equal(surfaces.writes, 0);
+  assert.deepEqual(surfaces.local, []); assert.deepEqual(withoutMutationReview(surfaces.session), []); assert.equal(surfaces.writes, 0);
 }
 // Independent closed DTO oracle. Synthetic values are compared but never copied
 // to retained observations or assertion diagnostics. No production UI helper is used.
@@ -99,7 +100,11 @@ async function fixture(browser, options, exercise) {
     await controls.context.addInitScript(() => {
       window.__awsStorageWrites = 0;
       const original = Storage.prototype.setItem;
-      Storage.prototype.setItem = function(...args) { window.__awsStorageWrites++; return original.apply(this, args); };
+      Storage.prototype.setItem = function(...args) {
+        if (!(this === sessionStorage && args.length === 2 &&
+            args[0] === 'serverware.operator.mutation.review.v1' && args[1] === 'required')) window.__awsStorageWrites++;
+        return original.apply(this, args);
+      };
     });
     page.on('download', () => state.errors.push('unexpected download'));
     const handler = async route => {

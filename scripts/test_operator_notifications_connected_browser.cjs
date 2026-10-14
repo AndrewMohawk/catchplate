@@ -4,6 +4,7 @@
 // No synthetic successful API replies, live destinations, CA fetches or native
 // ceremonies. This is not browser TCP ingress or deployed acceptance evidence.
 const assert = require('node:assert/strict');
+const {withoutMutationReview} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {createHash} = require('node:crypto');
 const {spawn, execFileSync} = require('node:child_process');
 const {readFile, writeFile, mkdtemp, realpath, stat} = require('node:fs/promises');
@@ -227,8 +228,9 @@ async function cleanPage(page) {
     fields: [...document.querySelectorAll('input,textarea')].map(item => item.value),
     local: Object.entries(localStorage), session: Object.entries(sessionStorage)}));
   cleanValue(surfaces); assert.deepEqual(surfaces.local, []);
-  assert(surfaces.session.every(([key]) => key === STORAGE));
-  for (const [, value] of surfaces.session) {
+  const references = withoutMutationReview(surfaces.session);
+  assert(references.every(([key]) => key === STORAGE));
+  for (const [, value] of references) {
     const ref = JSON.parse(value);
     assert.deepEqual(Object.keys(ref).sort(), ['operation_id', 'kind', 'slot', 'expected_revision'].sort());
     assert(UUID.test(ref.operation_id) && ['save', 'test'].includes(ref.kind) && SLOTS.includes(ref.slot));

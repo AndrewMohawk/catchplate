@@ -2,6 +2,7 @@
 // Pure catalog/form/recipe controls with an inert DOM. No browser, application,
 // provider, HTTP, package manager, SDK or generated recipe is executed.
 const assert = require('node:assert/strict');
+const {mutationReviewStorage} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {readFileSync} = require('node:fs');
 const {resolve} = require('node:path');
 const {pathToFileURL} = require('node:url');
@@ -204,8 +205,9 @@ async function credentialSaveFixture(method, options = {}) {
     {connection_type: method === 'npm' ? 'npm_token_v1' : 'github_token_v1', provider_id: method === 'npm' ? 'npm' : 'github'})});
   const response = body => ({ok: true, status: 200, headers: {get: () => 'application/json'}, json: async () => clone(body)});
   Object.assign(current.value, {TextEncoder, clearTimeout() {}, AbortSignal: {timeout: () => undefined}});
-  for (const key of ['sessionStorage', 'localStorage']) Object.defineProperty(current.value, key,
-    {get() { forbidden.push(key); throw new Error('Storage is forbidden'); }});
+  current.value.sessionStorage = mutationReviewStorage();
+  Object.defineProperty(current.value, 'localStorage',
+    {get() { forbidden.push('localStorage'); throw new Error('Storage is forbidden'); }});
   current.value.fetch = async (path, init) => {
     assert.equal(init.credentials, 'same-origin'); assert.equal(init.cache, 'no-store'); assert.equal(init.redirect, 'error');
     if (!init.method) {

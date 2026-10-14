@@ -4,6 +4,7 @@
 // provider post, SDK, proxy or recipe is executed. Quota screenshots contain
 // only synthetic public data; private inputs and app-token fields are masked.
 const assert = require('node:assert/strict');
+const {withoutMutationReview} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {createHash} = require('node:crypto');
 const {execFileSync} = require('node:child_process');
 const {readFile, readdir, mkdtemp} = require('node:fs/promises');
@@ -87,7 +88,7 @@ async function privacy(page, id = null, configurationId = null) {
   for (const value of [SECRET, NONCE, CHALLENGE, 'https://x.com/i/oauth2/authorize?'])
     assert(!JSON.stringify(result).includes(value), 'private/transient consent material escaped to DOM or storage');
   assert.deepEqual(result.local, []);
-  assert.deepEqual(result.session, [...(id ? [[STORAGE, id]] : []), ...(configurationId ? [[CONFIG_STORAGE, configurationId]] : [])]);
+  assert.deepEqual(withoutMutationReview(result.session), [...(id ? [[STORAGE, id]] : []), ...(configurationId ? [[CONFIG_STORAGE, configurationId]] : [])]);
 }
 async function responsive(page) {
   for (const viewport of [{width: 1280, height: 960}, {width: 390, height: 844}]) {

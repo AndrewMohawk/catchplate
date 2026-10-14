@@ -3,6 +3,7 @@
 // target URL, continues/fetches a request, restarts a process, contacts Google,
 // starts consent or proves the connected configuration API/SQLite boundary.
 const assert = require('node:assert/strict');
+const {withoutMutationReview} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {createHash} = require('node:crypto');
 const {readFile, readdir, mkdtemp} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
@@ -92,13 +93,14 @@ async function noMaterial(page, {draft = false} = {}) {
   for (const item of surfaces.fields) if (!(draft && item.id === 'google-configuration-client-secret'))
     assert(!item.value.includes(SECRET), 'secret clears from every field after leaving the draft');
   assert.deepEqual(surfaces.local, [], 'no localStorage persistence');
-  for (const [key, encoded] of surfaces.session) {
+  const references = withoutMutationReview(surfaces.session);
+  for (const [key, encoded] of references) {
     assert.equal(key, STORAGE); const value = JSON.parse(encoded);
     assert.deepEqual(Object.keys(value).sort(), ['kind', 'operation_id']);
     assert(UUID.test(value.operation_id) && ['prepare', 'cancel'].includes(value.kind));
     assert(!encoded.includes(CLIENT) && !encoded.includes(SECRET) && !encoded.includes(PRIVATE));
   }
-  return surfaces.session.length ? JSON.parse(surfaces.session[0][1]) : null;
+  return references.length ? JSON.parse(references[0][1]) : null;
 }
 async function screenshot(page, directory, name) {
   await noMaterial(page);

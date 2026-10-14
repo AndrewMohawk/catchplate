@@ -3,6 +3,7 @@
 // adoption, provider request or proxy dispatch is exercised. The real renderer
 // consumes synthetic public DTOs; backend transaction/runtime proof is separate.
 const assert = require('node:assert/strict');
+const {withoutMutationReview} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {createHash} = require('node:crypto');
 const {execFileSync} = require('node:child_process');
 const {readFileSync} = require('node:fs');
@@ -98,7 +99,7 @@ async function noMaterial(page) {
     fields: [...document.querySelectorAll('input,textarea')].map(node => node.value), local: Object.entries(localStorage), session: Object.entries(sessionStorage)}));
   for (const value of [...PRIVATE, STATE]) assert(!JSON.stringify(surfaces).includes(value), 'provider material, OAuth state and raw errors never persist');
   assert.deepEqual(surfaces.local, []);
-  assert(surfaces.session.every(([key, value]) => key === STORAGE && UUID.test(value)), 'only a public exact recovery UUID may persist');
+  assert(withoutMutationReview(surfaces.session).every(([key, value]) => key === STORAGE && UUID.test(value)), 'only a public exact recovery UUID or shared review marker may persist');
   assert(!JSON.stringify(surfaces.session).includes('accounts.google.com'));
 }
 async function refreshCatalog(page) {
@@ -500,7 +501,8 @@ const tests = [
       assert.equal(state.catalogCalls, priorCatalogReads, 'a late unselected consent read cannot supersede selected recovery with another catalog refresh');
       // Clear only generic mutation uncertainty while the reauthorization hold
       // remains: its review-confirm control is intentionally ineffective.
-      assert(await page.locator('#credential-add').isDisabled()); await page.locator('#mutation-review-confirm').click();
+      assert(await page.locator('#credential-add').isDisabled()); assert(await page.locator('#mutation-review-confirm').isDisabled());
+      await page.locator('#mutation-review-confirm').dispatchEvent('click');
       assert(await page.locator('#mutation-review').isVisible()); assert(await page.locator('#credential-add').isDisabled());
       await page.locator('#google-reauthorization-leave').click(); assert(await page.locator('#credential-add').isDisabled());
       await refreshCatalog(page); await page.locator('#mutation-review-confirm').click(); await ready(page);

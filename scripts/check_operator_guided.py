@@ -428,7 +428,7 @@ class GuidedCheck(OperatorCatalogCheck):
                     "guided revoked request produced more than its CONNECT denial")
             self.protocol.phase = "revoke_rest"
         else:
-            wire.validate_browser(frame["browser"], get_count=self.protocol.gets)
+            wire.validate_browser(frame["browser"], get_count=self.protocol.gets, document_count=self.protocol.documents)
             require(current["revision"] == self.initial["revision"] + 6
                 and current["policy"]["sequence"] == self.initial["policy"]["sequence"] + 2
                 and all(row["status"] == "revoked" and row["version"] == 2

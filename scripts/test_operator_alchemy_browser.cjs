@@ -2,6 +2,7 @@
 // Intercepted Alchemy UI story only. Neither an actual backend nor any SDK,
 // generated command, provider, proxy, CA server or native authority is executed.
 const assert = require('node:assert/strict');
+const {acknowledgeMutationReview} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {createHash} = require('node:crypto');
 const {readFile, readdir, mkdtemp} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
@@ -91,7 +92,9 @@ async function noAutomaticWrite(page, observed) {
   assert.equal(observed.grants.length, 1); assert(await page.locator('#connect-grant').isDisabled());
   assert(await page.locator('#connect-setup-step').isHidden());
   await refresh(page); assert.equal(observed.grants.length, 1);
-  await page.reload({waitUntil: 'networkidle'}); await ready(page);
+  await page.reload({waitUntil: 'networkidle'});
+  assert(await page.locator('#credential-fields').evaluate(node => node.disabled), 'reload preserves explicit review');
+  await acknowledgeMutationReview(page); await ready(page);
   assert.equal(observed.grants.length, 1, 'reload may inspect saved state but cannot replay a mutation');
 }
 async function screenshot(page, directory, name) {

@@ -2,6 +2,7 @@
 // Rendered notification protocol fixtures only. Every API response is synthetic
 // and intercepted; no app, destination, Slack, provider, CA or proxy is contacted.
 const assert = require('node:assert/strict');
+const {withoutMutationReview} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {createHash} = require('node:crypto');
 const {execFileSync} = require('node:child_process');
 const {readFile, readdir, mkdtemp} = require('node:fs/promises');
@@ -190,8 +191,9 @@ async function clean(page) {
     local: Object.entries(localStorage), session: Object.entries(sessionStorage)}));
   for (const secret of PRIVATE) assert(!JSON.stringify(surfaces).includes(secret), 'destination URL/raw error never retained in visible DOM, fields or storage');
   assert.deepEqual(surfaces.local, []);
-  assert(surfaces.session.every(([key]) => key === STORAGE), 'only exact public operation recovery metadata may persist');
-  for (const [, value] of surfaces.session) {
+  const references = withoutMutationReview(surfaces.session);
+  assert(references.every(([key]) => key === STORAGE), 'only exact public operation recovery metadata or shared review marker may persist');
+  for (const [, value] of references) {
     const ref = JSON.parse(value);
     assert.deepEqual(Object.keys(ref).sort(), ['operation_id', 'kind', 'slot', 'expected_revision'].sort());
     assert(UUID.test(ref.operation_id) && ['save', 'test'].includes(ref.kind) && SLOTS.includes(ref.slot));

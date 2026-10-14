@@ -3,6 +3,7 @@
 // Actual public queue module, inert DOM and synthetic GET replies only. No app,
 // browser, network, authority, private review, decision or deployment acceptance.
 const assert = require('node:assert/strict');
+const {mutationReviewStorage} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {readFileSync} = require('node:fs');
 const {resolve} = require('node:path');
 const {createHash} = require('node:crypto');
@@ -83,7 +84,7 @@ function workspaceFixture(handler) {
   const f = context(), calls = [], faults = [], timers = new Map(); let nextTimer = 0;
   const raw = rawCatalog({credentials: [], rules: [], capability: null});
   const reply = (body = raw, status = 200) => ({...response(body, status), json: async () => copy(body)});
-  Object.assign(f.value, {AbortSignal: {timeout: delay => { assert.equal(delay, 30000); return undefined; }},
+  Object.assign(f.value, {sessionStorage: mutationReviewStorage(), AbortSignal: {timeout: delay => { assert.equal(delay, 30000); return undefined; }},
     setTimeout(callback, delay) { assert.equal(delay, 2000); timers.set(++nextTimer, callback); return nextTimer; },
     clearTimeout(id) { timers.delete(id); },
     fetch: async (path, init) => {
@@ -246,7 +247,8 @@ const tests = [
       assert.equal(f.node('load-error').hidden, false); assert.match(f.node('load-error-text').textContent, /Reload and sign in again/);
       assert(f.node('mutation-review-confirm').disabled); assert.match(queue.node('pending-actions-status').textContent, /sign in again/);
       assert.equal(await f.workspace.refresh(), false);
-      assert.equal(await f.workspace.mutate('applications', {}, 'connect-status'), false); assert.equal(f.calls.length, 1);
+      assert.equal(await f.workspace.mutate('applications', {}, 'connect-status',
+        () => assert.fail('authentication-held mutation must not reach success callback')), false); assert.equal(f.calls.length, 1);
       assert.equal(await f.workspace.refresh({manual: true}), true); assert(f.workspace.state.catalog);
       assert.equal(f.node('load-error').hidden, true); assert.equal(f.calls.length, 2); f.verify(); queue.verify();
     }
@@ -270,11 +272,12 @@ const tests = [
       assert.equal(call.path, '/api/operator-demo/applications'); assert.equal(call.method, 'POST'); return reply({}, 403);
     });
     assert.equal(await f.workspace.refresh(), true);
-    assert.equal(await f.workspace.mutate('applications', {name: 'synthetic client'}, 'connect-status'), false);
+    assert.equal(await f.workspace.mutate('applications', {name: 'synthetic client'}, 'connect-status', () => assert.fail('unauthenticated reply must not reach success callback')), false);
     assert.equal(f.workspace.state.catalog, null); assert.equal(f.workspace.state.uncertain, true); assert.equal(f.workspace.state.busy, false);
     assert.equal(f.node('load-error').hidden, false); assert.match(f.node('load-error-text').textContent, /Reload and sign in again/);
     assert.deepEqual(f.calls.map(call => call.method), ['GET', 'POST']);
-    assert.equal(await f.workspace.mutate('applications', {}, 'connect-status'), false);
+    assert.equal(await f.workspace.mutate('applications', {}, 'connect-status',
+      () => assert.fail('uncertain mutation must not reach success callback')), false);
     assert.equal(await f.workspace.refresh({manual: true}), true); assert.equal(f.workspace.state.uncertain, true);
     assert.equal(f.workspace.ready('applications'), false); assert.deepEqual(f.calls.map(call => call.method), ['GET', 'POST', 'GET']); f.verify();
   }],

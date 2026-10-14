@@ -99,6 +99,11 @@ class RunnerTests(unittest.TestCase):
         auth_state = next(row for row in runner.SUITES if row.script == "test_operator_auth_state_ui.cjs")
         self.assertEqual((auth_state.category, auth_state.runtime, auth_state.arguments, auth_state.seconds),
             ("ui_contract", "node", (), 60))
+        mutation_recovery = next(row for row in runner.SUITES
+            if row.script == "test_operator_mutation_recovery_browser.cjs")
+        self.assertEqual((mutation_recovery.category, mutation_recovery.runtime,
+            mutation_recovery.arguments, mutation_recovery.seconds),
+            ("ui_contract", "node", ("--self-test",), 60))
         self.assertNotIn("test_native_jit_review_signers.py", paths)
         assets = next(row for row in runner.SUITES if row.script == "test_operator_catalog_assets.py")
         self.assertEqual((assets.category, assets.runtime, assets.arguments, assets.seconds),
@@ -167,8 +172,8 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(shards["python-2"][0][0].script, "test_managed_client.py")
         self.assertEqual(shards["python-2"][0][-1].script, "test_native_jit_prepare.py")
         self.assertEqual(shards["python-3"][0][0].script, "test_authority_complete_read_write.py")
-        self.assertEqual(tuple(len(selected) for selected, _ in shards.values()), (12, 41, 43, 16))
-        self.assertEqual((len(runner.SUITES), len(python)), (112, 96))
+        self.assertEqual(tuple(len(selected) for selected, _ in shards.values()), (12, 41, 43, 17))
+        self.assertEqual((len(runner.SUITES), len(python)), (113, 96))
         self.assertEqual(shards["node"][0], tuple(suite for suite in runner.SUITES if suite.runtime == "node"))
         for partition, (selected, budget) in shards.items():
             self.assertTrue(selected)
@@ -182,7 +187,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(len(proof), 1)
         self.assertEqual(proof[0].seconds, 180)
         self.assertEqual(proof[0].arguments, ())
-        self.assertEqual(len(runner.SUITES), 112)
+        self.assertEqual(len(runner.SUITES), 113)
         self.assertEqual(budget, 600)
         self.assertEqual(runner.MAX_PARTITION_SECONDS, 600)
 
@@ -413,6 +418,8 @@ class RunnerTests(unittest.TestCase):
                 "scope": "pure exported client command generator; no browser or requests"}, ""),
             "test_operator_guided_browser.cjs": ({"ok": True, "browser": False, "network": False,
                 "providerRequests": 0, "scope": "pure guided browser protocol and private download controls"}, "PASS fixture\n"),
+            "test_operator_mutation_recovery_browser.cjs": ({"ok": True, "browser": False, "network": False,
+                "scope": "pure ordinary mutation recovery and exact receipt controls"}, "PASS fixture\n"),
             "test_operator_npm_ui.cjs": ({**common,
                 "scope": "public catalog, inert DOM connect/download handlers, npm recipe and source-pin joins; not browser or provider acceptance"}, "PASS fixture\n"),
             "test_operator_npm_publish_ui.cjs": (common, "PASS fixture\n"),

@@ -23,7 +23,8 @@ const ORACLE_BODY_SHA256 = 'sha256:0e8924971815df1897718e8de313ed2652a80ee511305
 const ROUTES = ['credentials', 'applications', 'access-rules', 'access-rules/revoke', 'applications/revoke', 'credentials/revoke'].map(p => PREFIX + '/' + p);
 const STEPS = ['credential', 'application', 'permission', 'download', 'proxy_success', 'rule_revoked',
   'proxy_denied', 'application_revoked', 'credential_revoked'];
-const STAGES = ['inputs', 'launch', 'ready', 'open', 'credential', 'application', 'permission', 'download',
+const STAGES = ['inputs', 'launch', 'ready', 'open', 'credential', 'credential_reply_lost', 'credential_reload',
+  'credential_review', 'credential_reuse', 'application', 'permission', 'download',
   'proxy_success', 'rule_revoked', 'proxy_denied', 'application_revoked', 'credential_revoked', 'result', 'close'];
 const CHECKER_STAGES = ['preflight', 'create', 'revoke_rule', 'revoke_rest', 'audit'];
 const CHECKER_ERRORS = ['CheckFailure', 'AssertionError', 'ValueError', 'TypeError', 'KeyError', 'RuntimeError',
@@ -44,6 +45,38 @@ const ordered = value => Array.isArray(value) ? value.map(ordered) : value && ty
   Object.fromEntries(Object.keys(value).sort().map(key => [key, ordered(value[key])])) : value;
 const same = (a, b) => JSON.stringify(ordered(a)) === JSON.stringify(ordered(b));
 const integer = (n, min, max) => Number.isSafeInteger(n) && n >= min && n <= max;
+const RECOVERY_COUNTS = ['lostReplyCount', 'abortedRequests', 'networkConsoleErrors', 'reloadCount', 'acknowledgements'];
+const RECOVERY_FLAGS = ['markerBeforeDispatch', 'holdBeforeReload', 'holdAfterReload', 'freshCatalogReviewed',
+  'reusedSavedCredential', 'privateStorageClean'];
+function recoveryEvidence(complete = false) {
+  return {...Object.fromEntries(RECOVERY_COUNTS.map(key => [key, complete ? 1 : 0])),
+    ...Object.fromEntries(RECOVERY_FLAGS.map(key => [key, complete]))};
+}
+function validateRecovery(value) {
+  need(exact(value, [...RECOVERY_COUNTS, ...RECOVERY_FLAGS]) && same(value, recoveryEvidence(true)));
+  return value;
+}
+function credentialReplyFault() {
+  // The sole expected network failure is our already-committed credential
+  // request. Request identity, exact Chromium error and exact console location
+  // must all agree; another failure, duplicate event or later error is fatal.
+  let selected = null, closed = false, aborted = 0, logged = 0;
+  const matchesRequest = request => !closed && selected !== null && request === selected &&
+    request.failure()?.errorText === 'net::ERR_FAILED';
+  const matchesConsole = message => !closed && selected !== null && message.type() === 'error' &&
+    message.location()?.url === ORIGIN + ROUTES[0] &&
+    message.text() === 'Failed to load resource: net::ERR_FAILED';
+  return {
+    arm(request) {
+      need(!closed && selected === null && request.method() === 'POST' && request.url() === ORIGIN + ROUTES[0]);
+      selected = request;
+    },
+    matchesRequest, matchesConsole,
+    requestFailed(request) { if (!matchesRequest(request) || aborted !== 0) return false; aborted++; return true; },
+    consoleError(message) { if (!matchesConsole(message) || logged !== 0) return false; logged++; return true; },
+    finish() { need(!closed && selected !== null && aborted === 1 && logged === 1); closed = true; selected = null; }
+  };
+}
 function decode(value, maximum) {
   need(typeof value === 'string' && value.length <= Math.ceil(maximum / 3) * 4);
   const raw = Buffer.from(value, 'base64'); need(raw.length <= maximum && raw.toString('base64') === value); return raw;
@@ -122,8 +155,12 @@ function failureReceipt(stage, observations, checkerFailure = null, stderr = nul
   return {schema: 'serverware.privateGuidedBrowserFailure/v1', ok: false,
     stage: STAGES.includes(stage) ? stage : 'inputs', error: 'guided_browser_refused',
     checkerFailure: checker, checkerStderr: diagnostic,
-    ...Object.fromEntries(['postCount', 'getCount', 'pageErrors', 'consoleErrors', 'refusedRequests', 'downloadCount'].map(key =>
-      [key, integer(observations[key], 0, 100) ? observations[key] : null]))};
+    ...Object.fromEntries(['postCount', 'getCount', 'documentCount', 'pageErrors', 'consoleErrors', 'refusedRequests', 'downloadCount'].map(key =>
+      [key, integer(observations[key], 0, 100) ? observations[key] : null])),
+    credentialRecovery: {...Object.fromEntries(RECOVERY_COUNTS.map(key =>
+      [key, integer(observations.credentialRecovery?.[key], 0, 100) ? observations.credentialRecovery[key] : null])),
+      ...Object.fromEntries(RECOVERY_FLAGS.map(key =>
+        [key, typeof observations.credentialRecovery?.[key] === 'boolean' ? observations.credentialRecovery[key] : null]))}};
 }
 function publicFailureReceipt(raw) {
   need(Buffer.isBuffer(raw) && raw.length > 0 && raw.length <= 4096);
@@ -132,7 +169,7 @@ function publicFailureReceipt(raw) {
   // also refuses duplicate keys, invalid UTF-8 and nonfinite JSON spellings.
   need(Buffer.from(JSON.stringify(value) + '\n').equals(raw));
   need(exact(value, ['schema', 'ok', 'stage', 'error', 'checkerFailure', 'checkerStderr',
-    'postCount', 'getCount', 'pageErrors', 'consoleErrors', 'refusedRequests', 'downloadCount']));
+    'postCount', 'getCount', 'documentCount', 'pageErrors', 'consoleErrors', 'refusedRequests', 'downloadCount', 'credentialRecovery']));
   const checked = failureReceipt(value.stage, value, value.checkerFailure, value.checkerStderr);
   need(same(value, checked));
   // Export neither private bytes nor their fingerprint. These counters describe
@@ -150,6 +187,8 @@ async function downloadedBytes(download) {
   } finally { stream?.destroy(); for (const chunk of chunks) chunk.fill(0); await download.delete(); }
 }
 function validateChecker(value, browser, ids) {
+  validateRecovery(browser.credentialRecovery);
+  need(browser.documentCount === 2);
   need(exact(value, ['schema', 'ok', 'syntheticOnly', 'realProviderVerified', 'publicDnsVerified', 'externalSsoVerified',
     'productionReady', 'hardwareVerified', 'runId', 'dataPlaneBinaryDigest', 'resourceIds', 'initialRevision', 'finalRevision',
     'initialPolicyHash', 'policyHash', 'providerArrivals', 'proxyAttempts', 'mutations', 'positive', 'negative', 'audit', 'browser']));
@@ -189,8 +228,9 @@ async function main() {
   need(crypto.createHash('sha256').update(fs.readFileSync(CHROME)).digest('hex') === CHROME_SHA && require(PLAYWRIGHT + '/package.json').version === '1.58.2');
   const temporary = process.env.TMPDIR; need(temporary && path.isAbsolute(temporary) && fs.realpathSync(temporary) === temporary);
   const owned = fs.statSync(temporary); need(owned.isDirectory() && owned.uid === process.geteuid() && (owned.mode & 0o777) === 0o700);
-  const out = {postCount: 0, getCount: 0, pageErrors: 0, consoleErrors: 0, refusedRequests: 0,
-    downloadCount: 0, downloadDeleted: false, tokenCleared: false, steps: []};
+  const out = {postCount: 0, getCount: 0, documentCount: 0, pageErrors: 0, consoleErrors: 0, refusedRequests: 0,
+    downloadCount: 0, downloadDeleted: false, tokenCleared: false, steps: [], credentialRecovery: recoveryEvidence()};
+  const fault = credentialReplyFault();
   const ids = {}; let browser, child, pending, failed, stage = 'inputs', expectedPost = null, expectedDialog = null;
   let sequence = 0, total = 0, stderrBytes = 0, input = Buffer.alloc(0), chain = Promise.resolve(), lastCatalog, readyValue, checkerFailure = null;
   const stderr = stderrCollector();
@@ -221,7 +261,12 @@ async function main() {
         try {
           const frame = requestFrame(route.request(), sequence + 1, expectedPost);
           if (frame.method === 'POST') { need(++out.postCount <= 6); expectedPost = null; }
-          else need(++out.getCount <= 80);
+          else { need(++out.getCount <= 80); if (frame.path === '/') need(++out.documentCount <= 2); }
+          if (frame.path === ROUTES[0] && frame.method === 'POST') {
+            need(out.postCount === 1 && await page.evaluate(() => localStorage.length === 0 && sessionStorage.length === 1 &&
+              sessionStorage.getItem('serverware.operator.mutation.review.v1') === 'required'));
+            out.credentialRecovery.markerBeforeDispatch = true;
+          }
           const response = await send(frame);
           const body = responseFrame(response, frame.id, frame.method === 'POST' ? out.postCount <= 3 ? 201 : 200 : 200);
           if (frame.path === CATALOG) lastCatalog = JSON.parse(body);
@@ -230,13 +275,27 @@ async function main() {
             const saved = JSON.parse(body)[key === 'rule' ? 'access_rule' : key];
             need(UUID.test(saved?.id) && saved.name === readyValue.names[key] && !Object.values(ids).includes(saved.id)); ids[key] = saved.id;
           }
+          if (frame.path === ROUTES[0] && frame.method === 'POST') {
+            // The checker emits only after the real 201 survives an independent
+            // fresh catalog read. Lose browser delivery, never backend commit.
+            need(out.credentialRecovery.lostReplyCount === 0 && out.postCount === 1);
+            fault.arm(route.request()); out.credentialRecovery.lostReplyCount++;
+            await route.abort('failed'); return;
+          }
           await route.fulfill({status: response.status, headers: Object.fromEntries(response.headers), body});
         } catch (_) { out.refusedRequests++; fail(); await route.abort().catch(() => {}); }
       }); return chain;
     });
     const page = await context.newPage(); page.setDefaultTimeout(10000);
     page.on('pageerror', () => { out.pageErrors++; fail(); });
-    page.on('console', message => { if (message.type() === 'error') { out.consoleErrors++; fail(); } });
+    page.on('console', message => { if (message.type() === 'error') {
+      if (fault.consoleError(message)) out.credentialRecovery.networkConsoleErrors++;
+      else { out.consoleErrors++; fail(); }
+    } });
+    page.on('requestfailed', request => {
+      if (fault.requestFailed(request)) out.credentialRecovery.abortedRequests++;
+      else { out.refusedRequests++; fail(); }
+    });
     page.on('popup', popup => { out.refusedRequests++; popup.close().catch(() => {}); fail(); });
     page.on('download', download => { if (!downloadExpected || ++out.downloadCount !== 1) { download.cancel().catch(() => {}); fail(); } downloadExpected = false; });
     page.on('dialog', async dialog => {
@@ -287,7 +346,48 @@ async function main() {
     stage = 'credential'; await page.locator('#connect-use-key').click();
     await page.locator('#connect-credential-name').fill(setup.names.credential); await page.locator('#connect-credential-auth-type').selectOption('bearer');
     await page.locator('#connect-credential-secret').fill(setup.providerSecret); setup.providerSecret = '';
-    expectedPost = ROUTES[0]; await page.locator('#connect-credential-next').click(); await step('application'); await privateClean(); out.steps.push(stage);
+    const expectedFailure = Promise.all([
+      page.waitForEvent('requestfailed', {predicate: request => fault.matchesRequest(request)}),
+      page.waitForEvent('console', {predicate: message => fault.matchesConsole(message)})]);
+    expectedFailure.catch(() => {});
+    expectedPost = ROUTES[0]; await page.locator('#connect-credential-next').click();
+    stage = 'credential_reply_lost'; await expectedFailure; fault.finish();
+    await page.locator('#mutation-review').waitFor({state: 'visible'});
+    await page.waitForFunction(() => !document.querySelector('#connect-status-refresh').disabled);
+    const recoveryPage = async () => {
+      const value = await page.evaluate(() => ({
+        warning: !document.querySelector('#mutation-review').hidden,
+        marker: localStorage.length === 0 && sessionStorage.length === 1 &&
+          sessionStorage.getItem('serverware.operator.mutation.review.v1') === 'required',
+        privateInputsEmpty: [...document.querySelectorAll('input[type="password"], #connect-github-private-key')].every(input => input.value === ''),
+        writesDisabled: ['connect-use-key', 'connect-use-saved', 'connect-credential-next', 'credential-add', 'application-create']
+          .every(id => document.getElementById(id).matches(':disabled'))}));
+      need(same(value, {warning: true, marker: true, privateInputsEmpty: true, writesDisabled: true}) && out.postCount === 1 && !failed);
+    };
+    await recoveryPage(); out.credentialRecovery.holdBeforeReload = true;
+    stage = 'credential_reload'; await page.reload({waitUntil: 'networkidle'}); out.credentialRecovery.reloadCount++;
+    await step('credential'); await recoveryPage(); out.credentialRecovery.holdAfterReload = true;
+    stage = 'credential_review'; await page.locator('nav a[href="#credentials"]').click();
+    await page.locator('#credentials').waitFor({state: 'visible'}); await refresh('#credentials-refresh');
+    need(out.documentCount === 2 && lastCatalog.revision === setup.initialRevision + 1 && loaded() &&
+      lastCatalog.credentials.length === 1 && lastCatalog.credentials[0].id === ids.credential &&
+      lastCatalog.credentials[0].name === setup.names.credential && lastCatalog.credentials[0].version === 1 &&
+      lastCatalog.credentials[0].status === 'active' && lastCatalog.applications.length === 0 && lastCatalog.access_rules.length === 0);
+    const savedCard = page.locator('#credentials [data-resource-id="' + ids.credential + '"]');
+    const savedGroup = savedCard.locator('xpath=ancestor::details[1]');
+    if (await savedGroup.count() && !await savedGroup.evaluate(node => node.open)) await savedGroup.locator(':scope > summary').click();
+    await savedCard.waitFor({state: 'visible'});
+    need((await savedCard.innerText()).includes(setup.names.credential) && await savedCard.locator('[data-action="use-credential"]').isDisabled());
+    await recoveryPage(); out.credentialRecovery.freshCatalogReviewed = true;
+    need(await page.locator('#mutation-review-confirm').isEnabled());
+    await page.locator('#mutation-review-confirm').click(); out.credentialRecovery.acknowledgements++;
+    await page.locator('#mutation-review').waitFor({state: 'hidden'}); await privateClean();
+    need(out.postCount === 1 && await savedCard.locator('[data-action="use-credential"]').isEnabled());
+    out.credentialRecovery.privateStorageClean = true;
+    stage = 'credential_reuse'; await savedCard.locator('[data-action="use-credential"]').click();
+    await step('application'); await privateClean();
+    need(out.postCount === 1 && lastCatalog.revision === setup.initialRevision + 1);
+    out.credentialRecovery.reusedSavedCredential = true; validateRecovery(out.credentialRecovery); out.steps.push('credential');
     stage = 'application'; await page.locator('#connect-application-choice').selectOption('new');
     await page.locator('#connect-application-name').fill(setup.names.application); await page.locator('#connect-token-ttl').selectOption('3600');
     expectedPost = ROUTES[1]; await page.locator('#connect-application-next').click(); await step('access'); out.steps.push(stage);
@@ -343,7 +443,8 @@ async function main() {
   }
 }
 module.exports = {readyFrame, requestFrame, responseFrame, continueFrame, checkerFailureFrame, stderrCollector,
-  failureReceipt, publicFailureReceipt, applicationRevocationDialog, downloadedBytes, validateChecker};
+  failureReceipt, publicFailureReceipt, applicationRevocationDialog, downloadedBytes, validateChecker,
+  credentialReplyFault, recoveryEvidence, validateRecovery};
 if (require.main === module) main().then(value => process.stdout.write(JSON.stringify(value) + '\n')).catch(() => {
   process.stderr.write('Guided browser check failed; no private request, response or download details emitted\n'); process.exitCode = 1;
 });

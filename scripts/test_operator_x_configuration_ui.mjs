@@ -5,13 +5,15 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import vm from 'node:vm';
+import {MUTATION_REVIEW_KEY, MUTATION_REVIEW_VALUE} from './operator_mutation_recovery_test_helpers.cjs';
 
 const ROOT = new URL('../', import.meta.url);
 const ASSETS = new URL('serverware/operator_demo_web/', ROOT);
-const SOURCE = ['workspace_core.js', 'workspace_upstreams.js', 'workspace_x_configuration.js']
+const SOURCE = ['workspace_core.js', 'workspace_github.js', 'workspace_upstreams.js', 'workspace_x_configuration.js']
   .map(name => readFileSync(new URL(name, ASSETS), 'utf8')).join('\n');
 const HTML = readFileSync(new URL('index.html', ASSETS), 'utf8');
 const PATH = '/api/operator-demo/oauth/x/configuration/v1';
+const CATALOG = '/api/operator-demo/catalog';
 const STORAGE = 'serverware.operator.x.configuration.operation.v1';
 const ORIGIN = 'https://operator.example.com';
 const CALLBACK = ORIGIN + '/api/oauth/callback/x';
@@ -52,6 +54,7 @@ class Node {
 const response = (value, status = 200, {raw, type = 'application/json'} = {}) => ({
   ok: status >= 200 && status < 300, status, headers: {get: name => name.toLowerCase() === 'content-type' ? type : null},
   async text() { return raw === undefined ? JSON.stringify(value) : raw; },
+  async json() { return raw === undefined ? clone(value) : JSON.parse(raw); },
 });
 const deferred = () => { let resolve; let reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return {promise, resolve, reject}; };
 
@@ -59,10 +62,15 @@ function fixture(options = {}) {
   const nodes = new Map([...HTML.matchAll(/\bid="([^"]+)"/g)].map(match => [match[1], new Node(match[1])]));
   nodes.set('proxy-setup-content', new Node('proxy-setup-content'));
   const node = id => { assert(nodes.has(id), 'Missing production element'); return nodes.get(id); };
-  const storage = new Map(Object.entries(options.storage || {})); const writes = []; const calls = []; const copied = [];
+  const storage = new Map(Object.entries(options.storage || {})); const writes = []; const calls = []; const catalogReads = []; const copied = [];
   const serializedPayloads = []; const windowEvents = new Map(); const forbidden = [];
   const state = {discovery: clone(options.discovery || discovery()), operation: options.operation ? clone(options.operation) : null,
-    discoveryGets: 0, refreshes: 0};
+    discoveryGets: 0, catalogGets: 0};
+  const catalog = () => ({schema: 'serverware.operatorCatalog/v1', mode: 'operator-development',
+    productionReady: false, hardwareVerified: false, revision: state.discovery.revision,
+    policy: {policy_hash: state.discovery.policy_hash, loaded_policy_hash: state.discovery.policy_hash, sequence: 1, activation: 'active'},
+    proxy_url: 'https://proxy.example.test', credentials: [], applications: [], access_rules: [], allowed_upstreams: [],
+    capabilities: {oauth: false, operation_bundles: []}, limits: {}});
   const deny = kind => () => { forbidden.push(kind); throw new Error('Forbidden fixture effect'); };
   const checkTransport = check => {
     try { check(); } catch (error) { forbidden.push('fetch-contract'); throw error; }
@@ -72,10 +80,19 @@ function fixture(options = {}) {
     checkTransport(() => {
       assert.equal(init.credentials, 'same-origin'); assert.equal(init.cache, 'no-store'); assert.equal(init.redirect, 'error');
       assert.equal(typeof path, 'string'); assert(!path.includes(SECRET)); assert(!path.includes(CLIENT));
-      assert(path === PATH || path === PATH + '/' + ID || path === PATH + '/' + OTHER, 'No provider/consent/restart/other API');
+      assert(path === CATALOG || path === PATH || path === PATH + '/' + ID || path === PATH + '/' + OTHER,
+        'Only the exact catalog and configuration paths; no provider/consent/restart API');
       assert(['GET', 'POST'].includes(method));
     });
     const body = init.body === undefined ? null : JSON.parse(init.body);
+    if (path === CATALOG) {
+      checkTransport(() => {
+        assert.equal(method, 'GET'); assert.equal(body, null); assert.equal(init.headers, undefined);
+        assert(catalogReads.length < 10, 'Bounded catalog reads; no polling or retry loop');
+      });
+      catalogReads.push({path, method, body}); state.catalogGets++;
+      return Promise.resolve(options.onCatalog?.(state, catalog()) ?? response(catalog()));
+    }
     calls.push({path, method, body});
     if (method === 'GET') {
       checkTransport(() => { assert.equal(body, null); assert.equal(init.headers, undefined); });
@@ -117,16 +134,9 @@ function fixture(options = {}) {
   vm.runInContext(SOURCE, context, {timeout: 2000});
   const run = (expression, value) => { context.input = value; return vm.runInContext(expression, context, {timeout: 1000}); };
   const workspace = run('createOperatorWorkspace()');
-  const catalog = () => ({revision: state.discovery.revision, policy: {policy_hash: state.discovery.policy_hash,
-    loaded_policy_hash: state.discovery.policy_hash, activation: 'active'}});
-  workspace.state.catalog = catalog();
-  // Only catalog transport is synthetic; busy/uncertain, emit, requireReview,
-  // named holds and explicit review acknowledgement are the real controller.
-  workspace.refresh = async () => {
-    state.refreshes++; workspace.state.catalog = catalog();
-    if (options.onRefresh) return options.onRefresh(state, workspace);
-    workspace.emit(); return true;
-  };
+  workspace.state.catalog = run('projectCatalog(input)', catalog());
+  // The initial catalog is inert public metadata. Later reads use the actual
+  // core refresh/projection/freshness epoch; only their fetch responses are synthetic.
   context.workspaceFixture = workspace;
   const view = run('createXConfigurationView(workspaceFixture)');
   const event = (id, name = 'click') => {
@@ -146,10 +156,14 @@ function fixture(options = {}) {
       ...[...nodes.values()].map(item => item.textContent)]) {
       assert(!value.includes(SECRET)); assert(!value.includes(PRIVATE));
     }
-    for (const {key, value} of writes) { assert.equal(key, STORAGE); if (value !== undefined) assert.equal(value, ID); }
+    for (const {key, value} of writes) {
+      assert([STORAGE, MUTATION_REVIEW_KEY].includes(key), 'Only exact public recovery keys may be written');
+      if (value !== undefined) assert.equal(value, key === STORAGE ? ID : MUTATION_REVIEW_VALUE);
+    }
+    assert.equal(state.catalogGets, catalogReads.length);
     assert.deepEqual(forbidden, []);
   };
-  return {options, state, nodes, node, storage, writes, calls, copied, serializedPayloads, workspace, view,
+  return {options, state, nodes, node, storage, writes, calls, catalogReads, copied, serializedPayloads, workspace, view,
     event, windowEvent, fill, posts, clean, run, start: () => view.show(true)};
 }
 
@@ -174,6 +188,7 @@ const tests = [
   ['first appearance makes one GET and renders exact callback and scopes without mutation', async () => {
     const f = fixture(); assert.equal(f.calls.length, 0); assert.equal(f.workspace.state.busy, false);
     await f.start(); assert.deepEqual(f.calls.map(({method, path}) => [method, path]), [['GET', PATH]]);
+    assert.deepEqual(f.catalogReads, [{path: CATALOG, method: 'GET', body: null}]);
     assert.equal(f.node('x-configuration-callback').textContent, CALLBACK);
     assert.equal(f.node('x-configuration-scopes').textContent, SCOPES.join('\n'));
     assert.equal(f.node('x-configuration-form').hidden, false); assert.equal(f.storage.size, 0);
@@ -249,23 +264,48 @@ const tests = [
       assert.equal(f.posts().length, 0); f.clean();
     }
   }],
-  ['lost reply retains only UUID, blocks resubmission and recovers by exact GET', async () => {
+  ['lost reply retains only UUID and fixed public warning, blocks resubmission and recovers by exact GET', async () => {
     const f = fixture({onPost: (_, state) => { state.operation = receipt(); state.discovery = configured(); return Promise.reject(new Error(PRIVATE)); }});
     await f.start(); await f.fill(); await f.event('x-configuration-form', 'submit'); f.clean();
     assert.equal(f.storage.get(STORAGE), ID); assert.equal(f.workspace.state.busy, true); assert.equal(f.workspace.state.uncertain, true);
+    assert.equal(f.storage.get(MUTATION_REVIEW_KEY), MUTATION_REVIEW_VALUE);
+    assert.equal(f.node('mutation-review-confirm').disabled, true);
+    await f.event('mutation-review-confirm'); assert.equal(f.storage.get(STORAGE), ID);
+    assert.equal(f.workspace.state.uncertain, true, 'Shared acknowledgement cannot resolve an X operation');
     assert.match(f.node('x-configuration-status').textContent, /reference.*check|reference.*result/);
     await f.fill(); await f.event('x-configuration-form', 'submit'); assert.equal(f.posts().length, 1);
     f.workspace.setConsentHold(true, 'other-provider');
     await f.event('x-configuration-check'); assert(f.calls.some(call => call.path === PATH + '/' + ID && call.method === 'GET'));
     assert.equal(f.workspace.state.busy, true, 'Other provider hold is preserved');
+    assert.equal(f.node('mutation-review-confirm').disabled, true);
+    await f.event('mutation-review-confirm'); assert.equal(f.workspace.state.uncertain, true);
+    assert.equal(f.storage.has(STORAGE), false, 'Only the joined X reference is retired');
+    assert.equal(f.storage.get(MUTATION_REVIEW_KEY), MUTATION_REVIEW_VALUE);
     f.workspace.setConsentHold(false, 'other-provider'); assert.equal(f.workspace.state.busy, false);
     assert.equal(f.workspace.state.uncertain, true, 'Recovery does not acknowledge unrelated mutation review');
+    assert.equal(f.catalogReads.length, 2); assert.equal(f.node('mutation-review-confirm').disabled, false);
     await f.event('mutation-review-confirm'); assert.equal(f.workspace.state.uncertain, false);
     assert.equal(f.posts().length, 1); assert.equal(f.storage.size, 0);
     const reloaded = fixture({storage: Object.fromEntries(f.storage), discovery: clone(f.state.discovery)});
     assert.equal(reloaded.workspace.state.busy, false); assert.equal(reloaded.workspace.state.uncertain, false);
     await reloaded.start(); assert.equal(reloaded.storage.size, 0); assert.equal(reloaded.posts().length, 0);
     f.clean(); reloaded.clean();
+  }],
+  ['shared warning survives recovered-operation reload until fresh catalog and explicit acknowledgement', async () => {
+    const first = fixture({onPost: (_, state) => { state.operation = receipt(); state.discovery = configured(); return Promise.reject(new Error(PRIVATE)); }});
+    await first.start(); await first.fill(); await first.event('x-configuration-form', 'submit');
+    await first.event('x-configuration-check');
+    assert.deepEqual([...first.storage], [[MUTATION_REVIEW_KEY, MUTATION_REVIEW_VALUE]]);
+    assert.equal(first.workspace.state.uncertain, true); assert.equal(first.posts().length, 1);
+    const reloaded = fixture({storage: Object.fromEntries(first.storage), discovery: clone(first.state.discovery)});
+    assert.equal(reloaded.node('mutation-review-confirm').disabled, true); assert.equal(reloaded.catalogReads.length, 0);
+    await reloaded.event('mutation-review-confirm'); assert.equal(reloaded.workspace.state.uncertain, true);
+    await reloaded.start(); assert.equal(reloaded.catalogReads.length, 1);
+    assert.equal(reloaded.workspace.state.uncertain, true); assert.equal(reloaded.node('mutation-review-confirm').disabled, false);
+    assert.equal(reloaded.storage.has(STORAGE), false, 'Viewing saved settings does not recreate a provider reference');
+    await reloaded.event('mutation-review-confirm'); assert.equal(reloaded.workspace.state.uncertain, false);
+    assert.equal(reloaded.storage.size, 0); assert.equal(reloaded.posts().length, 0);
+    first.clean(); reloaded.clean();
   }],
   ['reload exposes retained reference immediately, never POSTs and never adopts another operation', async () => {
     const f = fixture({storage: {[STORAGE]: ID}, discovery: configured(receipt({operation_id: OTHER})), operation: receipt()});
@@ -363,11 +403,9 @@ const tests = [
   }],
   ['terminal receipt needs successful matching catalog refresh before its marker is retired', async () => {
     for (const kind of ['failed', 'stale']) {
-      const f = fixture({onRefresh(state, workspace) {
-        if (state.refreshes === 1) { workspace.emit(); return true; }
-        if (kind === 'failed') workspace.state.catalog = null;
-        else workspace.state.catalog.revision++;
-        workspace.emit(); return kind !== 'failed';
+      const f = fixture({onCatalog(state, value) {
+        if (state.catalogGets === 1) return response(value);
+        return kind === 'failed' ? response({detail: PRIVATE}, 503) : response({...value, revision: value.revision + 1});
       }});
       await f.start(); await f.fill(); await f.event('x-configuration-form', 'submit');
       assert.equal(f.posts().length, 1); assert.equal(f.storage.get(STORAGE), ID);
@@ -377,9 +415,9 @@ const tests = [
   ['storage retirement failure or a replaced marker preserves the hold without deleting another ID', async () => {
     for (const fault of ['remove-fails', 'remove-noop', 'changed-marker']) {
       const f = fixture({storageRemoveFailure: fault === 'remove-fails', storageRemoveNoop: fault === 'remove-noop',
-        onRefresh(state, workspace) {
-          if (fault === 'changed-marker' && state.refreshes === 2) f.storage.set(STORAGE, OTHER);
-          workspace.emit(); return true;
+        onCatalog(state, value) {
+          if (fault === 'changed-marker' && state.catalogGets === 2) f.storage.set(STORAGE, OTHER);
+          return response(value);
         }});
       await f.start(); await f.fill(); await f.event('x-configuration-form', 'submit');
       assert.equal(f.posts().length, 1); assert.equal(f.storage.get(STORAGE), fault === 'changed-marker' ? OTHER : ID);

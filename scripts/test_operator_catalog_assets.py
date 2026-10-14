@@ -239,8 +239,15 @@ class OperatorCatalogAssets(unittest.TestCase):
         for forbidden in ('localStorage', 'indexedDB', 'innerHTML', '--insecure', '--proxy-insecure'):
             self.assertFalse(forbidden in script, forbidden + ' is not permitted in public assets')
         for name, source in scripts.items():
-            if name not in {'workspace_google_reauthorization.js', 'workspace_google_configuration.js', 'workspace_x_configuration.js', 'workspace_x_accounts.js', 'workspace_notifications.js', 'workspace_upstreams.js', 'workspace_pending_actions.js'}:
+            if name not in {'workspace_core.js', 'workspace_google_reauthorization.js', 'workspace_google_configuration.js', 'workspace_x_configuration.js', 'workspace_x_accounts.js', 'workspace_notifications.js', 'workspace_upstreams.js', 'workspace_pending_actions.js'}:
                 self.assertFalse('sessionStorage' in source, name + ' must not persist client state')
+        core = scripts['workspace_core.js']
+        self.assertIn("const key = 'serverware.operator.mutation.review.v1', value = 'required';", core)
+        self.assertEqual(re.findall(r'sessionStorage\.setItem\(([^)]*)\)', core), ['key, value'])
+        self.assertEqual(re.findall(r'sessionStorage\.removeItem\(([^)]*)\)', core), ['key'])
+        self.assertNotIn('sessionStorage.clear', core)
+        self.assertLess(core.index('if (!recovery.retain())'),
+                        core.index("const pending = api('/api/operator-demo/' + path"))
         pending_actions = scripts['workspace_pending_actions.js']
         self.assertIn("sessionStorage.getItem('serverware.approvalDecisionUncertain.' + id)", pending_actions)
         for mutation in ('sessionStorage.setItem', 'sessionStorage.removeItem', 'sessionStorage.clear'):

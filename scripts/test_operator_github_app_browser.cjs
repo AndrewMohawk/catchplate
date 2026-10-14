@@ -3,6 +3,7 @@
 // does not verify a GitHub signature, token mint, lease, backend or SDK request.
 // Every unknown network request remains refused by the inherited local fixture.
 const assert = require('node:assert/strict');
+const {withoutMutationReview, acknowledgeMutationReview} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {createHash, generateKeyPairSync} = require('node:crypto');
 const {readFile, readdir, mkdtemp} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
@@ -56,7 +57,7 @@ async function noMaterial(page, draft = false) {
     for (const item of surfaces.fields) if (!(draft && ['connect-github-private-key', 'github-app-replace-private-key'].includes(item.id)))
       assert(!item.value.includes(secret), 'private material must clear from non-draft controls');
   }
-  assert.deepEqual(surfaces.local, []); assert.deepEqual(surfaces.session, []);
+  assert.deepEqual(surfaces.local, []); assert.deepEqual(withoutMutationReview(surfaces.session), []);
 }
 async function refresh(page) {
   const received = page.waitForResponse(response => response.url() === ORIGIN + CATALOG && response.request().method() === 'GET');
@@ -303,7 +304,9 @@ const tests = [
       await refresh(page); await page.clock.runFor(1000);
       assert.equal(observed.creates.length, 1); assert.equal(observed.grants.length, 0);
       assert.equal(state.credentials.length, fault === 'lost-after-commit' ? 1 : 0);
-      await page.reload({waitUntil: 'networkidle'}); await ready(page); await noMaterial(page);
+      await page.reload({waitUntil: 'networkidle'});
+      assert(await page.locator('#credential-fields').evaluate(node => node.disabled), 'reload preserves the saved-state review hold');
+      await acknowledgeMutationReview(page); await ready(page); await noMaterial(page);
       assert.equal(observed.creates.length, 1, 'reload does not resubmit private material');
     });
   }],

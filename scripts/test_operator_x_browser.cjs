@@ -3,6 +3,7 @@
 // or refused. No SDK, generated recipe, provider, native authority or live API
 // is executed. Real API/SQLite and ordinary-client acceptance are separate.
 const assert = require('node:assert/strict');
+const {acknowledgeMutationReview} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {createHash} = require('node:crypto');
 const {readFile, readdir, mkdtemp} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
@@ -156,7 +157,9 @@ const tests = [
       assert.equal(await page.locator('#connect-x-secret').inputValue(), ''); await privateAbsent(page);
       assert(await page.locator('#connect-credential-next').isDisabled()); await refresh(page);
       assert.equal(observed.credentials.length, 1); assert.equal(state.credentials.length, 0);
-      await page.reload({waitUntil: 'networkidle'}); await ready(page);
+      await page.reload({waitUntil: 'networkidle'});
+      assert(await page.locator('#credential-fields').evaluate(node => node.disabled), 'reload preserves explicit review');
+      await acknowledgeMutationReview(page); await ready(page);
       assert.equal(observed.credentials.length, 1); await privateAbsent(page);
     })],
   ['changed key name or provider marker is not accepted as the saved X connection', async browser => {

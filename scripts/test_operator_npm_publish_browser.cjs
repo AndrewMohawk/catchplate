@@ -2,6 +2,7 @@
 // Rendered source-only npm publishing UI fixture. Every HTTP response is local
 // interception; no npm/provider/proxy/backend/CA request or recipe is executed.
 const assert = require('node:assert/strict');
+const {withoutMutationReview} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {createHash} = require('node:crypto');
 const {readFile, readdir, mkdtemp} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
@@ -58,7 +59,7 @@ async function fixture(browser, config, exercise) {
     assert.deepEqual(state.posts, [], 'no generic creation, revoke, token rotation, provider consent or proxy-login mutation');
     assert(observed.grants.length <= 1);
     const storage = await page.evaluate(() => ({local: Object.entries(localStorage), session: Object.entries(sessionStorage)}));
-    assert.deepEqual(storage, {local: [], session: []}, 'publish setup must not persist tokens or drafts');
+    assert.deepEqual({...storage, session: withoutMutationReview(storage.session)}, {local: [], session: []}, 'publish setup must not persist tokens or drafts');
   });
 }
 async function refresh(page) {

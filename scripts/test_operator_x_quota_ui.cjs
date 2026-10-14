@@ -3,6 +3,7 @@
 // This does not prove durable quota enforcement, rendering or provider behavior.
 'use strict';
 const assert = require('node:assert/strict');
+const {mutationReviewStorage} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {readFileSync} = require('node:fs');
 const {resolve} = require('node:path');
 const vm = require('node:vm');
@@ -32,7 +33,7 @@ function fixture({raw = catalog(), pending = false, failure = null, receiptLimit
   for (const name of ['workspace_x_accounts.js', 'workspace_x_post.js'])
     vm.runInContext(readFileSync(resolve(__dirname, '../serverware/operator_demo_web', name), 'utf8'), f.value, {timeout: 2000});
   const calls = [];
-  Object.assign(f.value, {AbortSignal: {timeout: () => undefined}, clearTimeout() {}, setTimeout: () => 0, fetch: async (path, init) => {
+  Object.assign(f.value, {sessionStorage: mutationReviewStorage(), AbortSignal: {timeout: () => undefined}, clearTimeout() {}, setTimeout: () => 0, fetch: async (path, init) => {
     assert.equal(init.credentials, 'same-origin'); assert.equal(init.redirect, 'error'); assert.equal(init.cache, 'no-store');
     const call = {path, method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null}; calls.push(call);
     let result = raw, status = 200;

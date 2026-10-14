@@ -22,7 +22,7 @@ For Google, use the offered consent flow instead of pasting access or refresh to
 1. On the saved credential, choose **Use with a client**, or choose **Set up access for a client** from the saved receipt.
 2. Select an existing client, or create one named after the workload, such as `Issue triage worker`.
 3. For a new client, choose an appropriate token lifetime and save the token privately when it is shown once. The default is 30 days; available lifetimes range from one hour to 90 days.
-4. Complete the explicit save-and-clear action after recording the token. Reloading cannot recover it.
+4. Keep the page open until you have downloaded the client configuration in step 4 below. Then use the explicit save-and-clear action. Reloading cannot recover the token.
 
 Selecting a saved credential reuses its exact identity; you do not need to reenter the provider secret. Several clients can share a credential while keeping separate tokens and permissions. Creating a client identity alone grants no access.
 
@@ -41,7 +41,8 @@ For supported JSON jobs, you do not need request/response field lists unless you
 2. Copy the advertised proxy endpoint; the console address is not the forward proxy.
 3. Choose **Download CA certificate**. Trust this public CA only in the intended client, with TLS verification still enabled.
 4. Select the matching recipe or connection template. For the supplied SDK examples, prepare dependencies using that project's README before supplying the client token.
-5. Supply the client token privately as `SERVERWARE_PROXY_TOKEN`. Use the displayed client ID/login mode and CA path. Follow the recipe's exact public placeholder, if any; never substitute the real provider secret.
+5. For the supplied GitHub, Gmail, npm, Alchemy and X examples, choose **Download private client config** while the page still holds the token. Save it beside the CA and run the prepared example with `--config /path/serverware-client.private.json`. The example imports its proxy login and saved scope, so those values need not be retyped.
+6. Alternatively, supply the client token privately as `SERVERWARE_PROXY_TOKEN` and follow the environment-based recipe. Never substitute the real provider secret. Posting and publishing always require their separate explicit local inputs and confirmation.
 
 **Download private client config** is available only while the page holds the matching one-time token. The download contains that token: keep it private and out of Git. A copied recipe or downloaded config does not execute a request.
 

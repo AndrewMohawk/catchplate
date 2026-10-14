@@ -51,6 +51,7 @@ COMMANDS = {
 SOURCE_FILES = ("examples/x-username-node/client.mjs", "examples/x-username-node/package.json",
     "examples/x-username-node/package-lock.json", "examples/x-username-python/username.py",
     "examples/x-username-python/requirements.txt", "examples/x-username-go/main.go",
+    "examples/x-username-go/config_file.go",
     "examples/x-username-go/go.mod", "examples/x-username-go/go.sum")
 SDK_PHASES = ("read", "wrong_app", "wrong_username", "revoked")
 REQUEST_PROBES = ("wrong_dummy", "wrong_method", "query")

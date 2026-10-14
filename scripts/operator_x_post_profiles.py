@@ -20,6 +20,7 @@ SOURCE_FILES = (
     "examples/x-post-node/client.mjs", "examples/x-post-node/package.json",
     "examples/x-post-node/package-lock.json", "examples/x-post-python/post.py",
     "examples/x-post-python/requirements.txt", "examples/x-post-go/main.go",
+    "examples/x-post-go/config_file.go",
     "examples/x-post-go/go.mod", "examples/x-post-go/go.sum",
 )
 SOURCES = SOURCE_FILES

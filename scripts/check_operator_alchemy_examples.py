@@ -52,7 +52,8 @@ COMMANDS = {
 SOURCE_FILES = ("examples/alchemy-chain-status-node/client.mjs", "examples/alchemy-chain-status-node/request.mjs",
     "examples/alchemy-chain-status-node/package.json", "examples/alchemy-chain-status-node/package-lock.json",
     "examples/alchemy-chain-status-python/chain_status.py", "examples/alchemy-chain-status-python/requirements.txt",
-    "examples/alchemy-chain-status-go/main.go", "examples/alchemy-chain-status-go/go.mod",
+    "examples/alchemy-chain-status-go/main.go", "examples/alchemy-chain-status-go/config_file.go",
+    "examples/alchemy-chain-status-go/go.mod",
     "examples/alchemy-chain-status-go/go.sum")
 SDK_PHASES = ("read", "wrong_app", "wrong_chain", "revoked")
 REQUEST_PROBES = ("wrong_dummy", "rpc_write", "batch", "notification", "query")

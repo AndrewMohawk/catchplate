@@ -25,6 +25,14 @@ Presets and copied recipes are capability-gated. If the matching control is unav
 
 ## Inputs the client receives
 
+The GitHub, Gmail, npm, Alchemy and X examples accept the matching **Download
+private client config** file with `--config PATH`. Prepare dependencies first,
+then keep the downloaded JSON and CA together. Relative CA paths resolve beside
+the JSON. This avoids retyping the connection values below; environment-only
+setup remains an alternative. The file contains the client token, not a provider
+credential, and never selects a write operation or supplies posting/publishing
+confirmation.
+
 | Input | Meaning |
 | --- | --- |
 | `SERVERWARE_PROXY_URL` | Approved HTTPS proxy origin; no embedded username/password, path or query. |
@@ -47,7 +55,7 @@ export SERVERWARE_PROXY_TOKEN
 
 Replace the public placeholders with your deployment's values. Disable shell tracing and HTTP/SDK debug logging. Environment and process memory still contain the client token; use a trusted workstation or protected runner. Run `unset SERVERWARE_PROXY_TOKEN` when finished.
 
-The `.env.example` files document inputs; the examples do not automatically load them. **Download private client config** is available only while the page holds the matching one-time token. That JSON contains the client token and is not an executable. The GitHub and Gmail examples accept their matching downloads explicitly with `--config` as shown below; other examples still use their documented inputs. Keep it out of source control, chat and logs.
+The `.env.example` files document inputs; the examples do not automatically load them. **Download private client config** is available only while the page holds the matching one-time token, so download it before dismissing the token or reloading. That JSON is not an executable. Keep it out of source control, chat and logs.
 
 ## Optional renewal for a long-running workload
 
@@ -141,9 +149,15 @@ Keep the JSON private, for example with `chmod 600`.
 | X text posting — explicit connected-user posting permission | [client.mjs](https://github.com/AndrewMohawk/serverware/tree/main/examples/x-post-node) | [post.py](https://github.com/AndrewMohawk/serverware/tree/main/examples/x-post-python) | [Go client](https://github.com/AndrewMohawk/serverware/tree/main/examples/x-post-go) |
 
 - **Gmail:** connect the account first; use the SDK preset's exact dummy and ordered-query mode, not automatic header insertion. Choose the SDK language in Proxy setup. The job lists a bounded inbox sample and reads metadata, not bodies or attachments. Python uses the generated Google SDK with a Requests transport adapter; it does not claim unchanged `httplib2` HTTPS-proxy support.
-- **Alchemy:** set `SERVERWARE_ALCHEMY_CHAIN=eth-mainnet` or `eth-sepolia`. The job reads `eth_chainId` then `eth_blockNumber` at the keyless `/v2` endpoint. No wallets, transactions or arbitrary RPC. Node uses Viem with an explicit Undici HTTPS proxy transport; the environment and permission stay the same. The current Node/Python/Go recipes passed [isolated proxy/TLS verification](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-alchemy-verification.md#current-sdk-through-proxy-acceptance), including credential replacement, audit, denial and revocation controls. Your real provider entitlement and deployed job still need verification.
-- **X lookup:** set `SERVERWARE_X_USERNAME` to the permitted `[a-z0-9_]{1,15}` name without `@`. This uses an app-only credential and does not authorize posting.
+- **Alchemy:** the downloaded config supplies the saved chain; alternatively set `SERVERWARE_ALCHEMY_CHAIN=eth-mainnet` or `eth-sepolia`. The job reads `eth_chainId` then `eth_blockNumber` at the keyless `/v2` endpoint. No wallets, transactions or arbitrary RPC. Node uses Viem with an explicit Undici HTTPS proxy transport; the environment and permission stay the same. The current Node/Python/Go recipes passed [isolated proxy/TLS verification](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-alchemy-verification.md#current-sdk-through-proxy-acceptance), including credential replacement, audit, denial and revocation controls. Your real provider entitlement and deployed job still need verification.
+- **X lookup:** the downloaded config supplies the saved username; alternatively set `SERVERWARE_X_USERNAME` to the permitted `[a-z0-9_]{1,15}` name without `@`. This uses an app-only credential and does not authorize posting.
 - **X posting:** set reviewed `SERVERWARE_X_POST_TEXT` and deliberately set `SERVERWARE_X_POST_CONFIRM=post-once`, then invoke the selected entrypoint once. It can create a real post. A timeout, withheld response or other post-dispatch failure is an **unknown outcome**, not permission to replay. An advertised shared daily limit counts posting attempts, not guaranteed successes.
+
+For Alchemy and either X job, add `--config ./serverware-client.private.json`
+to the prepared example's normal command: `node client.mjs`,
+`python3 -I chain_status.py` / `username.py` / `post.py`, or `go run .`.
+The X posting text and confirmation must still be supplied locally, never in
+the JSON. Follow each README for the supported runtime and exact preparation.
 
 Public DNS, verified TLS and authenticated external access to a synthetic route, followed by revocation and denial, have [passed separately](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-public-proxy-verification.md#authenticated-synthetic-route-acceptance-passed). That routing result does not establish real-provider SDK jobs or OAuth consent/entitlement. Those still require separate acceptance, and older isolated results do not transfer automatically to changed SDK versions. Consult the [completion record](https://github.com/AndrewMohawk/serverware/blob/main/docs/project-completion.md) for evidence boundaries.
 
@@ -165,11 +179,18 @@ For npm, use the [stock npm/pacote launcher](https://github.com/AndrewMohawk/ser
 cd examples/npm-registry
 npm ci --ignore-scripts --no-audit --no-fund
 # After configuring the client and exact package permission:
-node client.mjs view
-node client.mjs manifest
+node client.mjs --config ./serverware-client.private.json
+# Explicit version required locally for this second command:
+node client.mjs --config ./serverware-client.private.json manifest
 ```
 
-Set `SERVERWARE_NPM_PACKAGE`; `manifest` also needs `SERVERWARE_NPM_VERSION`. These commands read metadata only. Preparing this launcher’s dependencies is separate from its proxied job.
+For metadata/publish permissions, the file supplies the selected package;
+`manifest` also needs local `SERVERWARE_NPM_VERSION`. Environment-only use remains
+supported by omitting `--config` and setting `SERVERWARE_NPM_PACKAGE` and the
+connection variables. These commands read metadata only. Preparing this
+launcher's dependencies is separate from its proxied job. Explicit `install`,
+`ci` and `publish` commands also accept `--config`, but their local inputs and
+confirmation below remain required.
 
 **Install packages and run npm audit** is a different capability-gated permission: authorize every required package, including transitive dependencies. Set `SERVERWARE_NPM_PROJECT` to a reviewed source and `SERVERWARE_NPM_OUTPUT` to a new directory, then use `node client.mjs install`. For `node client.mjs ci`, supply a reviewed v3 lock and another new output directory. Scripts stay disabled, default audit stays enabled, and output remains for inspection after failure.
 

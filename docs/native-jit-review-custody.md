@@ -126,6 +126,62 @@ this native pair, followed by an exact, one-use approved-request continuation.
 The legacy approval reader cannot open it. A pending ID, ordinary approval UI
 or notification success does not prove review, approval or provider execution.
 
+### Opening integration contract
+
+The next implementation must keep the private review inside the native browser
+and recheck the reviewer before disclosure. The following flow is the agreed
+integration target, not an enabled capability:
+
+1. A distinct opening owner is admitted at cold startup from independently
+   signed configuration and the actual native assignment. Sealing permission,
+   a configured hostname or an environment flag cannot select this owner.
+2. The native TLS owner creates a one-use challenge, browser cookie and
+   recipient key. The portal relays the literal public challenge through
+   `jit.review-open.authorize`; it cannot choose the challenge or supply a
+   reviewer identity. The authority derives the reviewer from the original
+   active OIDC session and authenticates the pending approval, retained pair,
+   bound credential, trust publication, RBAC and current policy in one bounded
+   read transaction.
+3. The native broker verifies the authorization and exact retained originals.
+   The native owner prepares an immutable private view but withholds it. Only
+   a signed preparation proof leaves native custody. The proof binds the
+   displayed document digest, approval, reviewer, session, challenge, pair,
+   native identity and original expiry; it does not assert that a human read it.
+4. `jit.review-open.receipt.issue` independently rechecks those current authority
+   rows and atomically records the opening receipt and audit event. The actual
+   commit owner returns a signed acknowledgment bound to the original challenge,
+   authorization, preparation proof, review digest and committed roots.
+5. The native owner accepts that exact acknowledgment only for its retained
+   one-use cookie, recipient and private view, then sends the view over its own
+   TLS connection. Failure or uncertain output cannot rearm the attempt.
+
+The receipt commit is the authorization point. It does not promise instantaneous
+revocation after commit. Challenge, preparation and disclosure remain within
+their original bounded intervals, clipped to session, assignment, approval and
+document expiry. Replaying a receipt neither renews those intervals nor produces
+a fresh disclosure acknowledgment for a revoked reviewer.
+
+The portal must authenticate the exact HTTPS route, OIDC cookie and CSRF state
+before reading its bounded request body. One monotonic deadline spans body
+reading and the worker handoff. It may relay ciphertext and signed public
+originals, never decrypted review content, native popup cookie secrets or
+recipient private keys. Its own original OIDC cookie is transient authority
+authentication input, never JavaScript, a retained plan or an audit field.
+Capability reads and ordinary page loads do not create an opening owner.
+
+Historical pairs retain their literal parent, child, pair and proof strings and
+the original sealed manifest. A new opening manifest cannot rewrite their
+identities, rerun the expired sealing window or reseal private material. A
+fixed historical-format validator checks storage consistency only; the opening
+authority must separately authenticate the selected row and current reviewer.
+The existing assertion reader's fixed row schedule and aggregate bounds cannot
+be relabeled as this new read operation.
+
+Opening receipts must not enable the legacy approve, deny or WebAuthn-options
+paths. Those paths require explicit native-family refusal until native decision
+and exact approved-request continuation are implemented. The shared workspace
+must keep `can_decide` false; hiding its controls alone is insufficient.
+
 ### Source map and evidence limits
 
 - [Startup contract](../data-plane/decision-gate-rs/src/native_startup_config/jit_review.rs),

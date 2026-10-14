@@ -35,6 +35,7 @@ SHELL := /bin/sh
 .PHONY: verify-native-broker-package-closure verify-static-credential-provenance-values
 .PHONY: verify-native-jit-broker-channel
 .PHONY: verify-native-jit-rust-fixture verify-native-jit-rust-contract
+.PHONY: verify-native-jit-retained-history
 .PHONY: verify-operator-live-smoke-config
 .PHONY: verify-portal-static-credential-replacement
 .PHONY: verify-portal-session-activation-entry
@@ -11475,6 +11476,11 @@ verify-authority-native-jit-review-custody:
 
 verify-authority-native-jit-review-registration:
 	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_native_jit_review_registration.py
+
+# Literal historical storage validation only, not current reviewer admission
+# or permission to decrypt, disclose, approve or continue the pending request.
+verify-native-jit-retained-history:
+	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_native_jit_retained_history.py
 
 # No image build, native startup, database or provider effects. The package
 # probe imports only the explicit staged broker roster, not the source tree.

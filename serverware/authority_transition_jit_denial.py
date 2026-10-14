@@ -83,6 +83,7 @@ class JitDenyKernel:
         item_id, actor = values["item_id"], values["actor_id"]
         selected = context.exact("approval_requests", {"id": item_id})
         approval = shared._row(selected, "JIT denial approval")
+        approval_owner._require_legacy_decision(approval)
         policy, policy_digest = approval_owner._policy(context, values, approval)
         _require(approval["status"] in {"pending", "denied"}, "JIT denial approval is terminal")
         replay = approval["status"] == "denied"

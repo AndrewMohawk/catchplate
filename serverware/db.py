@@ -69643,23 +69643,59 @@ def _ensure_policy_route_reference(conn: Any, route_id: str) -> None:
     )
 
 
-def get_approval_request_metadata(item_id: str) -> dict[str, Any] | None:
-    """Read public decision metadata, not private documents or authority proof."""
+# Python str.lstrip() whitespace, without NUL; bound as data in both backends.
+_APPROVAL_REFERENCE_WHITESPACE = (
+    "\t\n\v\f\r\x1c\x1d\x1e\x1f \x85\xa0\u1680"
+    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u2028\u2029\u202f\u205f\u3000"
+)
+
+
+def get_approval_request_metadata(
+    item_id: str, *, for_decision: bool = False,
+) -> dict[str, Any] | None:
+    """Read public metadata, optionally with a refusal-only decision fence.
+
+    Decision callers need to distinguish retained native references: their URL
+    is a digest, not a native marker. SQL returns only a derived integer, never
+    either private value. This classification is not admission or decryption;
+    the authority kernels independently check the complete stored references.
+    Normal metadata/collection callers do not read those columns at all.
+    """
+    fence = ""
+    parameters: tuple[Any, ...] = ()
+    if for_decision:
+        fence = """, CASE WHEN url IS NULL OR canonical_request IS NULL
+                   OR redacted_display IS NULL
+                   OR lower(substr(ltrim(url, ?), 1, 10)) = 'native-jit'
+                   OR lower(substr(ltrim(canonical_request, ?), 1, 10)) = 'native-jit'
+                   OR lower(substr(ltrim(redacted_display, ?), 1, 10)) = 'native-jit'
+                   THEN 1 ELSE 0 END AS legacy_decision_blocked"""
+        parameters = (_APPROVAL_REFERENCE_WHITESPACE,) * 3
     with connect() as conn:
         row = conn.execute(
-            """
+            f"""
             SELECT id, route_id, method, url, status, requested_at, expires_at,
                    approved_until, decision_note, principal_id, credential_id,
                    credential_version, policy_hash, request_digest,
                    operation_digest, grant_ttl_seconds, grant_max_uses,
                    approver_policy_digest, verified_assertion_receipt_digest,
-                   approved_by, approver_policy_json
+                   approved_by, approver_policy_json{fence}
             FROM approval_requests
             WHERE id = ?
             """,
-            (item_id,),
+            (*parameters, item_id),
         ).fetchone()
-    return row_to_approval_public(row) if row else None
+    if row is None:
+        return None
+    result = row_to_approval_public(row)
+    if for_decision:
+        # CASE is an integer in SQLite and PostgreSQL. Unexpected driver output
+        # cannot become permission to proceed; only exact integer zero clears
+        # this preliminary refusal, not any other decision-authority check.
+        value = row["legacy_decision_blocked"]
+        result["_legacy_decision_blocked"] = not (type(value) is int and value == 0)
+    return result
 
 
 def get_approval_request(item_id: str) -> dict[str, Any] | None:

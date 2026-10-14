@@ -24,7 +24,8 @@ def no_external_effects(event, _arguments):
         raise AssertionError("denial API units forbid external effects")
 
 
-sys.addaudithook(no_external_effects)
+if __name__ == "__main__":
+    sys.addaudithook(no_external_effects)
 from fastapi import Body, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -76,6 +77,7 @@ class Fixture:
     """These successful authority/DB seams are doubles, never admission."""
     def __init__(self, *, metadata_routes=False):
         self.approval = {
+            "_legacy_decision_blocked": False,
             "id": ID, "status": "pending", "expires_at": "2999-01-01T00:00:00+00:00",
             "policy_hash": POLICY, "route_id": "route.synthetic",
             "approver_policy": {"allowAnyApproverId": False, "allowedApproverIds": [ACTOR],
@@ -118,7 +120,8 @@ class Fixture:
         select(APP_TREE, {"_approval_decision_note", "ApprovalApprove", "ApprovalWebAuthnOptionsRequest",
             "ApprovalDenyOptionsRequest", "ApprovalDeny", "_approval_authn_policy", "_approval_is_expired",
             "_jit_decision_authority_arguments", "_jit_approve_authority_arguments", "_jit_deny_authority_arguments",
-            "_assert_approver_allowed", "_denial_review_context", "deny", "denial_webauthn_options"}, self.ns, "serverware/app.py")
+            "_assert_approver_allowed", "_assert_legacy_approval_decision_allowed", "_denial_review_context",
+            "deny", "denial_webauthn_options"}, self.ns, "serverware/app.py")
         if metadata_routes:
             select(APP_TREE, {"approve", "approval_webauthn_options", "approval_review",
                 "_assert_approval_reviewer_allowed"}, self.ns, "serverware/app.py")
@@ -226,7 +229,7 @@ class DenialApiTests(unittest.TestCase):
         fixture.db.get_active_approval_review_receipt.assert_called_once_with(REVIEW, approval_request_id=ID, reviewer_id=ACTOR)
         fixture.policy.assert_called_once_with(fixture.approval, require_current_policy=True)
         fixture.db.issue_policy_authority_webauthn_challenge.assert_not_called()
-        fixture.db.get_approval_request_metadata.assert_called_once_with(ID)
+        fixture.db.get_approval_request_metadata.assert_called_once_with(ID, for_decision=True)
         fixture.db.get_approval_request.assert_not_called()
 
     def test_options_and_execute_bind_same_original_reason_review_policy(self):
@@ -358,7 +361,7 @@ class DenialApiTests(unittest.TestCase):
                 fixture.db.approval_public_summary.return_value = {"id": ID, "status": "approved"}
                 getattr(fixture, action)()
                 self.assertEqual([call[0] for call in calls.mock_calls], ["metadata", "policy", "review", terminal])
-                fixture.db.get_approval_request_metadata.assert_called_once_with(ID)
+                fixture.db.get_approval_request_metadata.assert_called_once_with(ID, for_decision=True)
                 fixture.db.get_approval_request.assert_not_called()
                 fixture.policy.assert_called_once_with(fixture.approval, require_current_policy=True)
                 fixture.db.get_active_approval_review_receipt.assert_called_once_with(

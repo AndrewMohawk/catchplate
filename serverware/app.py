@@ -5296,6 +5296,15 @@ def _assert_approval_reviewer_allowed(
     _assert_approver_allowed(identity, jit)
 
 
+def _assert_legacy_approval_decision_allowed(approval: dict[str, Any]) -> None:
+    # Only decision metadata includes this SQL-derived refusal bit. No private
+    # reference is returned or opened, and an absent/malformed bit fails closed.
+    # A clear bit is not authority: kernels independently inspect stored rows.
+    if approval.get("_legacy_decision_blocked") is not False:
+        raise HTTPException(status_code=409,
+            detail="Native decisions require protected continuation authority")
+
+
 def _webauthn_required(authn_policy: dict[str, Any]) -> bool:
     return bool(authn_policy.get("webauthnRequired"))
 
@@ -18085,9 +18094,10 @@ def approve(
     payload: ApprovalApprove | None = Body(default=None),
     identity: AdminIdentity = Depends(require_role("approver")),
 ) -> dict[str, Any]:
-    approval = db.get_approval_request_metadata(approval_id)
+    approval = db.get_approval_request_metadata(approval_id, for_decision=True)
     if not approval:
         raise HTTPException(status_code=404, detail="approval not found")
+    _assert_legacy_approval_decision_allowed(approval)
     if approval["status"] != "pending":
         raise HTTPException(
             status_code=409, detail=f"approval is already {approval['status']}"
@@ -18189,11 +18199,12 @@ def _denial_review_context(
     identity: AdminIdentity,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     try:
-        approval = db.get_approval_request_metadata(approval_id)
+        approval = db.get_approval_request_metadata(approval_id, for_decision=True)
     except db.MetadataStoreError as exc:
         raise HTTPException(status_code=503, detail="approval authority is unavailable") from exc
     if not approval:
         raise HTTPException(status_code=404, detail="approval not found")
+    _assert_legacy_approval_decision_allowed(approval)
     if approval["status"] != "pending":
         raise HTTPException(status_code=409, detail="approval is not pending")
     if _approval_is_expired(approval):
@@ -18285,9 +18296,10 @@ def approval_webauthn_options(
     payload: ApprovalWebAuthnOptionsRequest,
     identity: AdminIdentity = Depends(require_role("approver")),
 ) -> dict[str, Any]:
-    approval = db.get_approval_request_metadata(approval_id)
+    approval = db.get_approval_request_metadata(approval_id, for_decision=True)
     if not approval:
         raise HTTPException(status_code=404, detail="approval not found")
+    _assert_legacy_approval_decision_allowed(approval)
     if approval["status"] != "pending":
         raise HTTPException(status_code=409, detail="approval is not pending")
     jit = _approval_jit_policy(approval, require_current_policy=True)

@@ -58,6 +58,7 @@ pub mod native_oauth_cleanup_v1;
 pub mod native_oauth_pending_retirement_v1;
 pub mod native_oauth_capture_retirement_v1;
 pub mod native_oauth_exchange_v1;
+mod native_browser_transport_v1;
 pub mod native_oauth_setup_v1;
 pub mod native_static_credential_v1;
 pub mod native_static_credential_browser_v1;

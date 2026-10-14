@@ -2,14 +2,13 @@
 //! No public byte constructor or forwarded TLS assertion creates Accepted.
 use crate::enclave_vsock_v1::{VsockShutdownV1, VsockStreamV1};
 use crate::native_currentness_v1 as current;
+use crate::native_browser_transport_v1::Transport;
 use crate::native_oauth_exchange_v1::{self as wire, BrowserTls};
 use crate::native_response_profile_v1::canonical_ascii_bytes;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use ring::rand::SecureRandom;
-use rustls::{ServerConnection, StreamOwned};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use zeroize::Zeroize;
@@ -36,9 +35,9 @@ impl Purpose {
 pub enum Kind { Page, Intake, Prepare }
 
 pub struct Accepted {
-    stream: StreamOwned<ServerConnection, VsockStreamV1>,
-    ingress: Arc<BrowserTls>, deadline: u64, kind: Kind, body: Vec<u8>,
-    cookies: BTreeMap<String, String>, challenge: Option<String>, responded: bool,
+    transport: Transport,
+    kind: Kind, body: Vec<u8>,
+    cookies: BTreeMap<String, String>, challenge: Option<String>,
     purpose: Purpose,
 }
 
@@ -51,25 +50,15 @@ impl Accepted {
         Self::accept_for(stream, ingress, deadline, Purpose::Rotation)
     }
 
-    fn accept_for(mut stream: VsockStreamV1, ingress: Arc<BrowserTls>, deadline: u64, purpose: Purpose) -> Result<Self, String> {
-        ingress.check(deadline)?;
-        stream.narrow_deadline(deadline).map_err(|_| "static browser cannot renew its socket interval")?;
-        stream.verify_connected_original(deadline).map_err(|_| "static browser accepted socket changed")?;
-        let connection = ServerConnection::new(ingress.config()).map_err(|_| "static browser TLS unavailable")?;
-        let mut owner = Self { stream: StreamOwned::new(connection, stream), ingress, deadline,
-            kind: Kind::Page, body: Vec::new(), cookies: BTreeMap::new(), challenge: None, responded: false, purpose };
-        while owner.stream.conn.is_handshaking() {
-            owner.check()?;
-            owner.stream.conn.complete_io(&mut owner.stream.sock).map_err(|_| "static browser TLS handshake failed")?;
-        }
-        let origin = wire::origin(owner.ingress.origin())?;
-        wire::ensure(owner.stream.conn.server_name() == origin.host_str()
-            && owner.stream.conn.alpn_protocol() == Some(b"http/1.1"), "static browser SNI or ALPN differs")?;
+    fn accept_for(stream: VsockStreamV1, ingress: Arc<BrowserTls>, deadline: u64, purpose: Purpose) -> Result<Self, String> {
+        let transport = Transport::accept(stream, ingress, deadline)?;
+        let origin = wire::origin(transport.origin())?;
+        let mut owner = Self { transport,
+            kind: Kind::Page, body: Vec::new(), cookies: BTreeMap::new(), challenge: None, purpose };
         let mut header = Vec::new();
         while !header.ends_with(b"\r\n\r\n") {
-            owner.check()?;
             let mut byte = [0u8; 1];
-            owner.stream.read_exact(&mut byte).map_err(|_| "static browser request incomplete")?;
+            owner.transport.read_exact(&mut byte)?;
             header.push(byte[0]);
             wire::ensure(header.len() <= 16384, "static browser header bound")?;
         }
@@ -78,15 +67,7 @@ impl Accepted {
         let mut lines = raw[..raw.len() - 4].split("\r\n");
         let first: Vec<_> = lines.next().ok_or("static browser request line")?.split(' ').collect();
         wire::ensure(first.len() == 3 && first[2] == "HTTP/1.1", "static browser request line differs")?;
-        owner.kind = match (purpose, first[0], first[1]) {
-            (Purpose::Creation, "GET", "/credentials/static")
-                | (Purpose::Rotation, "GET", "/credentials/static/rotate") => Kind::Page,
-            (Purpose::Creation, "POST", "/credentials/static/intake")
-                | (Purpose::Rotation, "POST", "/credentials/static/rotate/intake") => Kind::Intake,
-            (Purpose::Creation, "POST", "/credentials/static/prepare")
-                | (Purpose::Rotation, "POST", "/credentials/static/rotate/prepare") => Kind::Prepare,
-            _ => return Err("static browser route is not fixed".to_owned()),
-        };
+        owner.kind = route(purpose, first[0], first[1])?;
         let mut headers = BTreeMap::new();
         for line in lines {
             let (name, value) = line.split_once(':').ok_or("static browser header malformed")?;
@@ -109,7 +90,7 @@ impl Accepted {
         if owner.kind == Kind::Page {
             wire::ensure(length == 0, "static browser GET body refused")?;
         } else {
-            wire::ensure(length > 0 && headers.get("origin").map(String::as_str) == Some(owner.ingress.origin())
+            wire::ensure(length > 0 && headers.get("origin").map(String::as_str) == Some(owner.transport.origin())
                 && headers.get("sec-fetch-site").map(String::as_str) == Some("same-origin")
                 && headers.get("content-type").map(String::as_str) == Some("application/json"),
                 "static browser POST lacks same-origin framing")?;
@@ -124,9 +105,8 @@ impl Accepted {
         owner.body.resize(length, 0);
         let mut offset = 0;
         while offset < length {
-            owner.check()?;
             let end = (offset + 16384).min(length);
-            let count = owner.stream.read(&mut owner.body[offset..end]).map_err(|_| "static browser body incomplete")?;
+            let count = owner.transport.read(&mut owner.body[offset..end])?;
             wire::ensure(count > 0, "static browser body truncated")?;
             offset += count;
         }
@@ -140,17 +120,15 @@ impl Accepted {
     }
 
     pub fn kind(&self) -> &Kind { &self.kind }
-    pub fn deadline(&self) -> u64 { self.deadline }
+    pub fn deadline(&self) -> u64 { self.transport.deadline() }
     pub fn shutdown_handle(&self) -> Result<VsockShutdownV1, String> {
-        self.stream.sock.shutdown_handle().map_err(|_| "static browser shutdown owner".to_owned())
+        self.transport.shutdown_handle()
     }
     pub fn check(&self) -> Result<(), String> {
-        self.ingress.check(self.deadline)?;
-        self.stream.sock.verify_connected_original(self.deadline).map_err(|_| "static browser socket original changed".to_owned())
+        self.transport.check()
     }
     pub(crate) fn verify_ingress(&self, expected: &Arc<BrowserTls>) -> Result<(), String> {
-        wire::ensure(Arc::ptr_eq(&self.ingress, expected), "static request belongs to another actual TLS ingress")?;
-        self.check()
+        self.transport.verify_ingress(expected)
     }
     pub(crate) fn command(&self) -> Result<Value, String> {
         self.check()?;
@@ -162,7 +140,7 @@ impl Accepted {
                 let secret = value["secret"].as_str().ok_or("static UTF-8 secret absent")?;
                 wire::ensure(!secret.is_empty() && secret.len() <= MAX_SECRET, "static secret bound")?;
                 json!({"apiVersion": self.purpose.channel(), "phase": "intake", "intentOriginal": intent,
-                    "secretBase64url": URL_SAFE_NO_PAD.encode(secret.as_bytes()), "deadlineBoottimeNs": self.deadline})
+                    "secretBase64url": URL_SAFE_NO_PAD.encode(secret.as_bytes()), "deadlineBoottimeNs": self.deadline()})
             },
             Kind::Prepare => {
                 wire::fields(&value, &["credentialId", "argumentsOriginal"])?;
@@ -173,7 +151,7 @@ impl Accepted {
                 json!({"apiVersion": self.purpose.channel(), "phase": "prepare-execution", "credentialId": id,
                     "argumentsOriginal": original(&value["argumentsOriginal"])?, "browserNonce": cookie,
                     "challenge": self.challenge.as_deref().ok_or("static native challenge absent")?,
-                    "deadlineBoottimeNs": self.deadline})
+                    "deadlineBoottimeNs": self.deadline()})
             },
             Kind::Page => return Err("static page has no helper command".to_owned()),
         };
@@ -183,25 +161,7 @@ impl Accepted {
     }
 
     pub fn respond(&mut self, content_type: &str, body: &[u8], cookie: Option<&str>, csp: &str) -> Result<(), String> {
-        self.check()?;
-        wire::ensure(!self.responded && body.len() <= MAX_BODY
-            && matches!(content_type, "application/json" | "text/html; charset=utf-8")
-            && !csp.contains(['\r', '\n']), "static browser response invalid")?;
-        if let Some(value) = cookie {
-            wire::ensure(value.len() <= 512 && !value.contains(['\r', '\n']), "static cookie framing")?;
-        }
-        self.responded = true;
-        let mut header = format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: {csp}\r\n", body.len());
-        if let Some(value) = cookie { header.push_str("Set-Cookie: "); header.push_str(value); header.push_str("\r\n"); }
-        header.push_str("\r\n");
-        for piece in [header.as_bytes(), body] {
-            for chunk in piece.chunks(16384) {
-                self.check()?;
-                self.stream.write_all(chunk).map_err(|_| "static browser response uncertain")?;
-            }
-        }
-        self.stream.flush().map_err(|_| "static browser response flush uncertain")?;
-        self.check()
+        self.transport.respond(content_type, body, cookie, csp)
     }
 }
 
@@ -209,9 +169,24 @@ impl Drop for Accepted {
     fn drop(&mut self) {
         self.body.zeroize();
         for value in self.cookies.values_mut() { value.zeroize(); }
-        let _ = self.stream.sock.shutdown();
     }
 }
+
+fn route(purpose: Purpose, method: &str, path: &str) -> Result<Kind, String> {
+    match (purpose, method, path) {
+        (Purpose::Creation, "GET", "/credentials/static")
+            | (Purpose::Rotation, "GET", "/credentials/static/rotate") => Ok(Kind::Page),
+        (Purpose::Creation, "POST", "/credentials/static/intake")
+            | (Purpose::Rotation, "POST", "/credentials/static/rotate/intake") => Ok(Kind::Intake),
+        (Purpose::Creation, "POST", "/credentials/static/prepare")
+            | (Purpose::Rotation, "POST", "/credentials/static/rotate/prepare") => Ok(Kind::Prepare),
+        _ => Err("static browser route is not fixed".to_owned()),
+    }
+}
+
+#[cfg(test)]
+#[path = "native_static_credential_browser_v1_tests.rs"]
+mod tests;
 
 fn original(value: &Value) -> Result<&str, String> {
     let value = value.as_str().ok_or("static original must remain a literal string")?;

@@ -25,6 +25,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(len(paths), len(set(paths)))
         self.assertEqual({row.category for row in runner.SUITES}, {"backend", "notifications", "ui_contract"})
         for script in ("test_jit_denial_api.py", "test_runtime_grant_publication.py", "test_authority_jit_denial.py",
+                "test_native_jit_decision_fences_http.py",
                 "test_authority_jit_approval.py", "test_authority_jit_request.py",
                 "test_authority_jit_private_request.py", "test_native_jit_review_material.py",
                 "test_native_jit_review_owner.py",
@@ -35,6 +36,7 @@ class RunnerTests(unittest.TestCase):
                 "test_native_jit_legacy_reader.py",
                 "test_native_jit_sqlite_bootstrap.py",
                 "test_authority_native_jit_submission.py",
+                "test_authority_native_jit_retained_history.py",
                 "test_native_jit_submission_http.py",
                 "test_authority_release_private_input.py", "test_authority_release_private_request.py",
                 "test_authority_release_private_ingress.py", "test_native_jit_prepare.py",

@@ -250,6 +250,39 @@ class JitDenialPureTests(unittest.TestCase):
         with self.assertRaises(core.TransitionKernelError):
             denial.arguments({**signed["arguments"], "ttl_seconds": 60})
 
+    def test_native_family_in_any_stored_reference_refuses_even_with_live_review(self):
+        fixture = DenialFixture()
+        signed = fixture.sign()
+        self.assertEqual(transition(fixture, signed).result["status"], "denied")
+        markers = ("native-jit:" + "a" * 64, "native-jit:malformed", "native-jit", "native-jit-other",
+            "NATIVE-JIT:malformed", " \t\r\nNaTiVe-JiT:malformed", "\u2003native-jit:malformed")
+        for field in ("url", "canonical_request", "redacted_display"):
+            for marker in markers:
+                with self.subTest(field=field, marker=marker), \
+                        patch.dict(fixture.data["approval_requests"][0], {field: marker}):
+                    before = copy.deepcopy(fixture.data)
+                    with patch.object(approval, "_policy", side_effect=AssertionError("native policy reached")) as policy, \
+                            patch.object(approval, "_assertion", side_effect=AssertionError("native assertion reached")) as assertion, \
+                            self.assertRaisesRegex(core.TransitionKernelError, "Native JIT decisions require their continuation authority"):
+                        transition(fixture, signed)
+                    policy.assert_not_called(); assertion.assert_not_called()
+                    self.assertEqual(fixture.data, before)
+
+    def test_native_or_malformed_references_cannot_enter_denial_replay(self):
+        fixture = DenialFixture()
+        signed = fixture.sign()
+        fixture.apply_model(transition(fixture, signed))
+        self.assertTrue(transition(fixture, signed).result["idempotent_replay"])
+        for field in ("url", "canonical_request", "redacted_display"):
+            for value in ("native-jit:retained", " \tNATIVE-JIT:malformed", None, 0, False, [], {}):
+                with self.subTest(field=field, type=type(value).__name__), \
+                        patch.dict(fixture.data["approval_requests"][0], {field: value}):
+                    before = copy.deepcopy(fixture.data)
+                    with self.assertRaisesRegex(core.TransitionKernelError, "Native JIT decisions require their continuation authority"):
+                        transition(fixture, signed)
+                    self.assertEqual(fixture.data, before)
+        self.assertTrue(transition(fixture, signed).result["idempotent_replay"])
+
     def test_real_evidence_signature_and_raw_assertion_mismatches_refuse(self):
         fixture = DenialFixture()
         signed = fixture.sign()

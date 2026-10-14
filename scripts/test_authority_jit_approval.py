@@ -428,6 +428,40 @@ class JitApprovalPureTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(core.TransitionKernelError):
                 jit.JitDecideKernel().transition(fixture.context(altered))
 
+    def test_native_family_in_any_stored_reference_refuses_before_policy_or_assertion(self):
+        fixture = Fixture()
+        signed = fixture.sign()
+        self.assertEqual(jit.JitDecideKernel().transition(fixture.context(signed)).result["status"], "approved")
+        markers = ("native-jit:" + "a" * 64, "native-jit:malformed", "native-jit", "native-jit-other",
+            "NATIVE-JIT:malformed", " \t\r\nNaTiVe-JiT:malformed", "\u2003native-jit:malformed")
+        for field in ("url", "canonical_request", "redacted_display"):
+            for marker in markers:
+                for status in ("pending", "approved"):
+                    with self.subTest(field=field, marker=marker, status=status), \
+                            patch.dict(fixture.data["approval_requests"][0], {field: marker, "status": status}):
+                        before = copy.deepcopy(fixture.data)
+                        with patch.object(jit, "_policy", side_effect=AssertionError("native policy reached")) as policy, \
+                                patch.object(jit, "_assertion", side_effect=AssertionError("native assertion reached")) as assertion, \
+                                self.assertRaisesRegex(core.TransitionKernelError, "Native JIT decisions require their continuation authority"):
+                            jit.JitDecideKernel().transition(fixture.context(signed))
+                        policy.assert_not_called(); assertion.assert_not_called()
+                        self.assertEqual(fixture.data, before)
+
+    def test_malformed_stored_reference_types_fail_closed_with_valid_legacy_control(self):
+        fixture = Fixture()
+        signed = fixture.sign()
+        for field in ("url", "canonical_request", "redacted_display"):
+            for value in (None, 0, False, [], {}):
+                with self.subTest(field=field, type=type(value).__name__), \
+                        patch.dict(fixture.data["approval_requests"][0], {field: value}), \
+                        self.assertRaisesRegex(core.TransitionKernelError, "Native JIT decisions require their continuation authority"):
+                    jit.JitDecideKernel().transition(fixture.context(signed))
+            missing = dict(fixture.data["approval_requests"][0]); missing.pop(field)
+            with self.subTest(field=field, missing=True), self.assertRaises(core.TransitionKernelError):
+                jit._require_legacy_decision(missing)
+        with patch.dict(fixture.data["approval_requests"][0], {"url": "https://synthetic.invalid/native-jit:ordinary"}):
+            self.assertEqual(jit.JitDecideKernel().transition(fixture.context(signed)).result["status"], "approved")
+
     def test_aggregate_insert_contract_is_narrow_and_fresh_cas_is_actual_source(self):
         def kinds(operation):
             return {item["mutation"] for item in contract.operation_spec(operation)["mutationTemplates"]

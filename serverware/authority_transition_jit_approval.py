@@ -34,6 +34,16 @@ def _require(condition, message):
         raise core.TransitionKernelError(message)
 
 
+def _require_legacy_decision(approval):
+    # Opening authorization is not native decision/continuation authority.
+    # Match the complete reserved family used by the legacy receipt guard,
+    # without parsing, decrypting or normalizing any stored private document.
+    for field in ("url", "canonical_request", "redacted_display"):
+        value = approval.get(field)
+        _require(type(value) is str and value.lstrip()[:10].lower() != "native-jit",
+            "Native JIT decisions require their continuation authority")
+
+
 def _time(value):
     _require(type(value) is str, "JIT timestamp is not an original SQL value")
     try:
@@ -263,6 +273,7 @@ class JitDecideKernel:
         item_id, actor = values["item_id"], values["actor_id"]
         approval_selected = context.exact("approval_requests", {"id": item_id})
         approval = shared._row(approval_selected, "JIT approval")
+        _require_legacy_decision(approval)
         policy, policy_digest = _policy(context, values, approval)
         _require(approval["status"] in {"pending", "approved"}, "JIT approval is terminal")
         _require(approval["status"] != "pending" or _time(approval["expires_at"]) > context.database_now,

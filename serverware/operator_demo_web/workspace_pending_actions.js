@@ -13,27 +13,33 @@ function projectApprovalCapabilities(value) {
       value.reason === 'role_required' && value.can_list) throw new Error('Invalid pending-action capability');
   return Object.fromEntries(fields.map(key => [key, value[key]]));
 }
-function projectPendingApprovals(value) {
+function projectApprovalMetadata(item) {
   const text = (item, maximum) => typeof item === 'string' && item.length > 0 && item.length <= maximum &&
     !/[\u0000-\u001f\u007f]/.test(item);
   const date = item => text(item, 64) && /^\d{4}-\d{2}-\d{2}T/.test(item) && Number.isFinite(Date.parse(item));
   const optionalText = (item, maximum) => item === null || text(item, maximum);
+  const credential = item && (item.credential_id === null && item.credential_version === null ||
+    item.credential_id === '' && item.credential_version === 0 ||
+    text(item.credential_id, 512) && Number.isSafeInteger(item.credential_version) && item.credential_version >= 1);
+  if (!item || typeof item.id !== 'string' || !pendingApprovalUUID.test(item.id) ||
+      !['pending', 'approved', 'denied', 'expired'].includes(item.status) ||
+      !text(item.route_id, 256) || typeof item.method !== 'string' || !/^[A-Z]{1,16}$/.test(item.method) || !text(item.url, 4096) ||
+      !date(item.requested_at) || !date(item.expires_at) || !optionalText(item.principal_id, 512) ||
+      !credential ||
+      !(item.policy_hash === null || typeof item.policy_hash === 'string' && /^sha256:[0-9a-f]{64}$/.test(item.policy_hash)))
+    throw new Error('Invalid pending-action metadata');
+  // Explicitly discard all other fields, even if an unexpected server sends
+  // private review material. Nothing from the raw response enters DOM/state.
+  return Object.fromEntries(['id', 'status', 'route_id', 'method', 'url', 'requested_at', 'expires_at',
+    'principal_id', 'credential_id', 'credential_version', 'policy_hash'].map(key => [key, item[key]]));
+}
+function projectPendingApprovals(value) {
   if (!Array.isArray(value) || value.length > 100 || new Set(value.map(item => item?.id)).size !== value.length)
     throw new Error('Invalid pending-action metadata');
   return value.map(item => {
-    const credential = item && (item.credential_id === null && item.credential_version === null ||
-      item.credential_id === '' && item.credential_version === 0 ||
-      text(item.credential_id, 512) && Number.isSafeInteger(item.credential_version) && item.credential_version >= 1);
-    if (!item || typeof item.id !== 'string' || !pendingApprovalUUID.test(item.id) || item.status !== 'pending' ||
-        !text(item.route_id, 256) || typeof item.method !== 'string' || !/^[A-Z]{1,16}$/.test(item.method) || !text(item.url, 4096) ||
-        !date(item.requested_at) || !date(item.expires_at) || !optionalText(item.principal_id, 512) ||
-        !credential ||
-        !(item.policy_hash === null || typeof item.policy_hash === 'string' && /^sha256:[0-9a-f]{64}$/.test(item.policy_hash)))
-      throw new Error('Invalid pending-action metadata');
-    // Explicitly discard all other fields, even if an unexpected server sends
-    // private review material. Nothing from the raw response enters DOM/state.
-    return Object.fromEntries(['id', 'status', 'route_id', 'method', 'url', 'requested_at', 'expires_at',
-      'principal_id', 'credential_id', 'credential_version', 'policy_hash'].map(key => [key, item[key]]));
+    const projected = projectApprovalMetadata(item);
+    if (projected.status !== 'pending') throw new Error('Invalid pending-action metadata');
+    return projected;
   });
 }
 function pendingApprovalLocation(pathname) {
@@ -53,6 +59,7 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
   };
   let visible = false, generation = 0, controller = null, loading = false;
   let capability = null, rows = null, requestedId = null, invalidLink = false, opener = null, opening = false;
+  let selectedRecord;
   const status = message => { el('pending-actions-status').textContent = message; };
   const hold = id => {
     try {
@@ -94,12 +101,23 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
     if (!requestedId) return;
     selected.append(node('h2', 'Selected request'), node('code', requestedId));
     if (rows === null) { selected.append(node('p', 'Refresh pending actions to locate this exact request.')); return; }
-    const item = rows.find(row => row.id === requestedId);
+    const item = rows.find(row => row.id === requestedId) || (selectedRecord?.id === requestedId ? selectedRecord : null);
     if (!item) {
-      selected.append(node('p', 'This request is not in the first 100 visible pending actions. It may have completed, expired or be unavailable to you. No other request was selected.'));
+      selected.append(node('p', selectedRecord === null ?
+        'This request was not found. No other request was selected.' :
+        'Loading the status of this exact request…'));
       return;
     }
+    selected.append(node('p', 'Status: ' + item.status[0].toUpperCase() + item.status.slice(1), 'badge'));
     selected.append(metadata(item));
+    if (item.status !== 'pending') {
+      selected.append(node('p', item.status === 'approved' ?
+        'Approval was recorded. This does not confirm that the provider request completed; check audit logging for its outcome.' :
+        item.status === 'denied' ? 'This request was denied.' : 'This request expired.', 'small muted'));
+      const recovery = hold(item.id);
+      if (recovery) selected.append(node('p', recovery, 'small muted'));
+      return;
+    }
     const reason = hold(item.id) || (Date.parse(item.expires_at) <= Date.now() ? 'This request has expired; refresh its metadata.' : openingReason());
     selected.append(node('p', reason, 'small muted'));
     if (!capability?.can_open_native_review || !opener) return;
@@ -107,7 +125,8 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
     button.disabled = loading || opening || Boolean(hold(item.id)) || Date.parse(item.expires_at) <= Date.now();
     button.addEventListener('click', async () => {
       if (!visible || loading || opening || !capability?.can_open_native_review || !opener ||
-          requestedId !== item.id || !rows?.some(row => row === item) || hold(item.id) || Date.parse(item.expires_at) <= Date.now()) return;
+          requestedId !== item.id || !(rows?.some(row => row === item) || selectedRecord === item) ||
+          hold(item.id) || Date.parse(item.expires_at) <= Date.now()) return;
       const version = generation, open = opener;
       opening = true; render();
       try { await open(item.id); }
@@ -129,7 +148,7 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
       button.disabled = loading || opening;
       button.addEventListener('click', () => {
         if (!visible || loading || opening || !rows?.some(row => row === item)) return;
-        requestedId = item.id; invalidLink = false;
+        requestedId = item.id; invalidLink = false; selectedRecord = undefined;
         history.replaceState(null, '', '/approvals/' + item.id + '#pending-actions');
         renderSelected(); el('pending-actions-selected').focus({preventScroll: true});
       });
@@ -137,7 +156,7 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
     }));
     renderSelected();
   }
-  async function request(path, signal) {
+  async function request(path, signal, allowMissing = false) {
     const response = await fetch(path, {method: 'GET', credentials: 'same-origin', cache: 'no-store',
       redirect: 'error', headers: {'Accept': 'application/json'}, signal});
     if (!visible || signal.aborted) throw new Error('discarded');
@@ -145,6 +164,7 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
       onAuthenticationLost();
       throw new Error('authentication');
     }
+    if (allowMissing && response.status === 404) return null;
     if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('unavailable');
     const raw = await response.text();
     if (raw.length > 1048576) throw new Error('unavailable');
@@ -155,7 +175,7 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
     const version = ++generation;
     controller?.abort(); controller = new AbortController();
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]);
-    loading = true; capability = null; rows = null;
+    loading = true; capability = null; rows = null; selectedRecord = undefined;
     status('Loading pending actions…'); render();
     try {
       const nextCapability = projectApprovalCapabilities(await request('/api/approvals/capabilities', signal));
@@ -164,13 +184,19 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
       if (!capability.can_list) { status('Pending actions are unavailable for this session.'); return false; }
       const nextRows = projectPendingApprovals(await request('/api/approvals?status=pending', signal));
       if (version !== generation || !visible) return false;
+      if (requestedId && !nextRows.some(row => row.id === requestedId)) {
+        const result = await request('/api/approvals/' + requestedId, signal, true);
+        if (version !== generation || !visible) return false;
+        selectedRecord = result === null ? null : projectApprovalMetadata(result);
+        if (selectedRecord && selectedRecord.id !== requestedId) throw new Error('unavailable');
+      }
       rows = nextRows;
       status(rows.length ? rows.length + ' pending action' + (rows.length === 1 ? '' : 's') + ' visible to you. Showing at most the first 100.' :
         'No pending actions visible to you.');
       return true;
     } catch (error) {
       if (version !== generation || !visible) return false;
-      capability = null; rows = null;
+      capability = null; rows = null; selectedRecord = undefined;
       status(error.message === 'authentication' ? 'Your Serverware session could not be verified. Reload and sign in again.' :
         'Pending actions could not be loaded. Refresh to try again; no private review or decision was requested.');
       return false;
@@ -180,18 +206,22 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
   }
   function show(value, selection = {}) {
     const changed = visible !== Boolean(value);
+    const previousId = requestedId;
     visible = Boolean(value);
     requestedId = typeof selection.requestedId === 'string' && pendingApprovalUUID.test(selection.requestedId) ? selection.requestedId : null;
     invalidLink = selection.invalidLink === true || Boolean(selection.requestedId && !requestedId);
     if (!visible) {
-      ++generation; controller?.abort(); controller = null; loading = false; opening = false; capability = null; rows = null;
+      ++generation; controller?.abort(); controller = null; loading = false; opening = false; capability = null; rows = null; selectedRecord = undefined;
       render(); return;
     }
-    render(); if (changed) void refresh();
+    if (previousId !== requestedId && !opening) {
+      ++generation; controller?.abort(); controller = null; loading = false; selectedRecord = undefined;
+    }
+    render(); if (changed || previousId !== requestedId) void refresh();
   }
   function authenticationLost() {
     ++generation; controller?.abort(); controller = null; loading = false; opening = false;
-    capability = null; rows = null;
+    capability = null; rows = null; selectedRecord = undefined;
     status('Your Serverware session could not be verified. Reload and sign in again.'); render();
   }
   el('pending-actions-refresh').addEventListener('click', () => { void refresh(); });
@@ -203,4 +233,4 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
   }};
 }
 if (typeof module !== 'undefined' && module.exports) module.exports = {
-  projectApprovalCapabilities, projectPendingApprovals, pendingApprovalLocation, createPendingActionsView};
+  projectApprovalCapabilities, projectApprovalMetadata, projectPendingApprovals, pendingApprovalLocation, createPendingActionsView};

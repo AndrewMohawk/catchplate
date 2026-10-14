@@ -13,6 +13,7 @@ import ast
 from contextlib import closing
 import json
 from pathlib import Path
+import re
 import sqlite3
 import sys
 from types import SimpleNamespace
@@ -31,6 +32,12 @@ EXPECTED = {"schema": "serverware.approvalCapabilities/v1", "can_list": True,
 SOURCE = ast.parse((ROOT / "serverware/app.py").read_text())
 ROUTE = next(node for node in SOURCE.body if isinstance(node, ast.FunctionDef)
     and node.name == "approval_capabilities")
+METADATA_ROUTE = next(node for node in SOURCE.body if isinstance(node, ast.FunctionDef)
+    and node.name == "approval_metadata")
+APPROVAL_ID = "11111111-1111-4111-8111-111111111111"
+METADATA_PATH = "/api/approvals/" + APPROVAL_ID
+PUBLIC_FIELDS = ("id", "status", "route_id", "method", "url", "requested_at", "expires_at",
+    "principal_id", "credential_id", "credential_version", "policy_hash")
 
 
 class Identity:
@@ -151,6 +158,68 @@ class CapabilityRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(isinstance(node, (ast.Import, ast.Await)) for node in ast.walk(ROUTE)))
 
 
+class ApprovalMetadataRouteTests(unittest.IsolatedAsyncioTestCase):
+    request = CapabilityRouteTests.request
+
+    async def asyncSetUp(self):
+        self.app, self.roles, self.reads, self.error = FastAPI(), {"auditor"}, [], None
+        self.item = {key: "synthetic" for key in PUBLIC_FIELDS}
+        self.item.update(id=APPROVAL_ID, status="approved", credential_version=1,
+            canonical_request="PRIVATE-CANARY", redacted_display="PRIVATE-CANARY",
+            review_receipt="PRIVATE-CANARY", approved_by="PRIVATE-CANARY")
+
+        def require_role(*roles):
+            def authenticate():
+                if self.error:
+                    raise self.error
+                if not self.roles.intersection({"admin", *roles}):
+                    raise HTTPException(403, "required role")
+                return Identity(self.roles)
+            return authenticate
+
+        def metadata(identifier):
+            self.reads.append(identifier)
+            return self.item
+
+        namespace = {"app": self.app, "Request": Request, "Response": Response,
+            "AdminIdentity": Identity, "Depends": Depends, "require_role": require_role,
+            "HTTPException": HTTPException, "JSONResponse": JSONResponse, "re": re,
+            "db": SimpleNamespace(get_approval_request_metadata=metadata)}
+        exec(compile(ast.Module(body=[METADATA_ROUTE], type_ignores=[]),
+            "<actual-approval-metadata-route>", "exec"), namespace)
+
+    async def test_terminal_status_is_exact_public_projection_for_existing_roles(self):
+        for role in ("admin", "approver", "auditor"):
+            self.roles = {role}
+            for status in ("pending", "approved", "denied", "expired"):
+                self.item["status"] = status
+                result = await self.request("GET", METADATA_PATH)
+                self.assertEqual(result.status_code, 200)
+                self.assertEqual(result.json(), {key: self.item[key] for key in PUBLIC_FIELDS})
+                self.assertEqual(result.headers["cache-control"], "no-store")
+                self.assertNotIn(b"PRIVATE-CANARY", result.content)
+        self.assertEqual(self.reads, [APPROVAL_ID] * 12)
+
+    async def test_invalid_framing_and_wrong_role_never_read_metadata(self):
+        for path, body in ((METADATA_PATH + "?status=approved", None),
+                (METADATA_PATH.replace("1111", "%31111", 1), None),
+                ("/api/approvals/not-an-id", None), (METADATA_PATH, b"private-body")):
+            self.assertEqual((await self.request("GET", path, content=body)).status_code, 400)
+        self.roles = {"policy_author"}
+        self.assertEqual((await self.request("GET", METADATA_PATH)).status_code, 403)
+        self.error = HTTPException(401, "authentication required")
+        self.assertEqual((await self.request("GET", METADATA_PATH)).status_code, 401)
+        self.assertEqual(self.reads, [])
+
+    async def test_missing_is_not_replaced_by_another_request(self):
+        self.item = None
+        result = await self.request("GET", METADATA_PATH)
+        self.assertEqual(result.status_code, 404)
+        self.assertEqual(result.json(), {"detail": "approval not found"})
+        self.assertEqual(result.headers["cache-control"], "no-store")
+        self.assertEqual(self.reads, [APPROVAL_ID])
+
+
 class OrdinaryCapabilityHTTPTests(unittest.TestCase):
     setUp = runtime.OperatorDemoRuntimeTests.setUp
     runner = runtime.OperatorDemoRuntimeTests.runner
@@ -199,6 +268,27 @@ class OrdinaryCapabilityHTTPTests(unittest.TestCase):
             self.assertEqual(headers.get("cache-control"), "no-store")
             code, _, _ = self.request("GET", "/api/approvals?status=pending")
             self.assertEqual(code, 403)
+            self.assertEqual(self.snapshot(), before)
+
+    def test_real_exact_terminal_metadata_is_read_only_and_never_decrypts_review(self):
+        with self.runner():
+            path = self.directory / "data" / "serverware.sqlite3"
+            with closing(sqlite3.connect(path)) as connection:
+                connection.execute("INSERT INTO approval_requests "
+                    "(id, route_id, method, url, status, requested_at, expires_at, canonical_request, redacted_display) "
+                    "VALUES (?, ?, 'GET', 'https://example.test/status', 'approved', ?, ?, ?, ?)",
+                    (APPROVAL_ID, "synthetic.status", "2026-10-14T00:00:00Z", "2026-10-14T00:01:00Z",
+                     "v2:INVALID-PRIVATE-CANARY", "v2:INVALID-PRIVATE-CANARY"))
+                connection.commit()
+            before = self.snapshot()
+            code, body, headers = self.request("GET", METADATA_PATH)
+            self.assertEqual(code, 200, body)
+            self.assertEqual(set(json.loads(body)), set(PUBLIC_FIELDS))
+            self.assertEqual(json.loads(body)["status"], "approved")
+            self.assertNotIn(b"PRIVATE-CANARY", body)
+            self.assertEqual(headers.get("cache-control"), "no-store")
+            code, body, _ = self.request("GET", "/api/approvals?status=pending")
+            self.assertEqual((code, json.loads(body)), (200, []))
             self.assertEqual(self.snapshot(), before)
 
 

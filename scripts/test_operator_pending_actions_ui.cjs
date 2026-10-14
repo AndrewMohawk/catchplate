@@ -13,6 +13,7 @@ const CORE = resolve(__dirname, '../serverware/operator_demo_web/workspace_core.
 const CAP = '/api/approvals/capabilities', LIST = '/api/approvals?status=pending';
 const NOW = Date.parse('2026-10-13T12:00:00Z');
 const ID = '11111111-1111-4111-8111-111111111111', OTHER = '22222222-2222-4222-8222-222222222222';
+const DETAIL = '/api/approvals/' + ID, OTHER_DETAIL = '/api/approvals/' + OTHER;
 const PRIVATE = 'synthetic-private-review-must-not-appear';
 const INJECTED = '<img src="https://untrusted.example.test/x" onerror="globalThis.pendingInjected=true">';
 const copy = value => JSON.parse(JSON.stringify(value));
@@ -62,10 +63,11 @@ function fixture(options = {}) {
     fetch: async (path, init) => {
       const call = {path, init}; calls.push(call);
       try {
-        assert([CAP, LIST].includes(path)); assert.equal(init.method, 'GET'); assert.equal(init.body, undefined);
+        assert([CAP, LIST, DETAIL, OTHER_DETAIL].includes(path)); assert.equal(init.method, 'GET'); assert.equal(init.body, undefined);
         assert.equal(init.credentials, 'same-origin'); assert.equal(init.cache, 'no-store'); assert.equal(init.redirect, 'error');
         assert.deepEqual(copy(init.headers), {Accept: 'application/json'}); assert(init.signal instanceof AbortSignal);
         if (options.handler) return await options.handler(call, calls.length);
+        if ([DETAIL, OTHER_DETAIL].includes(path)) return response(options.selected || {}, options.selected ? 200 : 404);
         return path === CAP ? response(options.capability || capability(), options.capStatus || 200) :
           response(options.rows || [], options.listStatus || 200);
       } catch (error) { faults.push(error.message); throw error; }
@@ -75,7 +77,7 @@ function fixture(options = {}) {
     get authLost() { return authLost; },
     async show(selection = {}) { view.show(true, selection); await flush(); },
     buttons(id = 'pending-actions-selected') { return descendants(node(id)).filter(value => value.tagName === 'button'); },
-    verify() { assert.deepEqual(faults, []); assert(calls.every(call => [CAP, LIST].includes(call.path))); }};
+    verify() { assert.deepEqual(faults, []); assert(calls.every(call => [CAP, LIST, DETAIL, OTHER_DETAIL].includes(call.path))); }};
 }
 function workspaceFixture(handler) {
   // Reuse the existing inert catalog DOM and literal public catalog fixture;
@@ -179,10 +181,58 @@ const tests = [
   ['missing and invalid links do not select an available different request', async () => {
     for (const selection of [{requestedId: OTHER}, {requestedId: 'bad'}, {requestedId: [ID]}, {invalidLink: true}]) {
       const f = fixture({rows: [approval()]}); await f.show(selection);
-      assert.match(f.node('pending-actions-selected').textContent, /not in the first 100|link is invalid/);
+      assert.match(f.node('pending-actions-selected').textContent, /not found|link is invalid/);
       assert(!f.node('pending-actions-selected').textContent.includes('synthetic.status.read'));
       assert.equal(f.replacements.length, 0); assert.equal(f.buttons().length, 0); f.verify();
     }
+  }],
+  ['exact status survives leaving the pending queue without replaying a decision', async () => {
+    for (const state of ['approved', 'denied', 'expired', 'pending']) {
+      const key = 'serverware.approvalDecisionUncertain.' + ID;
+      const f = fixture({rows: [approval({id: OTHER})], selected: approval({status: state, canonical_request: PRIVATE}), storage: [[key, ID]],
+        capability: capability({can_open_native_review: true, can_decide: true, reason: null})});
+      f.view.setReviewOpener(() => assert.fail('status recovery must not open review'));
+      await f.show({requestedId: ID});
+      const shown = f.node('pending-actions-selected').textContent;
+      assert.match(shown, new RegExp('Status: ' + state[0].toUpperCase() + state.slice(1)));
+      assert(!shown.includes(PRIVATE)); assert(!shown.includes(OTHER));
+      assert.match(shown, /No review or decision will be retried/);
+      if (state === 'approved') assert.match(shown, /does not confirm that the provider request completed/);
+      if (state !== 'pending') assert.equal(f.buttons().length, 0);
+      else assert(f.buttons()[0].disabled);
+      assert.deepEqual(f.calls.map(call => call.path), [CAP, LIST, DETAIL]);
+      assert.deepEqual([...f.storage], [[key, ID]]); f.verify();
+    }
+  }],
+  ['refresh follows an exact pending request to its recorded terminal status', async () => {
+    let completed = false;
+    const f = fixture({handler: call => call.path === CAP ? response(capability()) :
+      call.path === LIST ? response(completed ? [] : [approval()]) : response(approval({status: 'denied'}))});
+    await f.show({requestedId: ID}); assert.equal(f.calls.length, 2);
+    completed = true; assert.equal(await f.view.refresh(), true);
+    assert.match(f.node('pending-actions-selected').textContent, /Status: Denied/);
+    assert.equal(f.node('pending-actions-list').children.length, 0);
+    assert.deepEqual(f.calls.map(call => call.path), [CAP, LIST, CAP, LIST, DETAIL]); f.verify();
+  }],
+  ['exact status rejects wrong IDs, unknown states and authentication loss', async () => {
+    for (const answer of [response(approval({id: OTHER, status: 'approved'})), response(approval({status: 'unknown'})),
+      response({detail: PRIVATE}, 503), response({}, 401), response({}, 403)]) {
+      const f = fixture({handler: call => call.path === CAP ? response(capability()) : call.path === LIST ? response([]) : answer});
+      await f.show({requestedId: ID});
+      assert.match(f.node('pending-actions-status').textContent, /could not be loaded|sign in again/);
+      assert(!f.node('pending-actions-selected').textContent.includes('Status:'));
+      assert.equal(f.buttons().length, 0); assert.equal(f.authLost, [401, 403].includes(answer.status) ? 1 : 0); f.verify();
+    }
+  }],
+  ['late exact status cannot overwrite a different selected request', async () => {
+    const delayed = deferred();
+    const f = fixture({handler: call => call.path === CAP ? response(capability()) : call.path === LIST ? response([]) :
+      call.path === DETAIL ? delayed.promise : response(approval({id: OTHER, status: 'denied'}))});
+    await f.show({requestedId: ID}); await f.show({requestedId: OTHER});
+    delayed.release(response(approval({status: 'approved'}))); await flush();
+    assert.match(f.node('pending-actions-selected').textContent, /Status: Denied/);
+    assert(!f.node('pending-actions-selected').textContent.includes(ID));
+    assert(f.calls.find(call => call.path === DETAIL).init.signal.aborted); f.verify();
   }],
   ['recovery holds and expired rows disable even a future explicit opener without changing markers', async () => {
     for (const kind of ['held', 'invalid', 'storage-failure', 'expired']) {

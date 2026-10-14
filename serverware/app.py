@@ -18062,6 +18062,29 @@ def approvals(
     return db.list_approvals(status=status, limit=100)
 
 
+@app.get("/api/approvals/{approval_id}")
+def approval_metadata(
+    approval_id: str,
+    request: Request,
+    _: AdminIdentity = Depends(require_role("approver", "auditor")),
+) -> Response:
+    """Read one request's public status, without opening review or issuing a receipt."""
+    headers = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+    if (not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", approval_id)
+            or request.scope.get("raw_path") != ("/api/approvals/" + approval_id).encode("ascii")
+            or request.scope.get("query_string", b"")
+            or request.headers.get("content-length", "0") != "0"
+            or request.headers.get("transfer-encoding") is not None):
+        raise HTTPException(status_code=400, detail="approval metadata requires an exact bodyless request", headers=headers)
+    item = db.get_approval_request_metadata(approval_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="approval not found", headers=headers)
+    return JSONResponse({key: item[key] for key in (
+        "id", "status", "route_id", "method", "url", "requested_at", "expires_at",
+        "principal_id", "credential_id", "credential_version", "policy_hash",
+    )}, headers=headers)
+
+
 @app.get("/api/approvals/{approval_id}/review")
 def approval_review(
     approval_id: str,

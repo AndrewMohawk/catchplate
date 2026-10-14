@@ -52,7 +52,8 @@ async function noReview(page) {
 async function fixture(browser, html, artifacts, label, options, exercise) {
   const state = {requests: [], unexpected: [], errors: [], consoleErrors: [], expectedFailures: new Set(),
     rows: options.rows || [], capability: options.capability || capability(), capStatus: options.capStatus || 200,
-    listStatus: options.listStatus || 200, catalogStatus: 503, capReplies: 0, released: [], contextClosed: false};
+    listStatus: options.listStatus || 200, selected: options.selected || null,
+    catalogStatus: 503, capReplies: 0, released: [], contextClosed: false};
   const context = await browser.newContext({viewport: {width: 1280, height: 960}, serviceWorkers: 'block'});
   let page, failure, result;
   try {
@@ -83,6 +84,8 @@ async function fixture(browser, html, artifacts, label, options, exercise) {
           if (options.listGate && count(state, LIST) === 1) await options.listGate.promise;
           return await json(state.listStatus === 200 ? rows : {detail: PRIVATE}, state.listStatus);
         }
+        if (path === '/api/approvals/' + ID)
+          return await json(state.selected || {detail: 'approval not found'}, state.selected ? 200 : 404);
         state.unexpected.push('unlisted synthetic path'); await route.abort('blockedbyclient');
       } catch (error) {
         // A deliberately aborted old metadata fetch may finish after navigation.
@@ -166,7 +169,7 @@ const tests = [
       await page.reload({waitUntil: 'domcontentloaded'}); await ready(page);
       assert.equal(new URL(page.url()).pathname, '/approvals/' + ID); assert((await selected(page).innerText()).includes(ID));
       state.rows = [approval({id: OTHER})]; await page.locator('#pending-actions-refresh').click(); await ready(page);
-      assert((await selected(page).innerText()).includes('not in the first 100'));
+      assert((await selected(page).innerText()).includes('not found'));
       assert(!(await selected(page).innerText()).includes(OTHER)); assert.equal(new URL(page.url()).pathname, '/approvals/' + ID);
       assert.equal(count(state, LIST), 3);
     })],
@@ -203,7 +206,7 @@ const tests = [
       state.rows = [approval({id: OTHER})]; listGate.release();
       await page.locator('nav a[href="#pending-actions"]').click(); await ready(page);
       assert.equal(await page.locator('#pending-actions-list [data-pending-approval-id="' + OTHER + '"]').count(), 1);
-      assert((await selected(page).innerText()).includes('not in the first 100'));
+      assert((await selected(page).innerText()).includes('not found'));
       assert(!(await selected(page).innerText()).includes(OTHER)); assert.equal(new URL(page.url()).pathname, '/approvals/' + ID);
     });
   }],
@@ -230,6 +233,22 @@ const tests = [
       await page.waitForFunction(() => document.getElementById('pending-actions-status').textContent.includes('sign in again'));
       assert.equal(await page.locator('#pending-actions-list article').count(), 0);
       assert(!(await selected(page).innerText()).includes('synthetic.status.read')); assert.equal(count(state, LIST), 1);
+    })],
+  ['exact selected request shows its terminal outcome after refresh and reload', async (browser, html, artifacts) =>
+    fixture(browser, html, artifacts, 'terminal-status', {path: '/approvals/' + ID, rows: [approval()]}, async (page, state) => {
+      await ready(page); assert((await selected(page).innerText()).includes('Status: Pending'));
+      state.rows = []; state.selected = approval({status: 'approved', canonical_request: PRIVATE});
+      await page.locator('#pending-actions-refresh').click(); await ready(page);
+      assert((await selected(page).innerText()).includes('Status: Approved'));
+      assert((await selected(page).innerText()).includes('does not confirm that the provider request completed'));
+      assert(!(await selected(page).innerText()).includes(PRIVATE));
+      assert.equal(await page.locator('#pending-actions-list article').count(), 0);
+      await page.reload({waitUntil: 'domcontentloaded'}); await ready(page);
+      assert((await selected(page).innerText()).includes('Status: Approved'));
+      await page.setViewportSize({width: 390, height: 844});
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await page.screenshot({path: join(artifacts, 'terminal-status-mobile.png'), fullPage: true});
+      assert.equal(count(state, '/api/approvals/' + ID), 2);
     })],
 ];
 async function runSuite(browser, {onlyGroups = null} = {}) {

@@ -49,7 +49,7 @@ def objects(conn):
         "SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name")]
 
 
-def derive(side):
+def derive(side, *, expected_counts=(217, 218, 186)):
     source = Path("/app")
     require(source.is_dir() and not source.is_symlink()
         and not any(name == "serverware" or name.startswith("serverware.")
@@ -160,7 +160,7 @@ def derive(side):
         require(compiled and any(name.startswith("serverware_agent_trust/") for name in compiled))
         require(all(sha((source / name).read_bytes()) == digest for name, digest in compiled.items()))
         require(not list(provider_custody.iterdir()) and not list(x_custody.iterdir()))
-        require(len(tables) == 217 and len(optional_tables) == 218 and len(empty) == 186)
+        require((len(tables), len(optional_tables), len(empty)) == expected_counts)
         pins = {"sourceContractDigest": contract["source_contract_digest"],
             "operationManifestDigest": authority_contract.OPERATION_MANIFEST_DIGEST,
             "sourceRevision": authority_contract.SOURCE_REVISION, "schemaVersion": authority_contract.SCHEMA_VERSION,

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { rootCertificates } from 'node:tls';
 import test from 'node:test';
 import { certificate, childEnvironment, configuration, DEADLINE_MS, failure, run, summary } from './client.mjs';
-import { agentOptions, installTransport, perform, PUBLIC_ALCHEMY_DUMMY, sdkSettings } from './request.mjs';
+import { agentOptions, boundedDispatcher, createSdk, installTransport, perform, PUBLIC_ALCHEMY_DUMMY,
+  REQUEST_TIMEOUT_MS, RESPONSE_LIMIT, sdkSettings } from './request.mjs';
 
 const ENV = { SERVERWARE_PROXY_URL: 'https://proxy.example.test:8443',
   SERVERWARE_APP_ID: '11111111-2222-4333-8444-555555555555',
@@ -38,66 +39,100 @@ test('child environment is an allowlist, never a proxy URL or provider secret', 
   assert.equal(JSON.stringify(outer).includes('@proxy'), false);
 });
 
-test('SDK settings use supported keyless and one-attempt overrides', async () => {
-  const options = sdkSettings(configuration(ENV));
-  assert.equal(options.url, 'https://eth-mainnet.g.alchemy.com/v2');
-  assert.equal(options.apiKey, PUBLIC_ALCHEMY_DUMMY);
-  assert.equal(options.batchRequests, false);
-  assert.equal(options.maxRetries, 1);
-  assert.equal(options.connectionInfoOverrides.throttleLimit, 1);
-  assert.equal(await options.connectionInfoOverrides.throttleCallback(0, 'not used'), false);
-  assert.equal(options.connectionInfoOverrides.timeout, 15000);
-  assert.equal(options.connectionInfoOverrides.allowGzip, false);
-  assert.deepEqual(options.connectionInfoOverrides.headers, {
+test('SDK settings require an explicit dispatcher and keyless one-attempt transport', () => {
+  const config = configuration(ENV), dispatcher = { dispatch() {} }, fetch = () => {};
+  const options = sdkSettings(config, dispatcher, fetch);
+  assert.equal(options.batch, false);
+  assert.equal(options.retryCount, 0);
+  assert.equal(options.timeout, REQUEST_TIMEOUT_MS);
+  assert.equal(options.maxResponseBodySize, RESPONSE_LIMIT);
+  assert.deepEqual(options.methods, { include: ['eth_chainId', 'eth_blockNumber'] });
+  assert.equal(options.fetchFn, fetch);
+  assert.equal(options.fetchOptions.dispatcher, dispatcher);
+  assert.equal(options.fetchOptions.redirect, 'error');
+  assert.deepEqual(options.fetchOptions.headers, {
     Authorization: 'Bearer serverware-alchemy-placeholder-v1', Accept: 'application/json',
-    'Alchemy-Ethers-Sdk-Version': '3.6.5',
+    'Accept-Encoding': 'identity',
   });
+  assert.equal(options.fetchOptions.headers.Authorization, 'Bearer ' + PUBLIC_ALCHEMY_DUMMY);
+  for (const args of [[config], [config, {}], [config, dispatcher], [config, null, fetch]]) {
+    assert.throws(() => sdkSettings(...args));
+  }
+  const transport = {}, client = {};
+  assert.equal(createSdk(config, dispatcher, {
+    fetch,
+    http(url, selected) { assert.equal(url, 'https://eth-mainnet.g.alchemy.com/v2');
+      assert.deepEqual(selected, options); return transport; },
+    createPublicClient(selected) { assert.deepEqual(selected, { cacheTime: 0, ccipRead: false, transport }); return client; },
+  }), client);
 });
 
-test('agent routes via Basic CONNECT while its ca is inner-only', () => {
+test('agent routes only via Basic CONNECT with explicit separate TLS roots', () => {
   const config = configuration({ ...ENV, SERVERWARE_PROXY_CA_FILE: '/synthetic/outer.pem' });
+  const inner = Buffer.from(PEM), outer = Buffer.from(PEM);
   const paths = [];
-  const options = agentOptions(config, (path) => { paths.push(path); return PEM; });
-  assert.deepEqual(paths, ['/synthetic/inner.pem']);
-  assert.equal(options.rejectUnauthorized, true);
-  assert.equal(options.ca, PEM);
-  assert.deepEqual(Object.keys(options.proxyEnv).sort(), ['HTTPS_PROXY', 'NO_PROXY']);
-  const proxy = new URL(options.proxyEnv.HTTPS_PROXY);
-  assert.equal(proxy.protocol, 'https:');
-  assert.equal(proxy.username, ENV.SERVERWARE_APP_ID);
-  assert.equal(proxy.password, ENV.SERVERWARE_PROXY_TOKEN);
-  assert.equal(proxy.hostname, 'proxy.example.test');
-  assert.equal(options.proxyEnv.NO_PROXY, '');
-  assert.equal(options.keepAlive, false);
+  const options = agentOptions(config, (path) => { paths.push(path); return path === config.caFile ? inner : outer; });
+  assert.deepEqual(paths, ['/synthetic/inner.pem', '/synthetic/outer.pem']);
+  assert.equal(options.uri, ENV.SERVERWARE_PROXY_URL);
+  assert.equal(options.token, 'Basic ' + Buffer.from(ENV.SERVERWARE_APP_ID + ':' + ENV.SERVERWARE_PROXY_TOKEN).toString('base64'));
+  assert.deepEqual(options.requestTls, { ca: inner, rejectUnauthorized: true,
+    servername: 'eth-mainnet.g.alchemy.com', allowH2: false, maxCachedSessions: 0 });
+  assert.deepEqual(options.proxyTls, { ca: [...rootCertificates, outer], rejectUnauthorized: true,
+    allowH2: false, maxCachedSessions: 0 });
+  assert.equal(options.proxyTls.ca.includes(inner), false);
+  assert.equal(options.connections, 1); assert.equal(options.pipelining, 0);
+  assert.equal(options.allowH2, false); assert.equal(options.proxyTunnel, true);
+  assert.equal(options.maxResponseSize, RESPONSE_LIMIT); assert.equal(options.maxHeaderSize, 16384);
+  for (const key of ['connectTimeout', 'headersTimeout', 'bodyTimeout']) assert.equal(options[key], REQUEST_TIMEOUT_MS);
+  assert.deepEqual(agentOptions(configuration(ENV), () => inner).proxyTls.ca, [...rootCertificates]);
 });
 
-test('process-scoped documented agent configuration restores and destroys', () => {
-  const previous = {};
+test('dedicated supported ProxyAgent is destroyed without changing global dispatchers', async () => {
   let destroyed = 0;
-  class Agent { constructor(options) { this.options = options; } destroy() { destroyed++; } }
-  const module = { globalAgent: previous, Agent };
-  const transport = installTransport(configuration(ENV), { module, readCertificate: () => PEM });
-  assert.equal(module.globalAgent, transport.agent);
-  transport.close();
-  assert.equal(module.globalAgent, previous);
+  const interceptor = () => {}, dispatcher = { dispatch() {} };
+  const interceptors = { responseError(options) {
+    assert.deepEqual(options, { maxSize: RESPONSE_LIMIT }); return interceptor;
+  } };
+  class ProxyAgent {
+    constructor(options) { this.options = options; }
+    compose(selected) { assert.equal(selected, interceptor); return dispatcher; }
+    async destroy() { destroyed++; }
+  }
+  const transport = installTransport(configuration(ENV), { ProxyAgent, interceptors, readCertificate: () => PEM });
+  assert.ok(transport.agent instanceof ProxyAgent);
+  assert.equal(transport.agent.options.uri, ENV.SERVERWARE_PROXY_URL);
+  assert.equal(transport.dispatcher, dispatcher);
+  await transport.close();
   assert.equal(destroyed, 1);
+});
+
+test('HTTP error guard uses one supported interceptor with a positive bounded body limit', () => {
+  const calls = [], interceptor = () => {}, dispatcher = { dispatch() {} };
+  const agent = { compose(value) { calls.push(['compose', value]); return dispatcher; } };
+  const interceptors = { responseError(options) { calls.push(['responseError', options]); return interceptor; } };
+  assert.equal(Number.isSafeInteger(RESPONSE_LIMIT) && RESPONSE_LIMIT > 0, true);
+  assert.equal(boundedDispatcher(agent, interceptors), dispatcher);
+  assert.deepEqual(calls, [['responseError', { maxSize: 65536 }], ['compose', interceptor]]);
 });
 
 test('two ordinary SDK sends are sequential and output is bounded public data', async () => {
   const calls = [];
-  const sdk = { config: { async getProvider() { return { async send(method, params) {
-    calls.push([method, params]); return calls.length === 1 ? '0x1' : '0x123';
-  } }; } } };
+  const sdk = { async request(request, options) {
+    calls.push([request, options]); return calls.length === 1 ? '0x1' : '0x123';
+  } };
   assert.deepEqual(await perform(configuration(ENV), sdk), SUCCESS);
-  assert.deepEqual(calls, [['eth_chainId', []], ['eth_blockNumber', []]]);
+  assert.deepEqual(calls, [
+    [{ method: 'eth_chainId', params: [] }, { retryCount: 0, dedupe: false }],
+    [{ method: 'eth_blockNumber', params: [] }, { retryCount: 0, dedupe: false }],
+  ]);
 });
 
 test('first-call errors and wrong chains never issue the second call', async () => {
   for (const result of ['0xaa36a7', new Error('private_error_canary')]) {
     const calls = [];
-    const sdk = { config: { async getProvider() { return { async send(method) {
+    const sdk = { async request({ method }) {
       calls.push(method); if (result instanceof Error) throw result; return result;
-    } }; } } };
+    } };
     await assert.rejects(perform(configuration(ENV), sdk));
     assert.deepEqual(calls, ['eth_chainId']);
   }

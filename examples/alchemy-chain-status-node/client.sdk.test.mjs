@@ -1,14 +1,14 @@
-// Actual pinned SDK + ethers + Node HTTP serialization into an in-memory
-// Duplex via the public Agent.createConnection hook. No sockets, DNS or TLS;
+// Actual pinned Viem + Undici HTTP serialization into an in-memory Duplex via
+// the public Agent connector hook. No sockets, DNS or TLS;
 // this is NOT proxy/provider acceptance or a fake successful provider claim.
 import assert from 'node:assert/strict';
 import dns from 'node:dns';
-import https from 'node:https';
+import { readFileSync } from 'node:fs';
 import net from 'node:net';
 import { Duplex } from 'node:stream';
 import test from 'node:test';
 import { configuration, failure } from './client.mjs';
-import { perform, sdkSettings } from './request.mjs';
+import { boundedDispatcher, createSdk, perform, RESPONSE_LIMIT, SDK_VERSION, UNDICI_VERSION } from './request.mjs';
 
 const ENV = { SERVERWARE_PROXY_URL: 'https://proxy.example.test',
   SERVERWARE_APP_ID: '11111111-2222-4333-8444-555555555555',
@@ -43,7 +43,7 @@ async function fixture(t, responseFor) {
           if (this.bytes.length === split + 4 + length) {
             this.replied = true;
             const body = JSON.parse(this.bytes.subarray(split + 4).toString('utf8'));
-            const call = { line, headers, body, hostname: this.options.host, raw: this.bytes.toString('utf8') };
+            const call = { line, headers, body, hostname: this.options.hostname, raw: this.bytes.toString('utf8') };
             calls.push(call);
             const reply = responseFor(call, calls.length);
             const payload = JSON.stringify(reply.body ?? { jsonrpc: '2.0', id: body.id,
@@ -59,17 +59,17 @@ async function fixture(t, responseFor) {
       } catch (error) { callback(error); }
     }
   }
-  class Agent extends https.Agent {
-    createConnection(options) { return new Wire(options); }
-  }
-  const previous = https.globalAgent;
-  const agent = new Agent({ keepAlive: false });
-  https.globalAgent = agent;
-  t.after(() => { https.globalAgent = previous; agent.destroy(); });
-  const { Alchemy } = await import('alchemy-sdk');
+  assert.equal(JSON.parse(readFileSync(new URL('./node_modules/viem/package.json', import.meta.url))).version, SDK_VERSION);
+  assert.equal(JSON.parse(readFileSync(new URL('./node_modules/undici/package.json', import.meta.url))).version, UNDICI_VERSION);
+  const { createPublicClient, http } = await import('viem');
+  const { Agent, fetch, interceptors } = await import('undici');
+  const agent = new Agent({ connections: 1, pipelining: 0, allowH2: false,
+    connect(options, callback) { callback(null, new Wire(options)); } });
+  t.after(async () => { await agent.destroy(); });
   const config = configuration(ENV);
-  const sdk = new Alchemy(sdkSettings(config));
-  assert.ok(sdk instanceof Alchemy);
+  const sdk = createSdk(config, boundedDispatcher(agent, interceptors), { createPublicClient, http, fetch });
+  assert.equal(sdk.type, 'publicClient');
+  assert.equal(sdk.transport.type, 'http');
   return { config, sdk, calls };
 }
 
@@ -82,14 +82,17 @@ test('actual SDK serializes exactly two permitted JSON-RPC POSTs without discove
   for (const [index, call] of f.calls.entries()) {
     assert.equal(call.line, 'POST /v2 HTTP/1.1');
     assert.equal(call.hostname, 'eth-mainnet.g.alchemy.com');
-    assert.deepEqual(call.body, { method: index === 0 ? 'eth_chainId' : 'eth_blockNumber',
-      params: [], id: 42 + index, jsonrpc: '2.0' });
-    assert.deepEqual(Object.keys(call.headers).sort(), ['accept', 'alchemy-ethers-sdk-method', 'alchemy-ethers-sdk-version',
-      'authorization', 'connection', 'content-length', 'content-type', 'host']);
+    assert.deepEqual(call.body, { jsonrpc: '2.0', id: index,
+      method: index === 0 ? 'eth_chainId' : 'eth_blockNumber', params: [] });
+    assert.deepEqual(Object.keys(call.headers).sort(), ['accept', 'accept-encoding', 'accept-language',
+      'authorization', 'connection', 'content-length', 'content-type', 'host', 'sec-fetch-mode', 'user-agent']);
     assert.equal(call.headers.authorization, 'Bearer serverware-alchemy-placeholder-v1');
     assert.equal(call.headers.accept, 'application/json');
-    assert.equal(call.headers['alchemy-ethers-sdk-method'], 'send');
-    assert.equal(call.headers['alchemy-ethers-sdk-version'], '3.6.5');
+    assert.equal(call.headers['accept-encoding'], 'identity');
+    assert.equal(call.headers['accept-language'], '*');
+    assert.equal(call.headers['sec-fetch-mode'], 'cors');
+    assert.equal(call.headers['user-agent'], 'undici');
+    assert.equal(call.headers.connection, 'close');
     assert.equal(call.headers['content-type'], 'application/json');
     assert.equal(call.headers.host, 'eth-mainnet.g.alchemy.com');
     for (const value of [ENV.SERVERWARE_APP_ID, ENV.SERVERWARE_PROXY_TOKEN, 'proxy-authorization']) {
@@ -104,9 +107,19 @@ test('actual SDK HTTP429 is one attempt without Retry-After stall or second RPC'
   assert.equal(f.calls.length, 1);
 });
 
+test('HTTP421 cannot trigger a hidden fetch replay or the second RPC', { timeout: 5000 }, async (t) => {
+  const f = await fixture(t, () => ({ status: 421, body: { error: 'private_canary' } }));
+  let error;
+  try { await perform(f.config, f.sdk); } catch (caught) { error = caught; }
+  assert.ok(error);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].body.method, 'eth_chainId');
+  assert.equal(JSON.stringify(failure(error)).includes('private_canary'), false);
+});
+
 test('POST redirect is not followed by the actual SDK', { timeout: 5000 }, async (t) => {
   const f = await fixture(t, () => ({ status: 302,
-    headers: 'Location: https://unapproved.example.test/v2\r\n', body: {} }));
+    headers: 'Location: https://eth-mainnet.g.alchemy.com/unapproved\r\n', body: {} }));
   await assert.rejects(perform(f.config, f.sdk));
   assert.equal(f.calls.length, 1);
 });
@@ -119,4 +132,22 @@ test('HTTP200 JSON-RPC error remains failure, without provider text in output', 
   assert.ok(error);
   assert.equal(f.calls.length, 1);
   assert.equal(JSON.stringify(failure(error)).includes('private_canary'), false);
+});
+
+test('wrong-chain response stops before the second actual SDK read', { timeout: 5000 }, async (t) => {
+  const f = await fixture(t, (call) => ({ body: { jsonrpc: '2.0', id: call.body.id, result: '0xaa36a7' } }));
+  await assert.rejects(perform(f.config, f.sdk));
+  assert.equal(f.calls.length, 1);
+});
+
+test('transport method allowlist refuses other RPC methods without a request', { timeout: 5000 }, async (t) => {
+  const f = await fixture(t, () => ({}));
+  await assert.rejects(f.sdk.request({ method: 'web3_clientVersion', params: [] }));
+  assert.equal(f.calls.length, 0);
+});
+
+test('bounded actual SDK response rejects oversized JSON without retry', { timeout: 5000 }, async (t) => {
+  const f = await fixture(t, (call) => ({ body: { jsonrpc: '2.0', id: call.body.id, result: 'x'.repeat(RESPONSE_LIMIT) } }));
+  await assert.rejects(perform(f.config, f.sdk));
+  assert.equal(f.calls.length, 1);
 });

@@ -148,7 +148,7 @@ def expected_id(client, case, method):
         require(case in RESPONSE_PROBES and method == "eth_chainId", "Alchemy response probe differs")
         return "probe:" + case
     require(client in COMMANDS and case == "success", "Alchemy SDK request differs")
-    return {"node": 42, "python": 0, "go": 1}[client] + METHODS.index(method)
+    return {"node": 0, "python": 0, "go": 1}[client] + METHODS.index(method)
 
 
 def validate_row(row, ordinal, client, case, method):

@@ -37,7 +37,7 @@ CHAIN_IDS = {"eth-mainnet": "0x1", "eth-sepolia": "0xaa36a7"}
 BLOCK_NUMBER = "0x10"
 METHODS = ("eth_chainId", "eth_blockNumber")
 TOKEN = "serverware_alchemy_synthetic_only_8a4671d8096a47f488aad7ee207489ab"
-AGENTS = {"node": None, "python": "web3.py/7.15.0/web3.providers.rpc.rpc.HTTPProvider", "go": "Go-http-client/1.1"}
+AGENTS = {"node": "undici", "python": "web3.py/7.15.0/web3.providers.rpc.rpc.HTTPProvider", "go": "Go-http-client/1.1"}
 MEDIA = {"node": "application/json", "python": "*/*", "go": "application/json", "probe": "application/json"}
 ROW_KEYS = {"ordinal", "accepted", "client", "case", "method", "target", "chain", "rpcMethod", "requestId",
     "semanticHeaders", "requestBodyBase64", "requestBodySha256", "requestBodyBytes", "responseBodySha256",
@@ -62,10 +62,7 @@ def _headers(fields):
 def classify(method, raw_target, fields):
     require(method == "POST" and raw_target == TARGET)
     headers = _headers(fields)
-    if ("user-agent" not in headers and headers.get("alchemy-ethers-sdk-method") == "send"
-            and headers.get("alchemy-ethers-sdk-version") == "3.6.5"):
-        return "node", "success"
-    for client in ("python", "go"):
+    for client in CLIENTS:
         if headers.get("user-agent") == AGENTS[client]:
             return client, "success"
     for case in CASES[1:]:
@@ -78,9 +75,9 @@ def validated_headers(client, fields, case="success"):
     require(client in (*CLIENTS, "probe") and type(case) is str and case in CASES
         and (case != "success") == (client == "probe"))
     headers = _headers(fields)
-    required = {"host", "authorization", "content-type", "content-length", "accept"}
-    required.update({"alchemy-ethers-sdk-method", "alchemy-ethers-sdk-version"} if client == "node"
-        else {"accept", "user-agent"})
+    required = {"host", "authorization", "content-type", "content-length", "accept", "user-agent"}
+    if client == "node":
+        required.update({"accept-language", "sec-fetch-mode"})
     require(required <= headers.keys() <= required | {"connection"}
         and headers["host"] in PROVIDER_HOSTS
         and hmac.compare_digest(headers["authorization"], "Bearer " + TOKEN)
@@ -89,11 +86,9 @@ def validated_headers(client, fields, case="success"):
         and re.fullmatch(r"[1-9][0-9]{0,4}", headers["content-length"])
         and 1 <= int(headers["content-length"]) <= MAX_BODY
         and headers.get("connection", "close") in {"close", "keep-alive"})
+    require(headers["user-agent"] == ("serverware-alchemy-probe/" + case if client == "probe" else AGENTS[client]))
     if client == "node":
-        require(headers["alchemy-ethers-sdk-method"] == "send" and headers["alchemy-ethers-sdk-version"] == "3.6.5")
-    else:
-        require(headers["accept"] == MEDIA[client]
-            and headers["user-agent"] == ("serverware-alchemy-probe/" + case if client == "probe" else AGENTS[client]))
+        require(headers["accept-language"] == "*" and headers["sec-fetch-mode"] == "cors")
     # Preserve observed framing for the checker to join independently to the
     # real gate's canonical request; do not assume framing is unsigned/absent.
     return {name: headers[name] for name in sorted(required - {"host", "authorization"})}

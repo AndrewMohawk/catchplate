@@ -9,13 +9,5 @@
     "test": "node --test client.test.mjs",
     "test:sdk": "node --test client.sdk.test.mjs"
   },
-  "dependencies": { "alchemy-sdk": "3.6.5" },
-  "overrides": {
-    "@ethersproject/providers": "5.8.0",
-    "@ethersproject/web": "5.8.0",
-    "@solana/web3.js@1.99.0": {
-      "jayson": "5.0.0"
-    },
-    "ws@8": "8.21.0"
-  }
+  "dependencies": { "viem": "2.57.6", "undici": "8.12.1" }
 }

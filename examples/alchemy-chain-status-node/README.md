@@ -1,9 +1,14 @@
-# Alchemy chain status with the ordinary Node SDK
+# Alchemy chain status with Viem on Node
 
-This example uses official `alchemy-sdk` **3.6.5**, with ethers transport packages
-pinned to **5.8.0**, on **Node 25.5.0**. Alchemy has deprecated and archived this
-SDK; this is an explicitly pinned compatibility example, not a recommendation
-to adopt an actively maintained SDK. [Official repository](https://github.com/alchemyplatform/alchemy-sdk-js).
+This example uses **Viem 2.57.6** and **Undici 8.12.1** on **Node 25.5.0**.
+Alchemy recommends Viem for JavaScript Ethereum development after deprecating
+its `alchemy-sdk` package. The old SDK repository was archived on July 13, 2026.
+This recipe keeps the same Alchemy provider, two permitted reads, environment
+variables and output; it no longer installs the archived SDK or its ethers v5
+signing dependency graph. It is a Viem compatibility example, not a claim that
+the archived Alchemy SDK has been repaired. [Alchemy's migration guidance](https://github.com/alchemyplatform/alchemy-sdk-js#readme),
+[pinned Viem package](https://github.com/wevm/viem/blob/viem%402.57.6/src/package.json),
+[pinned Undici package](https://github.com/nodejs/undici/blob/v8.12.1/package.json).
 
 It makes two sequential read-only calls: `eth_chainId`, then `eth_blockNumber`,
 both with `params: []`. There are no wallets, transactions, polling,
@@ -64,57 +69,70 @@ preload, provider-key, HOME/netrc or ambient trust variables. Always use
 `client.mjs`, not the internal `request.mjs`, and a trusted unmodified Node
 runtime without diagnostic/preload command-line switches.
 
-The child installs a documented Node HTTPS `globalAgent` with explicit
-`proxyEnv`, only within that dedicated process. The stock SDK still constructs
-and serializes every RPC and uses ethers' ordinary `https.request`; no request
-or SDK method is patched. A proxy URL containing the **application** login exists
-temporarily in process memory only, never argv, environment, generated files or
-output. The app token itself is necessarily in the private child environment:
-same-user process inspection, debuggers and memory dumps remain a risk. Do not
-enable SDK/Node debug logging. [Node proxy configuration](https://nodejs.org/download/release/v25.5.0/docs/api/http.html#built-in-proxy-support).
+The child uses Viem's ordinary HTTP transport and documented `fetchFn` and
+`fetchOptions` settings with Undici's stock `fetch` and `ProxyAgent`. Viem creates
+the JSON-RPC payloads; Undici serializes HTTP and establishes the proxy tunnel.
+No request implementation, SDK method or global dispatcher is patched. There is
+no direct-network fallback or environment-dependent proxy selection.
+
+The application login is a private in-memory Basic token in `ProxyAgent`, sent
+only to the proxy's CONNECT request. Neither URL contains it; the provider gets
+only the public dummy bearer before Serverware replaces that value. The app
+token itself is necessarily in the private child environment: same-user process
+inspection, debuggers and memory dumps remain a risk. Do not enable SDK/Node
+debug logging. [Viem's pinned HTTP transport](https://github.com/wevm/viem/blob/viem%402.57.6/src/clients/transports/http.ts),
+[Undici ProxyAgent](https://github.com/nodejs/undici/blob/v8.12.1/docs/docs/api/ProxyAgent.md).
 
 Both TLS legs verify hostnames and certificates:
 
-- Inner provider-name TLS uses only `SERVERWARE_CA_FILE` in the HTTPS Agent.
-- Outer proxy TLS uses Node's built-in roots. If your edge uses a private CA,
-  supply `SERVERWARE_PROXY_CA_FILE`; only the child receives that additional
-  root via `NODE_EXTRA_CA_CERTS`. The inner explicit `ca` does not inherit it.
+- Inner provider-name TLS uses only `SERVERWARE_CA_FILE` in `requestTls`, with
+  the selected Alchemy hostname explicitly retained for verification.
+- Outer proxy TLS uses Node's built-in roots in `proxyTls`. If your edge uses a
+  private CA, `SERVERWARE_PROXY_CA_FILE` adds that root only to the outer set.
+  The existing child-only `NODE_EXTRA_CA_CERTS` setting is retained, but both
+  connector CA sets are explicit; the inner set never inherits the outer root.
 
 There is no system trust-store modification or insecure fallback. Separate-root
-dual-TLS verification passed in the isolated actual-proxy run recorded below;
-it is not a claim made from the inert tests alone.
+dual-TLS acceptance for this new transport is required separately from the
+historical Alchemy SDK run and the component checks below.
 [Node extra-CA semantics](https://nodejs.org/download/release/v25.5.0/docs/api/cli.html#node_extra_ca_certsfile),
-[Node tunnel implementation](https://github.com/nodejs/node/blob/v25.5.0/lib/https.js).
+[Undici tunnel implementation](https://github.com/nodejs/undici/blob/v8.12.1/lib/dispatcher/proxy-agent.js).
 
-Public SDK settings select the keyless URL, disable batching/gzip requests and
-set a 15-second request timeout. `throttleLimit: 1` and a callback returning
-`false` give one HTTP attempt without a Retry-After sleep. Do not change this to
-`maxRetries: 0`: this SDK replaces zero with its default. POST redirects are not
-followed by the pinned ethers implementation. It sends SDK method `send`, SDK
-version `3.6.5`, JSON content type and the public dummy bearer, without a default
-User-Agent. This example explicitly sets `Accept: application/json` through the
-SDK's supported header configuration so the request does not depend on an
-upstream HTTP client's default Accept value. Serverware owns the bounded
-64-KiB response policy.
-[SDK configuration](https://github.com/alchemyplatform/alchemy-sdk-js/blob/v3.6.5/src/api/alchemy-config.ts),
-[SDK provider](https://github.com/alchemyplatform/alchemy-sdk-js/blob/v3.6.5/src/api/alchemy-provider.ts),
-[ethers retries](https://github.com/ethers-io/ethers.js/blob/v5.8.0/packages/web/src.ts/index.ts).
+Public SDK settings select the exact keyless URL, `batch: false`, `retryCount: 0`,
+`redirect: 'error'`, a 15-second request timeout and a 64-KiB response limit.
+The transport allows only the two named RPC methods; the entrypoint awaits each
+read sequentially and refuses the wrong chain before the second read. It creates
+no account or wallet and starts no subscription, discovery or polling job.
+The dedicated dispatcher also composes Undici's supported `responseError`
+interceptor with a positive 64-KiB error-body limit. This rejects HTTP errors
+before Fetch can automatically replay an HTTP 421 response; Viem's retry setting
+alone does not disable that lower-level replay. Error details are never printed.
+[Pinned response-error interceptor](https://github.com/nodejs/undici/blob/v8.12.1/lib/interceptor/response-error.js),
+[pinned Fetch replay path](https://github.com/nodejs/undici/blob/v8.12.1/lib/web/fetch/index.js#L1645-L1672).
+
+The stock Undici client supplies `User-Agent: undici`, `Accept-Language: *` and
+`Sec-Fetch-Mode: cors`. The example supplies the public dummy bearer,
+`Accept: application/json` and `Accept-Encoding: identity`; Viem supplies JSON
+Content-Type. No obsolete Alchemy SDK version or method headers are fabricated.
+HTTP/2 and connection reuse are disabled for the dedicated bounded job. The
+proxy keeps its own strict request, response and audit checks.
+[Viem request implementation](https://github.com/wevm/viem/blob/viem%402.57.6/src/utils/rpc/http.ts),
+[Viem retry controls](https://github.com/wevm/viem/blob/viem%402.57.6/src/utils/buildRequest.ts),
+[Undici client options](https://github.com/nodejs/undici/blob/v8.12.1/types/client.d.ts).
 
 ## Verification and CI
 
-Component verification passed: **15 tests** across the two suites below, using
-the installed pinned dependencies. The later Jayson 5 dependency graph has
-component verification only; matching-source SDK-through-proxy acceptance is
-still required. Separately, the **previous dependency graph**, including `ws`
-8.21.0, passed isolated SDK-through-proxy/TLS acceptance from source
-`dcf70631` with normal Rust SHA-256 prefix `0908732386fa`. This entrypoint completed
-two mainnet reads plus wrong-application, wrong-chain and revoked-grant denials.
-The joined Node/Python/Go run passed all **12 SDK phases**, exact synthetic-key
-replacement, separate TLS roots, response controls and audit-chain verification.
+The Viem migration changes the SDK and HTTP transport. Its new component suites
+and matching-source SDK-through-proxy acceptance must pass before compatibility
+is claimed. Package versions or successful installation alone are not that proof.
+
+Historical acceptance remains preserved: the Alchemy SDK graph at `dcf70631`,
+with normal Rust SHA-256 prefix `0908732386fa`, passed the 12-phase isolated
+Node/Python/Go journey, including denial, revocation, exact key replacement,
+separate TLS roots and audit controls. The later Jayson graph passed 15 component
+tests but not a fresh connected run. Neither result covers this Viem migration.
 See the [current verification status](../../docs/operator-alchemy-verification.md)
-and [historical acceptance record](../../docs/operator-alchemy-verification.md#current-dependency-graph-acceptance);
-the earlier `062180fe` pass and both preceding failures remain historical records.
-The retained historical receipt is `alchemy-current-acceptance.bHL9ONTf/result.json`.
+and [historical acceptance record](../../docs/operator-alchemy-verification.md#current-dependency-graph-acceptance).
 Real Alchemy, Actions, native-pilot and deployment acceptance remain unverified.
 
 ```sh
@@ -123,8 +141,10 @@ npm run test:sdk
 ```
 
 The first suite is inert configuration/launcher testing. The second uses the
-actual pinned SDK and Node HTTP serializer with an in-memory Agent connection;
-real sockets and DNS are forbidden. Neither proves proxy dispatch, TLS,
+actual pinned Viem and Undici HTTP serializer with an in-memory Agent connector;
+real sockets and DNS are forbidden. It checks exact requests, no retry (including
+HTTP 421 and 429) or redirect, wrong-chain and unsupported-method refusal, bounded responses and
+fixed public error output. Neither suite proves proxy dispatch, TLS,
 credential replacement, real Alchemy access, deployment, native-pilot acceptance
 or blockchain freshness.
 

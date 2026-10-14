@@ -21,7 +21,7 @@ from scripts import prepare_operator_alchemy_fixture as recipe
 
 def raw_request(client="node", method="eth_chainId", case="success"):
     identifier = "probe:" + case if client == "probe" else (
-        receiver.METHODS.index(method) + {"node": 42, "python": 0, "go": 1}[client])
+        receiver.METHODS.index(method) + {"node": 0, "python": 0, "go": 1}[client])
     return json.dumps({"method": method, "params": [], "id": identifier, "jsonrpc": "2.0"}).encode()
 
 
@@ -29,11 +29,9 @@ def fields(client, raw, case="success", chain="eth-mainnet"):
     result = [("Host", receiver.HOSTS[chain]), ("Authorization", "Bearer " + receiver.TOKEN),
         ("Content-Type", "application/json"), ("Content-Length", str(len(raw))), ("Connection", "close"),
         ("Accept", receiver.MEDIA[client])]
+    result += [("User-Agent", "serverware-alchemy-probe/" + case if client == "probe" else receiver.AGENTS[client])]
     if client == "node":
-        result += [("Alchemy-Ethers-Sdk-Method", "send"), ("Alchemy-Ethers-Sdk-Version", "3.6.5")]
-    else:
-        result += [("User-Agent",
-            "serverware-alchemy-probe/" + case if client == "probe" else receiver.AGENTS[client])]
+        result += [("Accept-Language", "*"), ("Sec-Fetch-Mode", "cors")]
     return result
 
 
@@ -116,6 +114,27 @@ class ReceiverTests(unittest.TestCase):
         for invalid in (missing, missing + [("Accept", "*/*")], missing + [("Accept", "text/plain")]):
             with self.assertRaises(ValueError):
                 receiver.validated_headers("node", invalid)
+
+    def test_node_viem_transport_fingerprint_refuses_old_sdk_and_unexpected_defaults(self):
+        original = fields("node", raw_request())
+        self.assertEqual(receiver.classify("POST", "/v2", original), ("node", "success"))
+        for selected, bad in (("User-Agent", "node"), ("Accept-Language", "en-US"),
+                ("Sec-Fetch-Mode", "no-cors")):
+            changed = [(name, bad if name == selected else value) for name, value in original]
+            with self.assertRaises(ValueError):
+                receiver.validated_headers("node", changed)
+        for name in ("Accept-Language", "Sec-Fetch-Mode", "User-Agent"):
+            with self.assertRaises(ValueError):
+                receiver.validated_headers("node", [(key, value) for key, value in original if key != name])
+        old = [(name, value) for name, value in original
+            if name not in {"User-Agent", "Accept-Language", "Sec-Fetch-Mode"}]
+        old += [("Alchemy-Ethers-Sdk-Method", "send"), ("Alchemy-Ethers-Sdk-Version", "3.6.5")]
+        with self.assertRaises(ValueError):
+            receiver.classify("POST", "/v2", old)
+        with self.assertRaises(ValueError):
+            receiver.validated_headers("node", old)
+        self.assertEqual(checker.expected_id("node", "success", "eth_chainId"), 0)
+        self.assertEqual(checker.expected_id("node", "success", "eth_blockNumber"), 1)
 
     def test_python_patched_sdk_fingerprint_is_exact_and_old_versions_are_counted_refusals(self):
         expected = "web3.py/7.15.0/web3.providers.rpc.rpc.HTTPProvider"

@@ -1,0 +1,269 @@
+name: Provider SDK example components
+
+# Locked client components only. No application, proxy, browser, provider account
+# or publication is started; connected acceptance remains a separate check.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'examples/alchemy-chain-status-node/**'
+      - 'scripts/*alchemy*'
+      - '.github/workflows/provider-sdk-examples.yml'
+  pull_request:
+    paths:
+      - 'examples/alchemy-chain-status-node/**'
+      - 'scripts/*alchemy*'
+      - '.github/workflows/provider-sdk-examples.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provider-sdk-examples-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  alchemy-node:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      DOCKER_HOST: unix:///var/run/docker.sock
+      TEST_IMAGE: python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '25.5.0'
+      - name: Provision exact public dependencies without lifecycle scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(node --version)" = v25.5.0
+          mkdir -m 700 "$RUNNER_TEMP/provider-sdk-public" "$RUNNER_TEMP/provider-sdk-staging"
+          install -m 600 /dev/null "$RUNNER_TEMP/provider-sdk-user.npmrc"
+          install -m 600 /dev/null "$RUNNER_TEMP/provider-sdk-global.npmrc"
+          # This is networked dependency setup, not an offline/provider test.
+          NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/provider-sdk-user.npmrc" \
+          NPM_CONFIG_GLOBALCONFIG="$RUNNER_TEMP/provider-sdk-global.npmrc" \
+            timeout --kill-after=10s 300s npm --prefix examples/alchemy-chain-status-node ci \
+            --ignore-scripts --no-audit --no-fund --engine-strict \
+            --registry https://registry.npmjs.org/ --cache "$RUNNER_TEMP/provider-sdk-npm-cache"
+          git diff --exit-code -- examples/alchemy-chain-status-node/package.json \
+            examples/alchemy-chain-status-node/package-lock.json
+          timeout --kill-after=10s 180s /usr/bin/docker --host unix:///var/run/docker.sock pull "$TEST_IMAGE"
+      - name: Run actual locked SDK tests offline and retain only structural results
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_name="provider-sdk-alchemy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sdk_node="$(realpath "$(command -v node)")"
+          printf '%s  %s\n' 3dc3f85ca5539ca81b7d106992ebcd82d09bce27326016873653a661ad6b2a7d \
+            "$sdk_node" | sha256sum --check --strict
+          sdk_atomic="$(ldd "$sdk_node" | awk '$1 == "libatomic.so.1" {print $3}')"
+          test -n "$sdk_atomic"
+          sdk_atomic="$(realpath "$sdk_atomic")"
+          test -f "$sdk_atomic"
+          test "$(id -u)" -ne 0
+          sdk_existing="$(timeout --kill-after=2s 15s /usr/bin/docker --host unix:///var/run/docker.sock ps -aq --filter "name=^/${sdk_name}$")"
+          test -z "$sdk_existing"
+          test "$(/usr/bin/docker --host unix:///var/run/docker.sock image inspect --format '{{.Id}}' "$TEST_IMAGE")" = \
+            sha256:ec7d6c95cd3692a2e2d228a8b1ca74e4025b54121fcc4c5da6f09cfa473315ad
+          trap 'timeout --kill-after=2s 15s /usr/bin/docker --host unix:///var/run/docker.sock rm -f "$sdk_name" >/dev/null 2>&1 || true' EXIT
+          set +e
+          timeout --kill-after=10s 210s /usr/bin/docker --host unix:///var/run/docker.sock run \
+            --pull never --rm --init --interactive --name "$sdk_name" --network none --log-driver none \
+            --user "$(id -u):$(id -g)" --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --memory 1g --memory-swap 1g --cpus 1 --pids-limit 128 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777 \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/app,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/examples/alchemy-chain-status-node/node_modules,dst=/app/examples/alchemy-chain-status-node/node_modules,readonly" \
+            --mount "type=bind,src=$sdk_node,dst=/tools/node,readonly" \
+            --mount "type=bind,src=$sdk_atomic,dst=/usr/lib/x86_64-linux-gnu/libatomic.so.1,readonly" \
+            --mount "type=bind,src=$RUNNER_TEMP/provider-sdk-staging,dst=/results" \
+            --workdir /app/examples/alchemy-chain-status-node \
+            --env "SOURCE_REVISION=$GITHUB_SHA" --env "GITHUB_RUN_ID=$GITHUB_RUN_ID" \
+            --env "GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT" --env "GITHUB_REPOSITORY=$GITHUB_REPOSITORY" \
+            --entrypoint /usr/local/bin/python "$TEST_IMAGE" -I -S -B - <<'PY'
+          import hashlib, json, os, re, resource, signal, subprocess, tempfile
+          from pathlib import Path
+
+          def digest(path):
+              value = hashlib.sha256()
+              with path.open('rb') as stream:
+                  for chunk in iter(lambda: stream.read(1048576), b''):
+                      value.update(chunk)
+              return value.hexdigest()
+
+          def limit_streams():
+              resource.setrlimit(resource.RLIMIT_FSIZE, (262144, 262144))
+
+          root = Path('/app/examples/alchemy-chain-status-node')
+          names = ('client.test.mjs', 'client.sdk.test.mjs')
+          source = os.environ['SOURCE_REVISION']
+          assert re.fullmatch(r'[0-9a-f]{40}', source) and os.getuid() != 0
+          # Docker's network=none is checked independently from test mocks.
+          assert {entry.name for entry in Path('/sys/class/net').iterdir()} == {'lo'}
+          manifest = json.loads((root / 'package.json').read_bytes())
+          lock = json.loads((root / 'package-lock.json').read_bytes())
+          dependencies = manifest['dependencies']
+          assert set(dependencies) == {'viem', 'undici'}
+          assert lock['packages']['']['dependencies'] == dependencies
+          for name, version in dependencies.items():
+              assert re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version)
+              installed = json.loads((root / 'node_modules' / name / 'package.json').read_bytes())
+              assert installed['name'] == name and installed['version'] == version
+              assert lock['packages']['node_modules/' + name]['version'] == version
+          pins = {name: digest(root / name) for name in ('package.json', 'package-lock.json', 'client.mjs', 'request.mjs', *names)}
+          node_sha = digest(Path('/tools/node'))
+          assert node_sha == '3dc3f85ca5539ca81b7d106992ebcd82d09bce27326016873653a661ad6b2a7d'
+          rows = []
+          for name in names:
+              timed_out = False
+              with tempfile.TemporaryFile(dir='/tmp') as out, tempfile.TemporaryFile(dir='/tmp') as err:
+                  child = subprocess.Popen(['/tools/node', '--test', '--test-reporter=tap',
+                      '--test-concurrency=1', name], cwd=root, stdout=out, stderr=err,
+                      stdin=subprocess.DEVNULL, start_new_session=True, preexec_fn=limit_streams,
+                      env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'TMPDIR': '/tmp'})
+                  try:
+                      code = child.wait(timeout=90)
+                  except subprocess.TimeoutExpired:
+                      timed_out = True
+                      os.killpg(child.pid, signal.SIGKILL)
+                      code = child.wait(timeout=5)
+                  out.seek(0); raw = out.read(262145)
+                  err.seek(0); stderr_bytes = len(err.read(262145))
+              fields = ('tests', 'suites', 'pass', 'fail', 'cancelled', 'skipped', 'todo')
+              counts = {}; valid = len(raw) <= 262144 and stderr_bytes <= 262144
+              failed_numbers = set()
+              for line in raw.splitlines():
+                  failure = re.fullmatch(rb'not ok ([1-9][0-9]{0,2}) - .+', line)
+                  if failure and int(failure[1]) <= 100:
+                      failed_numbers.add(int(failure[1]))
+                  match = re.fullmatch(rb'# (tests|suites|pass|fail|cancelled|skipped|todo) ([0-9]{1,6})', line)
+                  if match:
+                      key, value = match[1].decode('ascii'), int(match[2])
+                      if key in counts:
+                          valid = False
+                      counts[key] = value
+              # Project only fixed source paths and bounded coordinates, never names/errors.
+              locations = set()
+              for match in re.finditer(rb'(/app/examples/alchemy-chain-status-node/(?:client\.mjs|request\.mjs|client\.test\.mjs|client\.sdk\.test\.mjs)):([1-9][0-9]{0,5}):([1-9][0-9]{0,5})(?![0-9])', raw):
+                  if int(match[2]) <= 100000 and int(match[3]) <= 100000:
+                      locations.add((match[1].decode('ascii'), int(match[2]), int(match[3])))
+              valid = valid and set(counts) == set(fields)
+              passed = valid and code == 0 and not timed_out and not failed_numbers and stderr_bytes == 0 and counts['tests'] > 0 \
+                  and counts['pass'] == counts['tests'] and all(counts[key] == 0 for key in ('fail', 'cancelled', 'skipped', 'todo'))
+              rows.append({'file': name, 'exitCode': code, 'timedOut': timed_out, 'ok': bool(passed),
+                  'tapValid': bool(valid), 'counts': {key: counts.get(key) for key in fields},
+                  'stdoutBytes': len(raw), 'stderrBytes': stderr_bytes,
+                  'failedTestNumbers': sorted(failed_numbers),
+                  'sourceLocations': [{'file': file, 'line': line, 'column': column}
+                      for file, line, column in sorted(locations)[:16]]})
+          assert {name: digest(root / name) for name in pins} == pins
+          result = {'schema': 'serverware.providerSdkComponents/v1', 'ok': all(row['ok'] for row in rows),
+              'sourceRevision': source, 'github': {key: os.environ[name] for key, name in (
+                  ('repository', 'GITHUB_REPOSITORY'), ('runId', 'GITHUB_RUN_ID'), ('runAttempt', 'GITHUB_RUN_ATTEMPT'))},
+              'component': 'alchemy-chain-status-node', 'dependencies': dependencies, 'sourceSha256': pins,
+              'workflowSha256': digest(Path('/app/.github/workflows/provider-sdk-examples.yml')),
+              'nodeVersion': '25.5.0', 'nodeSha256': node_sha,
+              'libatomicSha256': digest(Path('/usr/lib/x86_64-linux-gnu/libatomic.so.1')),
+              'image': 'python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea',
+              'network': 'none', 'tests': rows, 'providerVerified': False, 'proxyVerified': False,
+              'productionReady': False, 'cleanupVerified': False}
+          encoded = json.dumps(result, sort_keys=True, separators=(',', ':'), allow_nan=False).encode() + b'\n'
+          assert len(encoded) <= 16384
+          with Path('/results/components.json').open('xb') as target:
+              target.write(encoded); target.flush(); os.fsync(target.fileno())
+          raise SystemExit(0 if result['ok'] else 1)
+          PY
+          sdk_exit=$?
+          set -e
+          timeout --kill-after=2s 15s /usr/bin/docker --host unix:///var/run/docker.sock rm -f "$sdk_name" >/dev/null 2>&1 || true
+          sdk_remaining="$(timeout --kill-after=2s 15s /usr/bin/docker --host unix:///var/run/docker.sock ps -aq --filter "name=^/${sdk_name}$")"
+          test -z "$sdk_remaining"
+          trap - EXIT
+          SDK_CONTAINER_EXIT="$sdk_exit" python3 -I -S -B - <<'PY'
+          import hashlib, json, os, re, stat
+          from pathlib import Path
+          temporary = Path(os.environ['RUNNER_TEMP'])
+          staged = temporary / 'provider-sdk-staging' / 'components.json'
+          info = staged.lstat()
+          assert stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_nlink == 1 and 0 < info.st_size <= 16384
+          def pairs(items):
+              value = {}
+              for key, item in items:
+                  assert key not in value
+                  value[key] = item
+              return value
+          result = json.loads(staged.read_bytes(), object_pairs_hook=pairs)
+          assert set(result) == {'schema', 'ok', 'sourceRevision', 'github', 'component', 'dependencies', 'sourceSha256',
+              'workflowSha256', 'nodeVersion', 'nodeSha256', 'libatomicSha256', 'image', 'network', 'tests',
+              'providerVerified', 'proxyVerified', 'productionReady', 'cleanupVerified'}
+          assert result['schema'] == 'serverware.providerSdkComponents/v1' and type(result['ok']) is bool
+          assert result['sourceRevision'] == os.environ['GITHUB_SHA']
+          assert result['github'] == {key: os.environ[name] for key, name in (
+              ('repository', 'GITHUB_REPOSITORY'), ('runId', 'GITHUB_RUN_ID'), ('runAttempt', 'GITHUB_RUN_ATTEMPT'))}
+          assert result['component'] == 'alchemy-chain-status-node' and result['network'] == 'none'
+          assert result['image'] == os.environ['TEST_IMAGE'] and result['nodeVersion'] == '25.5.0'
+          assert result['nodeSha256'] == '3dc3f85ca5539ca81b7d106992ebcd82d09bce27326016873653a661ad6b2a7d'
+          assert all(result[key] is False for key in ('providerVerified', 'proxyVerified', 'productionReady', 'cleanupVerified'))
+          assert all(type(result[key]) is str and re.fullmatch(r'[0-9a-f]{64}', result[key])
+              for key in ('workflowSha256', 'libatomicSha256'))
+          workspace = Path(os.environ['GITHUB_WORKSPACE'])
+          example = workspace / 'examples/alchemy-chain-status-node'
+          source_names = ('package.json', 'package-lock.json', 'client.mjs', 'request.mjs', 'client.test.mjs', 'client.sdk.test.mjs')
+          assert result['sourceSha256'] == {name: hashlib.sha256((example / name).read_bytes()).hexdigest() for name in source_names}
+          assert result['workflowSha256'] == hashlib.sha256((workspace / '.github/workflows/provider-sdk-examples.yml').read_bytes()).hexdigest()
+          assert result['dependencies'] == json.loads((example / 'package.json').read_bytes())['dependencies']
+          assert type(result['tests']) is list and len(result['tests']) == 2
+          count_keys = {'tests', 'suites', 'pass', 'fail', 'cancelled', 'skipped', 'todo'}
+          location_files = {'/app/examples/alchemy-chain-status-node/' + name
+              for name in ('client.mjs', 'request.mjs', 'client.test.mjs', 'client.sdk.test.mjs')}
+          for name, row in zip(('client.test.mjs', 'client.sdk.test.mjs'), result['tests']):
+              assert type(row) is dict and set(row) == {'file', 'exitCode', 'timedOut', 'ok', 'tapValid', 'counts',
+                  'stdoutBytes', 'stderrBytes', 'failedTestNumbers', 'sourceLocations'}
+              assert row['file'] == name and type(row['exitCode']) is int and -128 <= row['exitCode'] <= 255
+              assert all(type(row[key]) is bool for key in ('timedOut', 'ok', 'tapValid'))
+              assert all(type(row[key]) is int and 0 <= row[key] <= 262145 for key in ('stdoutBytes', 'stderrBytes'))
+              assert type(row['counts']) is dict and set(row['counts']) == count_keys
+              assert all(value is None or type(value) is int and 0 <= value <= 999999 for value in row['counts'].values())
+              numbers = row['failedTestNumbers']
+              assert type(numbers) is list and len(numbers) <= 100
+              assert all(type(value) is int and 1 <= value <= 100 for value in numbers)
+              assert numbers == sorted(set(numbers))
+              locations = row['sourceLocations']
+              assert type(locations) is list and len(locations) <= 16
+              for location in locations:
+                  assert type(location) is dict and set(location) == {'file', 'line', 'column'}
+                  assert type(location['file']) is str and location['file'] in location_files
+                  assert all(type(location[key]) is int and 1 <= location[key] <= 100000 for key in ('line', 'column'))
+              positions = [(location['file'], location['line'], location['column']) for location in locations]
+              assert positions == sorted(set(positions))
+              if row['ok']:
+                  assert row['tapValid'] and not row['timedOut'] and row['exitCode'] == row['stderrBytes'] == 0
+                  assert not numbers
+                  assert type(row['counts']['tests']) is int and row['counts']['tests'] > 0
+                  assert row['counts']['pass'] == row['counts']['tests']
+                  assert all(row['counts'][key] == 0 for key in ('fail', 'cancelled', 'skipped', 'todo'))
+          assert result['ok'] == all(row['ok'] for row in result['tests'])
+          result['containerExitCode'] = int(os.environ['SDK_CONTAINER_EXIT'])
+          result['cleanupVerified'] = True
+          result['ok'] = result['ok'] and result['containerExitCode'] == 0
+          target = temporary / 'provider-sdk-public' / 'components.json'
+          with target.open('x') as output:
+              output.write(json.dumps(result, sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n')
+          print(json.dumps({'ok': result['ok'], 'cleanupVerified': True, 'tests': result['tests']}, sort_keys=True))
+          raise SystemExit(0 if result['ok'] else 1)
+          PY
+      - name: Retain public component receipt, never raw test streams
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: provider-sdk-alchemy-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/provider-sdk-public/components.json
+          if-no-files-found: warn
+          retention-days: 7

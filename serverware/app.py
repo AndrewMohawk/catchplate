@@ -541,6 +541,13 @@ async def csrf_middleware(request: Request, call_next):
     from serverware import control_plane_oidc_session_activation_recovery_routes as recovery_routes
     from serverware import portal_session_activation_confirmation_routes as confirmation_routes
     from serverware import control_plane_workload_identity_routes as workload_routes
+    from serverware import control_plane_native_jit_review as native_review
+
+    if request.scope.get("path") in native_review.POST_PATHS:
+        # The purpose-owned Request frame checks exact cookie, Origin and CSRF
+        # before the first body read. Its receipt owns the only audit effect;
+        # neither generic auth selection nor unrelated outbox work runs here.
+        return await call_next(request)
 
     if request.scope.get("path") in workload_routes.PATHS:
         try:
@@ -620,6 +627,11 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     if operator_active and not operator_demo.request_allowed(request.method, request.url.path):
         return JSONResponse(status_code=403, content={"detail":
             "This operator demo allows only scoped local connections; production and native authority mutations are unavailable."})
+    from serverware import control_plane_native_jit_review as native_review
+    if request.scope.get("path") in native_review.POST_PATHS:
+        # Route-owned authentication precedes its sole bounded stream parser.
+        # Do not prebuffer opaque originals before current-reviewer admission.
+        return await call_next(request)
     if (request.method == "POST" and request.scope.get("path") in {
             "/api/data-plane/release-authorizations/native-jit-prepare",
             "/api/data-plane/release-authorizations/native-jit-submit"}):
@@ -1203,7 +1215,7 @@ def _control_plane_security_headers(
     # The selected header is part of the actual signed response bytes below;
     # neither a downstream header nor a query flag can request the exception.
     if (request_is_https and request_method in {"GET", "HEAD"}
-            and request_path in {"/credentials/static/new", "/credentials/static/rotation"} and not request_query
+            and request_path in {"/credentials/static/new", "/credentials/static/rotation", "/approvals/review/native"} and not request_query
             and response_status_code == 200 and response_is_html):
         headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
     return headers
@@ -1414,8 +1426,10 @@ class _SignedControlPlaneASGI:
             from serverware import control_plane_oidc_session_activation_recovery_delivery as recovery_delivery
             from serverware import control_plane_oidc_session_activation_completion_recovery_delivery_response as completion_delivery
             from serverware import control_plane_workload_identity_routes as workload_routes
+            from serverware import control_plane_native_jit_review as native_review
 
-            delivery = (workload_routes if scope.get("path") in workload_routes.PATHS
+            delivery = (native_review if scope.get("path") in native_review.PATHS
+                else workload_routes if scope.get("path") in workload_routes.PATHS
                 else completion_delivery if scope.get("path") in completion_delivery.POST_PATHS
                 else recovery_delivery if scope.get("path") == recovery_delivery.POST_PATH
                 else activation_delivery)
@@ -1437,7 +1451,9 @@ class _SignedControlPlaneASGI:
             from serverware import control_plane_oidc_session_activation_recovery_delivery as recovery_delivery
             from serverware import control_plane_oidc_session_activation_completion_recovery_delivery_response as completion_delivery
             from serverware import control_plane_workload_identity_routes as workload_routes
+            from serverware import control_plane_native_jit_review as native_review
 
+            native_review._discard_scope(scope)
             workload_routes._discard_scope(scope)
             activation_delivery._discard_scope(scope)
             recovery_delivery._discard_scope(scope)
@@ -3968,6 +3984,20 @@ def static_credential_rotation_page(request: Request,
             or not owner.selected()):
         raise HTTPException(status_code=409, detail="Protected static rotation is unavailable for this session")
     return HTMLResponse(STATIC_CREDENTIAL_ROTATION_PAGE, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/approvals/review/native", response_class=HTMLResponse)
+@app.head("/approvals/review/native", response_class=HTMLResponse)
+def native_approval_review_page(request: Request) -> Response:
+    from serverware import control_plane_native_jit_review as owner
+    return owner.page_response(request)
+
+
+@app.post("/api/approvals/review/native/authorize")
+@app.post("/api/approvals/review/native/receipt")
+async def native_approval_review_handoff(request: Request) -> Response:
+    from serverware import control_plane_native_jit_review as owner
+    return await owner.handle_request(request)
 
 
 @app.get("/approvals/{approval_id}", response_class=HTMLResponse)
@@ -18009,15 +18039,16 @@ def approval_capabilities(
         raise HTTPException(status_code=400,
             detail="approval capabilities requires an exact bodyless request", headers=headers)
     can_list = identity.has_any_role({"approver", "auditor"})
-    # Neither ordinary host trust, environment flags nor the existing sealing
-    # owner grants native review disclosure. No admitted current-read opener
-    # exists yet; do not bootstrap one or advertise decisions from this read.
+    # Observe the actual independently admitted opening owner and current
+    # cookie/WebAuthn actor. This read never initializes an owner or a challenge.
+    from serverware import control_plane_native_jit_review as native_review
+    can_open = can_list and native_review.available(request)
     return JSONResponse({
         "schema": "serverware.approvalCapabilities/v1",
         "can_list": can_list,
-        "can_open_native_review": False,
+        "can_open_native_review": can_open,
         "can_decide": False,
-        "reason": "protected_review_unavailable" if can_list else "role_required",
+        "reason": None if can_open else "protected_review_unavailable" if can_list else "role_required",
     }, headers=headers)
 
 

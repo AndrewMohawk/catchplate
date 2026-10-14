@@ -5,7 +5,7 @@ use crate::native_public_identity::ResponseProofIdentityExport;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-pub(super) enum Mode { Legacy, EnclaveV5, EncryptedV6, MeasuredRefreshV7, GuestInspectorV8, MeasuredIssuanceV9, GuestCohortV10, MeasuredCleanupV11, GuestRoleKeysV12, MeasuredPendingRetirementV13, GateCgroupV14, MeasuredSetupV15, MeasuredCaptureRetirementV16, MeasuredReconnectV17, MeasuredSuccessionV18, MeasuredCanaryDeliveryV19, NativeHeartbeatV20, NativeReadinessV21, WorkloadTrustV22, StaticCredentialV23, PostbootStaticV24, StaticCredentialRotationV25, JitReviewV26 }
+pub(super) enum Mode { Legacy, EnclaveV5, EncryptedV6, MeasuredRefreshV7, GuestInspectorV8, MeasuredIssuanceV9, GuestCohortV10, MeasuredCleanupV11, GuestRoleKeysV12, MeasuredPendingRetirementV13, GateCgroupV14, MeasuredSetupV15, MeasuredCaptureRetirementV16, MeasuredReconnectV17, MeasuredSuccessionV18, MeasuredCanaryDeliveryV19, NativeHeartbeatV20, NativeReadinessV21, WorkloadTrustV22, StaticCredentialV23, PostbootStaticV24, StaticCredentialRotationV25, JitReviewV26, JitReviewOpenV27 }
 
 pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
     -> Result<Option<(ArtifactV1, ArtifactV1, bool, ResponseProofIdentityExport, Mode, Option<ArtifactV1>)>, String>
@@ -34,6 +34,7 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
         else if argument == "--native-postboot-static-startup-v24" { Mode::PostbootStaticV24 }
         else if argument == "--native-static-credential-rotation-startup-v25" { Mode::StaticCredentialRotationV25 }
         else if argument == "--native-jit-review-startup-v26" { Mode::JitReviewV26 }
+        else if argument == "--native-jit-review-open-startup-v27" { Mode::JitReviewOpenV27 }
         else { return Err("decision gate accepts no arguments or an explicit native startup mode".to_owned()); };
     let mut configuration = None;
     let mut configuration_pin = None;
@@ -59,7 +60,7 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
             response_proof_identity_export = if flag == "--response-proof-identity-stdout" {
                 ResponseProofIdentityExport::Stdout
             } else {
-                if !matches!(&mode, Mode::PostbootStaticV24 | Mode::StaticCredentialRotationV25 | Mode::JitReviewV26) {
+                if !matches!(&mode, Mode::PostbootStaticV24 | Mode::StaticCredentialRotationV25 | Mode::JitReviewV26 | Mode::JitReviewOpenV27) {
                     return Err("response-proof identity vsock requires explicit postboot startup".into());
                 }
                 ResponseProofIdentityExport::Vsock
@@ -84,7 +85,7 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
             _ => return Err("native startup received an unknown or repeated flag".to_owned()),
         }
     }
-    if matches!(&mode, Mode::PostbootStaticV24 | Mode::StaticCredentialRotationV25 | Mode::JitReviewV26)
+    if matches!(&mode, Mode::PostbootStaticV24 | Mode::StaticCredentialRotationV25 | Mode::JitReviewV26 | Mode::JitReviewOpenV27)
         && response_proof_identity_export == ResponseProofIdentityExport::None {
         return Err("postboot static startup requires a response-proof identity export".into());
     }
@@ -101,4 +102,44 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
         path: launch.ok_or("native startup requires --launch")?,
         sha256: launch_pin.ok_or("native startup requires --launch-sha256")?,
     }, public_identity_stdout, response_proof_identity_export, mode, trust)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opening_arguments(export: Option<&str>) -> Vec<OsString> {
+        let mut values: Vec<OsString> = ["--native-jit-review-open-startup-v27",
+            "--configuration", "/fixture/configuration.json", "--configuration-sha256", "fixture-pin",
+            "--launch", "/fixture/launch.json", "--launch-sha256", "fixture-pin"]
+            .into_iter().map(OsString::from).collect();
+        if let Some(flag) = export { values.push(OsString::from(flag)); }
+        values
+    }
+
+    #[test]
+    fn opening_cli_requires_response_proof_identity_export() {
+        assert!(arguments(opening_arguments(None).into_iter()).is_err());
+        assert!(arguments(opening_arguments(Some("--public-identity-stdout")).into_iter()).is_err());
+        for (flag, expected) in [
+            ("--response-proof-identity-stdout", ResponseProofIdentityExport::Stdout),
+            ("--response-proof-identity-vsock", ResponseProofIdentityExport::Vsock),
+        ] {
+            let (_, _, _, export, mode, trust) = arguments(opening_arguments(Some(flag)).into_iter())
+                .unwrap().unwrap();
+            assert!(matches!(mode, Mode::JitReviewOpenV27));
+            assert!(export == expected && trust.is_none());
+        }
+    }
+
+    #[test]
+    fn sealing_cli_remains_a_separate_explicit_mode() {
+        let mut values = opening_arguments(Some("--response-proof-identity-vsock"));
+        values[0] = OsString::from("--native-jit-review-startup-v26");
+        let (_, _, _, _, mode, _) = arguments(values.into_iter()).unwrap().unwrap();
+        assert!(matches!(mode, Mode::JitReviewV26));
+        let mut mixed = opening_arguments(Some("--response-proof-identity-vsock"));
+        mixed.push(OsString::from("--native-jit-review-startup-v26"));
+        assert!(arguments(mixed.into_iter()).is_err());
+    }
 }

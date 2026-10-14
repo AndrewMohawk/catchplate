@@ -12,7 +12,7 @@ from serverware import authority_oauth_retirement_succession_catalog as retireme
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.349"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.350"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -365,6 +365,8 @@ INTENTIONALLY_DISABLED_OPERATIONS = frozenset({
 _TYPED_SUCCESSOR_PLANNING_OPERATIONS = frozenset(
     {
         "jit.assertion.issue",
+        "jit.review-open.authorize",
+        "jit.review-open.receipt.issue",
         "webauthn.challenge.maintain",
         "oidc.session.activate",
         "oidc.session.activation-delivery.consume",
@@ -759,6 +761,7 @@ CURRENT_ROOT_COMMIT_MARKER_CONTRACT = MappingProxyType({
     "uniqueKeys": (("pending_request_digest",), ("enrollment_digest", "fence"),
         ("enrollment_digest", "operation_id"), ("enrollment_digest", "capability_digest")),
     "operations": ("oidc.session.activate", "oidc.session.activation-delivery.consume",
+        "jit.review-open.receipt.issue",
         "webauthn.credential.revoke", "webauthn.registration.evidence.admit",
         "webauthn.registration.finalize", "webauthn.trust.complete",
         "webauthn.trust.installation.admit", "webauthn.trust.stage"),
@@ -2745,6 +2748,28 @@ _OPERATIONS = {
         maximum_query_rows=24,
         maximum_mutations=132,
         maximum_work_units=1024,
+    ),
+    "jit.review-open.authorize": _spec(
+        "serverware_policy_authority_native_jit_review_authorize",
+        reads=("approval_requests", "policy_authority_native_jit_review_pairs", "oidc_browser_sessions",
+            "webauthn_credentials", "webauthn_trust_publication_high_water", "webauthn_trust_publications",
+            "rbac_authority_state", "rbac_role_bindings", "policy_high_water"),
+        writes=(), selectors={}, webauthn="original-active-session-possession",
+        approver_policy=True, proof_primitives=("primary-key-row",),
+        maximum_query_rows=9, maximum_mutations=1, maximum_work_units=512,
+    ),
+    "jit.review-open.receipt.issue": _spec(
+        "serverware_policy_authority_native_jit_review_receipt_issue",
+        reads=("approval_requests", "policy_authority_native_jit_review_pairs", "oidc_browser_sessions",
+            "webauthn_credentials", "webauthn_trust_publication_high_water", "webauthn_trust_publications",
+            "rbac_authority_state", "rbac_role_bindings", "policy_high_water",
+            "approval_review_receipts", "policy_authority_bounded_aggregate_states", "metadata_audit_outbox"),
+        writes=("approval_review_receipts", "policy_authority_bounded_aggregate_states", "metadata_audit_outbox"),
+        selectors={}, webauthn="original-active-session-possession", approver_policy=True,
+        mutation_kinds={"approval_review_receipts": ("INSERT",),
+            "policy_authority_bounded_aggregate_states": ("UPDATE",), "metadata_audit_outbox": ("INSERT",)},
+        proof_primitives=("primary-key-row", "aggregate-high-water", "authenticated-root-delta"),
+        maximum_query_rows=12, maximum_mutations=3, maximum_work_units=512,
     ),
     "jit.assertion.issue": _spec(
         "serverware_policy_authority_jit_assertion_issue",

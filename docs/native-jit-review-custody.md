@@ -288,10 +288,49 @@ focused result is not full successor CI acceptance. Private receipt:
 `/srv/catchplate-archive/homelab_data/serverware-grant-publication-fix.xFo0wj7q/results/result.json`,
 SHA-256 `5600a329b4abcc5abb84eca6bfbd84f6ad96c725c9e6ecc854f4ecc82b0030ac`.
 
-The opening integration contract above remains an implementation target. These
-prerequisites do not provide a current reviewer authorization, broker opening,
-committed disclosure acknowledgment or exact approved-request continuation.
-The running instance is unchanged by this source batch.
+The exact successor `7191646d` then passed hosted
+[CI 38503173102](https://github.com/example/private-deployment):
+**88/88 suites, 955 Python executions, 250 Node groups and zero skips**, in
+791.495 seconds. All 88 test-script hashes, both dependency locks and individual
+receipts were joined to that Git object. The original failed run remains
+preserved. The private result under `serverware-hosted-ci-38503173102.NFD0Mays`
+has SHA-256 `9fa8a5be4217c7d2917be18f583de0fa06bc8467659ecf2482c2e1d5001dda62`;
+its verification receipt has SHA-256
+`be48cb6f9a11787ed56a1d4820f63ec9ba3e8450d42520960400c46a25a10ad0`.
+This CI result covers the prerequisite commit, not the later opening components.
+
+### Protected review components
+
+The new source separates read authorization, private preparation and committed
+disclosure. The portal establishes its session, origin and CSRF checks before
+reading the body, retains literal signed originals across the browser exchange,
+and keeps its original 64-byte session token outside JavaScript and stored
+plans. The reader authenticates nine rows for authorization and thirteen for
+receipt issuance, including independent current-root observations before and
+after the read. Independent replay derives the four receipt/audit mutations.
+Purpose-specific signer custody requires the actual measured role, retained
+root-owned read-only descriptor and independently configured key.
+
+The native v27 profile combines sealing and opening through separate assignments,
+channels and listeners. Its retained attempt spans TLS connections and consumes
+disclosure before private output. The broker returns the encrypted review only
+to the native recipient. Neither a preparation proof nor a component test says
+that a human read the review or that a receipt committed.
+
+**Opening is still unavailable.** The service selector returns `None`, and the
+new read/replay components are excluded from the executable planning inventory.
+The remaining connection needs a bounded streamed receipt plan, protected
+successor custody and SQL execution, actual commit-marker/full-root readback,
+current-root completion and only then a purpose-signed disclosure acknowledgment.
+Its 32 MiB selected-row and 96 MiB original limits cannot be routed through the
+old 4 MiB plan / 64 MiB packet by increasing a generic limit. Tokens must remain
+transient, and uncertain commits must not generate fresh disclosure authority.
+Native decisions and exact approved-request continuation remain separate work.
+Fresh database creation uses the current v350 revision constraints. This does
+not define an upgrade of an existing v349 store: that needs an explicit
+preservation-aware migration, including unchanged historical native-pair rows.
+Do not rebuild current-only constraints around old rows or rewrite signed
+historical identities. The running instance is unchanged by this source batch.
 
 The following older checkpoints retain their original source and evidence scope.
 

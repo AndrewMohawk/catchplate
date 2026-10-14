@@ -64,23 +64,23 @@ FIELDS = INHERITED_FIELDS | {"attempt_id", "flow_id", "operation_context", "shar
     "policy_aware_profile", "expected_approver_policy_sha256"}
 CANARIES = ("private-release-url-721", "private-release-document-853", "private-release-display-964")
 # Independent fixed vectors, not values obtained from the derivation under test.
-# Current operation_contract_document() source: authority_contract.py SHA-256
-# ec25632e4136f9d3678a8faaa8cb879dfb451b2424d84b2e891d309315f57d96;
+# Current operation_contract_document() source revision 350: authority_contract.py SHA-256
+# e5da318d418aa7c928e76c30b51ba37e88a8e7342a8e78246c8e7e0953462aa4;
 # native retention contract c5ea365c4e7b84f519099b17876ea86b3d36eda897911dc795575bc6ec38ca38.
 # The literal identities were independently reframed; original argument and
 # approver-policy digests remain unchanged. Historical migration pins are not
 # the current contract and must not be rewritten to make this fixture pass.
-NATIVE_MANIFEST = "sha256:b708d9f97ca989abf0411054bbc23d02262fb5a67bcab345246650a925e776e0"
+NATIVE_MANIFEST = "sha256:ed6d471a03516c96aa4968b89e4d220f9d5aaa0dfc4c1f848acfcc58343de4f0"
 NATIVE_POLICY_DIGEST = "sha256:ca91d87c21f8706949a6b06c3d7c3dcdd6120dac6b2f5caa788e25b9155fc454"
 NATIVE_PARENT_ORIGINAL = "sha256:befb9c29e1e9d770ed834444468a9d785723b0db9aee84bca19ff831422a67ff"
 NATIVE_CHILD_ORIGINAL = "sha256:cdbdeb4e8c8ef15eea1e394d500bdbf211357fb3271f53bb9bc4cd887f9a92b3"
 NATIVE_IDENTITIES = {
     "release.reserve": (
-        "sha256:11ddb665c5ae6d9d09d277f3f5b29ba510dde0fd2650705a9c322cb84d3cc272",
-        "sha256:f57d915b5927661c3130113754cf5fceb26a2acd92b095daa0d5101ef4c6bdfd"),
+        "sha256:9376cb3f80adc06fe9a92d23852c2f1ce50694abb5bb148119e9f04ac831abe4",
+        "sha256:900d4f76742ac0450304828f7611b4db960f97ade0baa470b0d4874a4bb47550"),
     "jit.request": (
-        "sha256:141db38dc620c7baf9b0662f02fb31276c2c7b8bb8176b739a57b23c96e3a066",
-        "sha256:345b269e11ce41aef13e5067daf3951ec721823c224d978dde6905ea9e66c7c4"),
+        "sha256:028341bf1e3b12ae63d78ac4c07b769ffe388fe18dc3467c31f68a7802407804",
+        "sha256:05a067fd6201b0c0a00f5882f26e74269bb877a3c2d1fe24cbff333e67e9eadf"),
 }
 
 

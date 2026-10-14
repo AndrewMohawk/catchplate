@@ -54,7 +54,8 @@ from serverware.authority_store.wire_json_sql import WIRE_JSON_MAX_DEPTH, WIRE_J
 OPERATIONS = authority.CURRENT_ROOT_COMMIT_MARKER_CONTRACT["operations"]
 # These typed planners have dedicated compound/stream protocols. They are not
 # aggregate successor packet operations and must never enter that SQL map.
-_DEDICATED_PLANNING_OPERATIONS = ("jit.assertion.issue", "webauthn.challenge.maintain")
+_DEDICATED_PLANNING_OPERATIONS = ("jit.assertion.issue", "webauthn.challenge.maintain",
+    "jit.review-open.authorize")
 _SELECTED_FIELDS = ("table", "key", "keyDigest", "present", "row", "contractSelector")
 
 

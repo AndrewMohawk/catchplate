@@ -103,6 +103,7 @@ mod native_enrollment_authorizer;
 mod native_buffered_request;
 mod native_release_jit_preparation;
 mod native_jit_review;
+mod native_jit_review_open;
 mod native_enrollment_admission;
 mod native_workload_bootstrap_request_v1;
 mod native_enrollment_bootstrap_admission;
@@ -2713,6 +2714,7 @@ struct GateState {
     native_serving_privileges: Option<Arc<serverware_decision_gate::native_serving_privileges::Owner>>,
     native_secret_broker: Option<Mutex<serverware_decision_gate::native_secret_broker_v1::Owner>>,
     native_jit_review: Option<Mutex<serverware_decision_gate::native_jit_review_v1::Owner>>,
+    native_jit_review_open: Option<Mutex<native_jit_review_open::Owner>>,
     measured_refresh: Option<Mutex<native_oauth_refresh::Owner>>,
     measured_cleanup: Option<Mutex<native_oauth_cleanup::Owner>>,
     measured_pending_retirement: Option<Mutex<native_oauth_pending_retirement::Owner>>,
@@ -54363,6 +54365,7 @@ fn main() -> Result<(), String> {
         prepared_secret_broker: None,
         secret_broker: None,
         measured_jit_review: None, jit_review_assignment: None,
+        measured_jit_review_open: None, jit_review_open_assignment: None,
         historical_broker: None,
         measured_refresh: None,
         measured_cleanup: None,
@@ -55833,6 +55836,7 @@ mod tests {
             native_serving_privileges: None,
             native_secret_broker: None,
             native_jit_review: None,
+            native_jit_review_open: None,
             measured_refresh: None,
             measured_cleanup: None,
             measured_pending_retirement: None,

@@ -43,6 +43,10 @@ REGISTRATION_EXECUTION_HEAD_QUERY_REQUEST_MAGIC = b"SWREQR01"
 REGISTRATION_EXECUTION_HEAD_OBSERVATION_RESPONSE_MAGIC = b"SWREST01"
 REGISTRATION_FINALIZATION_HEAD_QUERY_REQUEST_MAGIC = b"SWRFQR01"
 REGISTRATION_FINALIZATION_HEAD_OBSERVATION_RESPONSE_MAGIC = b"SWRFST01"
+NATIVE_JIT_REVIEW_AUTHORIZE_HEAD_QUERY_REQUEST_MAGIC = b"SWJAQR01"
+NATIVE_JIT_REVIEW_AUTHORIZE_HEAD_OBSERVATION_RESPONSE_MAGIC = b"SWJAST01"
+NATIVE_JIT_REVIEW_RECEIPT_HEAD_QUERY_REQUEST_MAGIC = b"SWJJQR01"
+NATIVE_JIT_REVIEW_RECEIPT_HEAD_OBSERVATION_RESPONSE_MAGIC = b"SWJJST01"
 REQUEST_MAGICS = (RESERVE_REQUEST_MAGIC, COMPLETE_REQUEST_MAGIC)
 MAX_REQUEST_BYTES = 256 * 1024
 MAX_RECEIPT_BYTES = 16 * 1024
@@ -165,6 +169,21 @@ def _recv_registration_head_query(connection, *, prefix, deadline_ns, purpose):
         expected_magic=_registration_head_magics(purpose)[0], deadline_ns=deadline_ns)
 
 
+def _native_jit_review_head_magics(operation):
+    if type(operation) is str and operation == "jit.review-open.authorize":
+        return (NATIVE_JIT_REVIEW_AUTHORIZE_HEAD_QUERY_REQUEST_MAGIC,
+            NATIVE_JIT_REVIEW_AUTHORIZE_HEAD_OBSERVATION_RESPONSE_MAGIC)
+    if type(operation) is str and operation == "jit.review-open.receipt.issue":
+        return (NATIVE_JIT_REVIEW_RECEIPT_HEAD_QUERY_REQUEST_MAGIC,
+            NATIVE_JIT_REVIEW_RECEIPT_HEAD_OBSERVATION_RESPONSE_MAGIC)
+    raise AuthorityTransportError("native review head purpose is not source fixed")
+
+
+def _recv_native_jit_review_head_query(connection, *, prefix, deadline_ns, operation):
+    return _recv_head_body(connection, prefix=prefix,
+        expected_magic=_native_jit_review_head_magics(operation)[0], deadline_ns=deadline_ns)
+
+
 def _recv_head_body(connection, *, prefix, expected_magic, deadline_ns):
     if type(prefix) is not bytes or prefix != expected_magic:
         raise AuthorityTransportError("current-root head query magic is invalid")
@@ -194,6 +213,11 @@ def _send_revocation_head_observation(connection, observation_bytes, *, deadline
 def _send_registration_head_observation(connection, observation_bytes, *, deadline_ns, purpose):
     return _send_head_body(connection, observation_bytes,
         response_magic=_registration_head_magics(purpose)[1], deadline_ns=deadline_ns)
+
+
+def _send_native_jit_review_head_observation(connection, observation_bytes, *, deadline_ns, operation):
+    return _send_head_body(connection, observation_bytes,
+        response_magic=_native_jit_review_head_magics(operation)[1], deadline_ns=deadline_ns)
 
 
 def _send_head_body(connection, observation_bytes, *, response_magic, deadline_ns):
@@ -303,8 +327,14 @@ def _registration_head_on_work(config, *, query_bytes, deadline_ns, work, curren
         work=work, current=current, revocation=False, registration=purpose)
 
 
+def _native_jit_review_head_on_work(config, *, query_bytes, deadline_ns, work, current, operation):
+    _native_jit_review_head_magics(operation)
+    return _guarded_head_on_work(config, query_bytes=query_bytes, deadline_ns=deadline_ns,
+        work=work, current=current, revocation=False, native_review=operation)
+
+
 def _guarded_head_on_work(config, *, query_bytes, deadline_ns, work, current, revocation,
-        registration=None):
+        registration=None, native_review=None):
     """One source-fixed head query retaining the actual original guard.
 
     This direct metered path is not invoked inside a stable-metrics callback.
@@ -315,7 +345,11 @@ def _guarded_head_on_work(config, *, query_bytes, deadline_ns, work, current, re
 
     if type(revocation) is not bool:
         raise AuthorityTransportError("current-root head transport requires a source-fixed purpose")
-    if registration is not None:
+    if native_review is not None:
+        if registration is not None or revocation:
+            raise AuthorityTransportError("native review head cannot alias another purpose")
+        request_magic, response_magic = _native_jit_review_head_magics(native_review)
+    elif registration is not None:
         if revocation:
             raise AuthorityTransportError("registration head cannot alias revocation")
         request_magic, response_magic = _registration_head_magics(registration)

@@ -63,6 +63,10 @@ PIDFD_IDENTITY_DOMAIN = "serverware.authorityPidfdIdentity/v1"
 MAX_RETAINED_DIRECTORIES = 64
 MAX_RETAINED_FILES = 32768
 MAX_CREDENTIALS = 256
+NATIVE_REVIEW_CREDENTIAL_ROLES = {
+    "SERVERWARE_NATIVE_JIT_REVIEW_AUTHORIZER_KEY_FD": "planner",
+    "SERVERWARE_NATIVE_JIT_REVIEW_COMMIT_KEY_FD": "executor",
+}
 MAX_MUTABLE_STATE_DESCRIPTORS = 16
 MAX_ENVIRONMENT_ENTRIES = 256
 MAX_ARGUMENTS = 256
@@ -599,6 +603,11 @@ def _validate_credential(value: object) -> None:
         raise StageZeroContractError("credential memfd is not fully sealed")
     if credential["delivery"] != "retained-sealed-memfd":
         raise StageZeroContractError("credential delivery mode changed")
+    if credential["name"] in NATIVE_REVIEW_CREDENTIAL_ROLES and (
+            credential["ownerRole"] != NATIVE_REVIEW_CREDENTIAL_ROLES[credential["name"]]
+            or credential["purpose"] != "role-signing-key"
+            or credential["mode"] != 0o400 or not 0 < credential["size"] <= 64 * 1024):
+        raise StageZeroContractError("native review credential purpose or metadata changed")
 
 
 def _validate_bootstrap_control(value: object) -> Mapping[str, Any]:
@@ -1299,6 +1308,8 @@ def validate_stage_zero_request(
         _validate_retained_file(entry, local=local)
     for entry in credentials:
         _validate_credential(entry)
+        if local and entry["name"] in NATIVE_REVIEW_CREDENTIAL_ROLES:
+            raise StageZeroContractError("native review credentials forbid trusted-host-local delivery")
         if entry["ownerRole"] != role_name:
             raise StageZeroContractError(
                 "credential is assigned to another role"

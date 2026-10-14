@@ -31,7 +31,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -m 700 "$RUNNER_TEMP/ordinary-deps" "$RUNNER_TEMP/ordinary-results"
+          # Locked public packages must also be readable by the separate
+          # capless-root metadata lane; results remain host-user private.
+          mkdir -m 755 "$RUNNER_TEMP/ordinary-deps"
+          mkdir -m 700 "$RUNNER_TEMP/ordinary-results"
           timeout --kill-after=10s 180s docker pull "$TEST_IMAGE"
           name="ordinary-dependencies-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
@@ -72,6 +75,28 @@ jobs:
             --workdir /app --env PYTHONDONTWRITEBYTECODE=1 --env PYTHONPATH=/app:/deps \
             --entrypoint /bin/sh "$TEST_IMAGE" -eu -c \
             '/tools/node --version && python -B scripts/test_run_ordinary_regression.py && python -B scripts/run_ordinary_regression.py --node /tools/node --dependency-root /deps --output /results/quick'
+      - name: Offline purpose-signer custody units (separate capless root container)
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture_dir="$(mktemp -d "$RUNNER_TEMP/native-review-signers.XXXXXX")"
+          python3 -I -B scripts/run_native_jit_review_signers.py --prepare-fixture "$fixture_dir/nonroot.fixture"
+          name="native-review-signers-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
+          # No writable host mounts. The ordinary host user owns this sanitized
+          # JSON redirection; ephemeral keys and raw streams stay in /tmp.
+          timeout --kill-after=10s 75s docker run --pull never --rm --init --name "$name" --network none \
+            --user 0:0 --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --memory 2g --memory-swap 2g --cpus 2 --pids-limit 128 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=128m,mode=1777 \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/app,readonly" \
+            --mount "type=bind,src=$RUNNER_TEMP/ordinary-deps,dst=/deps,readonly" \
+            --mount "type=bind,src=$fixture_dir/nonroot.fixture,dst=/nonroot.fixture,readonly" \
+            --workdir /app --env SERVERWARE_TEST_NONROOT_KEY_FIXTURE=/nonroot.fixture \
+            --env "SERVERWARE_TEST_NONROOT_KEY_FIXTURE_UID=$(id -u)" \
+            --entrypoint /usr/local/bin/python "$TEST_IMAGE" \
+            -I -B scripts/run_native_jit_review_signers.py --dependency-root /deps \
+            > "$RUNNER_TEMP/ordinary-results/native-review-signers.json"
       - name: Retain bounded structural diagnostics (never raw test streams)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

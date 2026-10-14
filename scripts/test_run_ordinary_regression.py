@@ -31,6 +31,13 @@ class RunnerTests(unittest.TestCase):
                 "test_native_jit_review_owner.py",
                 "test_authority_native_jit_review_custody.py",
                 "test_authority_native_jit_review_registration.py",
+                "test_authority_transition_registry.py",
+                "test_native_jit_review_open_owner.py",
+                "test_authority_native_jit_review_current_chunks.py",
+                "test_authority_native_jit_review_current_read.py",
+                "test_authority_native_jit_review_open.py",
+                "test_authority_launcher_native_review_credentials.py",
+                "test_native_jit_review_portal.py",
                 "test_authority_native_jit_pending.py",
                 "test_authority_native_jit_executor_retention.py",
                 "test_native_jit_legacy_reader.py",
@@ -72,6 +79,10 @@ class RunnerTests(unittest.TestCase):
         pending = next(row for row in runner.SUITES if row.script == "test_operator_pending_actions_ui.cjs")
         self.assertEqual((pending.category, pending.runtime, pending.arguments, pending.seconds),
             ("ui_contract", "node", (), 60))
+        review = next(row for row in runner.SUITES if row.script == "test_native_jit_review_portal.cjs")
+        self.assertEqual((review.category, review.runtime, review.arguments, review.seconds),
+            ("ui_contract", "node", (), 60))
+        self.assertNotIn("test_native_jit_review_signers.py", paths)
         assets = next(row for row in runner.SUITES if row.script == "test_operator_catalog_assets.py")
         self.assertEqual((assets.category, assets.runtime, assets.arguments, assets.seconds),
             ("ui_contract", "python", (), 60))
@@ -302,6 +313,8 @@ class RunnerTests(unittest.TestCase):
                 "scope": "public queue module with inert DOM and synthetic GET responses",
                 "sourceSha256": hashlib.sha256((runner.ROOT /
                     "serverware/operator_demo_web/workspace_pending_actions.js").read_bytes()).hexdigest()}, "PASS fixture\n"),
+            "test_native_jit_review_portal.cjs": ({"ok": True, "synthetic": True,
+                "nativeAdmission": False, "providerRequests": False}, "PASS fixture\n"),
         }
         self.assertEqual({row.script for row in runner.SUITES if row.runtime == "node"},
             set(examples) | {"test_operator_runtime_browser_assets.cjs"})
@@ -317,8 +330,8 @@ class RunnerTests(unittest.TestCase):
                 for key in shape:
                     self.assertIsNone(runner.node_completion(script, wire({name: value for name, value in valid.items()
                         if name != key})))
-                    if key in {"browser", "network", "backendAcceptance", "nativeReviewAcceptance"}:
-                        self.assertIsNone(runner.node_completion(script, wire({**valid, key: True})))
+                    if type(shape[key]) is bool:
+                        self.assertIsNone(runner.node_completion(script, wire({**valid, key: not shape[key]})))
                         self.assertIsNone(runner.node_completion(script, wire({**valid, key: 0})))
                 self.assertIsNone(runner.node_completion(script, b""))
                 self.assertIsNone(runner.node_completion(script, wire(valid) + b"extra\n"))

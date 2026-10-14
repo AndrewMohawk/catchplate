@@ -10,6 +10,7 @@ from __future__ import annotations
 import runpy
 import sys
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ sys.path.insert(0, str(ROOT))
 
 from serverware import authority_contract  # noqa: E402
 from serverware import authority_jit_request  # noqa: E402
+from serverware import authority_successor_programs  # noqa: E402
 from serverware import authority_transition_core as core  # noqa: E402
 from serverware import authority_transition_policy  # noqa: E402
 from serverware import authority_transition_quota  # noqa: E402
@@ -41,6 +43,9 @@ _DISABLED_OPERATIONS = frozenset({
     "webauthn.recovery.expire",
     "webauthn.recovery.prune",
     "webauthn.recovery.invalidate",
+})
+_COMPONENT_ONLY_OPERATIONS = frozenset({
+    "jit.review-open.authorize", "jit.review-open.receipt.issue",
 })
 
 
@@ -79,12 +84,49 @@ class AuthorityTransitionRegistryTests(unittest.TestCase):
             for operation, kernel in loaded["KERNELS"].items()))
         self.assertEqual(
             loaded["PLANNABLE_OPERATIONS"],
-            set(authority_contract.OPERATION_REGISTRY) - _DISABLED_OPERATIONS,
+            set(authority_contract.OPERATION_REGISTRY) - _DISABLED_OPERATIONS - _COMPONENT_ONLY_OPERATIONS,
         )
+        self.assertEqual(loaded["COMPONENT_ONLY_SUCCESSOR_OPERATIONS"], _COMPONENT_ONLY_OPERATIONS)
         self.assertEqual(loaded["_CLOSURE_ERRORS"], ())
         self.assertFalse(
             loaded["PLANNABLE_OPERATIONS"] & _DISABLED_OPERATIONS
         )
+
+    def test_real_review_components_are_not_planning_owners(self) -> None:
+        for operation in _COMPONENT_ONLY_OPERATIONS:
+            program = authority_transition_registry.SUCCESSOR_PROGRAMS[operation]
+            self.assertEqual(program.result_kind, "read-replay-components")
+            self.assertTrue(callable(program.factory) and callable(program.kernel_factory))
+            self.assertIsNone(program.plan_factory)
+            self.assertNotIn(operation, authority_transition_registry.PLANNABLE_OPERATIONS)
+            self.assertNotIn(operation, authority_transition_registry.SUCCESSOR_PLANNABLE_OPERATIONS)
+            with self.assertRaises(ValueError):
+                authority_transition_registry.successor_program(operation)
+
+    def test_review_component_factories_and_kind_are_closed(self) -> None:
+        for operation in _COMPONENT_ONLY_OPERATIONS:
+            original = authority_successor_programs.PROGRAMS[operation]
+            for change, diagnostic in (({"kernel_factory": None}, "kernel-factory"),
+                    ({"plan_factory": original.factory}, "plan-factory"),
+                    ({"result_kind": "read-acquisition"}, "result-kind")):
+                with self.subTest(operation=operation, change=change):
+                    changed = {**authority_successor_programs.PROGRAMS,
+                        operation: replace(original, **change)}
+                    with patch.object(authority_successor_programs, "PROGRAMS", changed):
+                        with self.assertRaisesRegex(RuntimeError,
+                                rf"invalid successor program {operation}=\[{diagnostic}\]"):
+                            runpy.run_path(str(ROOT / "serverware" / "authority_transition_registry.py"))
+
+    def test_existing_successor_cannot_be_relabelled_as_component_only(self) -> None:
+        operation = "oidc.session.activate"
+        original = authority_successor_programs.PROGRAMS[operation]
+        changed = {**authority_successor_programs.PROGRAMS,
+            operation: replace(original, result_kind="read-replay-components",
+                kernel_factory=original.factory, plan_factory=None)}
+        with patch.object(authority_successor_programs, "PROGRAMS", changed):
+            with self.assertRaisesRegex(RuntimeError,
+                    rf"invalid successor program {operation}=\[result-kind, kernel-factory, plan-factory\]"):
+                runpy.run_path(str(ROOT / "serverware" / "authority_transition_registry.py"))
 
     def test_missing_kernels_are_named_in_sorted_order(self) -> None:
         kernels = self._kernels()

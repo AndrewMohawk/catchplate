@@ -288,11 +288,17 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
     def test_active_authority_source_revisions_match_canonical_contract(self):
         # Check the emitted SQL, excluding retired commented definitions. This
         # source control does not claim PostgreSQL execution or store migration.
-        active = re.sub(r"/\*.*?\*/|--[^\n]*", "", self.complete, flags=re.DOTALL)
-        revisions = re.findall(
-            r"'(serverware\.policyCandidateAuthoritySource/[^']*)'", active)
-        self.assertTrue(revisions, "active authority source revision literals are absent")
-        self.assertEqual(set(revisions), {authority_contract.SOURCE_REVISION})
+        # The retained-native table contributes the one composed-only check;
+        # all 33 base/extension checks are active current-source constraints,
+        # not historical migration input that may preserve an older revision.
+        for name, source, count in (("base", self.base, 9),
+                ("v9 extension", self.extension, 24), ("composed", self.complete, 34)):
+            with self.subTest(source=name):
+                active = re.sub(r"/\*.*?\*/|--[^\n]*", "", source, flags=re.DOTALL)
+                revisions = re.findall(
+                    r"'(serverware\.policyCandidateAuthoritySource/[^']*)'", active)
+                self.assertEqual(len(revisions), count)
+                self.assertEqual(set(revisions), {authority_contract.SOURCE_REVISION})
 
     def test_current_root_operation_inventories_cover_oidc_execution(self):
         # Source rendering only: no database, signature, custody or execution
@@ -588,6 +594,21 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         self.assertLess(assignments[0].lineno, prepare[0].lineno)
         self.assertLess(prepare[0].lineno, apply[0].lineno)
         self.assertLess(apply[0].lineno, record[0].lineno)
+        # Fresh SQLite and the explicitly admitted PostgreSQL bootstrap both
+        # reach this actual writer after applying the active source program.
+        # An older literal CHECK would reject its current-revision INSERT.
+        revision = assignment(tree, "_POLICY_CANDIDATE_AUTHORITY_SOURCE_REVISION")
+        self.assert_shape(revision.value, "authority_contract.SOURCE_REVISION")
+        recorder = function(tree, "_record_policy_candidate_authority_migration")
+        inserts = [call for call in calls(recorder, "execute")
+            if call.args and isinstance(call.args[0], ast.Constant)
+            and isinstance(call.args[0].value, str)
+            and call.args[0].value.startswith("INSERT INTO policy_authority_schema_contracts (")]
+        self.assertEqual(len(inserts), 1)
+        self.assertTrue(inserts[0].args[0].value.startswith(
+            "INSERT INTO policy_authority_schema_contracts (schema_version, contract_id, source_revision, "))
+        self.assertIsInstance(inserts[0].args[1], ast.Tuple)
+        self.assert_shape(inserts[0].args[1].elts[2], "_POLICY_CANDIDATE_AUTHORITY_SOURCE_REVISION")
 
     def test_migration_compares_complete_source_but_applies_only_the_extension(self):
         _, tree = read_source("scripts/authority/migrate_v8_to_v9.py")

@@ -81,10 +81,26 @@ pub(super) fn validate_native_gate_static_inputs(inputs: &GateStateInputs) -> Re
             || inputs.measured_succession.is_some() || inputs.measured_refresh.is_some() || inputs.measured_cleanup.is_some()
             || inputs.measured_capture_retirement.is_some() || inputs.measured_pending_retirement.is_some()
             || inputs.measured_canary_delivery.is_some() || inputs.historical_broker.is_some() {
-            return Err("JIT requires its separate encrypted cold purpose and exact instance/deployment".into());
+            return Err("JIT requires its encrypted cold purpose and exact instance/deployment".into());
         }
     } else if inputs.jit_review_assignment.is_some() {
         return Err("JIT assignment has no selected cold purpose".into());
+    }
+    if let Some(config) = &inputs.measured_jit_review_open {
+        config.validate()?;
+        if !pending_tokens || inputs.credential_currentness.as_ref().is_none_or(|value|
+                value.deployment_id != config.deployment_id())
+            || !measured || inputs.server_instance_id.as_deref() != Some(config.instance_id())
+            || inputs.measured_jit_review.is_none()
+            || inputs.measured_static_credential.is_some() || inputs.measured_static_credential_rotation.is_some()
+            || inputs.measured_issuance.is_some() || inputs.measured_setup.is_some() || inputs.measured_reconnect.is_some()
+            || inputs.measured_succession.is_some() || inputs.measured_refresh.is_some() || inputs.measured_cleanup.is_some()
+            || inputs.measured_capture_retirement.is_some() || inputs.measured_pending_retirement.is_some()
+            || inputs.measured_canary_delivery.is_some() || inputs.historical_broker.is_some() {
+            return Err("JIT opening requires combined sealing/opening policies and exact encrypted instance/deployment".into());
+        }
+    } else if inputs.jit_review_open_assignment.is_some() {
+        return Err("JIT opening assignment has no selected cold purpose".into());
     }
     if [inputs.measured_static_credential.is_some(), inputs.measured_issuance.is_some(), inputs.measured_setup.is_some(), inputs.measured_reconnect.is_some(), inputs.measured_succession.is_some()]
         .into_iter().filter(|selected| *selected).count() > 1 {

@@ -57,6 +57,16 @@ impl Transport {
     pub(crate) fn origin(&self) -> &str { self.ingress.origin() }
     pub(crate) fn deadline(&self) -> u64 { self.deadline }
 
+    // A retained cross-connection operation may only shorten this accepted
+    // socket's cap. Later connections never renew the operation's deadline.
+    pub(crate) fn narrow_deadline(&mut self, deadline: u64) -> Result<(), String> {
+        wire::ensure(deadline <= self.deadline, "native browser interval cannot grow")?;
+        self.ingress.check(deadline)?;
+        self.stream.sock.narrow_deadline(deadline).map_err(|_| "native browser interval cannot narrow")?;
+        self.deadline = deadline;
+        self.check()
+    }
+
     pub(crate) fn shutdown_handle(&self) -> Result<VsockShutdownV1, String> {
         self.stream.sock.shutdown_handle().map_err(|_| "static browser shutdown owner".to_owned())
     }

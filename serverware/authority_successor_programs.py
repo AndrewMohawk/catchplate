@@ -9,6 +9,8 @@ read-acquisition producers; their separate operation-bound plan factories
 add the actual configured signer without changing that base result contract.
 Delivery consumption pairs its real read-acquisition factory with a stateless
 original-replaying signer; it claims neither durable retention nor a legacy kernel.
+Native review entries are explicitly read/replay components, not available
+successor planners; their complete bounded plan/commit owners are still absent.
 """
 from __future__ import annotations
 
@@ -68,6 +70,38 @@ def _jit_assertion(*, read_planner, page_caller):
     from serverware.authority_jit_compound_production import _JitCompoundProducer
 
     return _JitCompoundProducer(read_planner=read_planner, page_caller=page_caller)
+
+
+def _native_review_reader(operation, *, dsn, connect_timeout_seconds, database_role,
+        tls_client_dn, tls_client_serial, tls_issuer_dn, query_manifest_digest,
+        root_public_key, enrollment_original, current_root_client):
+    from serverware.authority_native_jit_review_current_read import NativeJitReviewCurrentReader
+
+    return NativeJitReviewCurrentReader(operation=operation, dsn=dsn,
+        connect_timeout_seconds=connect_timeout_seconds, database_role=database_role,
+        tls_client_dn=tls_client_dn, tls_client_serial=tls_client_serial, tls_issuer_dn=tls_issuer_dn,
+        query_manifest_digest=query_manifest_digest, root_public_key=root_public_key,
+        enrollment_original=enrollment_original, current_root_client=current_root_client)
+
+
+def _native_review_authorize(**configuration):
+    return _native_review_reader("jit.review-open.authorize", **configuration)
+
+
+def _native_review_receipt(**configuration):
+    return _native_review_reader("jit.review-open.receipt.issue", **configuration)
+
+
+def _native_review_authorize_kernel():
+    from serverware.authority_transition_native_jit_review_open import NativeJitReviewKernel
+
+    return NativeJitReviewKernel("jit.review-open.authorize")
+
+
+def _native_review_receipt_kernel():
+    from serverware.authority_transition_native_jit_review_open import NativeJitReviewKernel
+
+    return NativeJitReviewKernel("jit.review-open.receipt.issue")
 
 
 def _evidence_owner(operation, *, read_planner, planner_private_key, planner_public_key,
@@ -290,6 +324,10 @@ PROGRAMS: Final[Mapping[str, SuccessorPlanningProgram]] = MappingProxyType({
         _program("webauthn.credential.revoke", _revocation, "signed-originals"),
         _program("webauthn.challenge.maintain", _challenge_maintenance, "signed-originals"),
         _program("jit.assertion.issue", _jit_assertion, "signed-originals"),
+        _program("jit.review-open.authorize", _native_review_authorize, "read-replay-components",
+            kernel_factory=_native_review_authorize_kernel),
+        _program("jit.review-open.receipt.issue", _native_review_receipt, "read-replay-components",
+            kernel_factory=_native_review_receipt_kernel),
         _program("webauthn.registration.evidence.admit", _registration_evidence,
             "signed-originals", _registration_evidence_kernel),
         _program("webauthn.registration.finalize", _registration, "read-acquisition",

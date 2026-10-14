@@ -68,6 +68,13 @@ else {
   connect = createConnectView(workspace, applications, proxy);
   const notifications = createNotificationsView(workspace);
   const pendingActions = createPendingActionsView({onAuthenticationLost: workspace.authenticationLost});
+  pendingActions.setReviewOpener(id => {
+    if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id))
+      throw new Error('Invalid protected review identifier');
+    // Keep the workspace's opener isolation. Only the dedicated, authenticated
+    // coordinator may open a native popup after its explicit Open gesture.
+    window.location.assign('/approvals/review/native#approval=' + id);
+  });
   workspace.onAuthenticationLost(pendingActions.authenticationLost);
   xAccounts = createXAccountsView(workspace, applications, connect);
   createGoogleView(workspace, applications, connect);

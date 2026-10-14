@@ -56,6 +56,10 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
   const status = message => { el('pending-actions-status').textContent = message; };
   const hold = id => {
     try {
+      const reviewMarker = sessionStorage.getItem('serverware.nativeJitReviewUncertain.' + id);
+      if (reviewMarker !== null) return reviewMarker === id ?
+        'A protected opening has an uncertain outcome. No new review or decision will be attempted here.' :
+        'The protected opening recovery marker is invalid. Review is unavailable.';
       const marker = sessionStorage.getItem('serverware.approvalDecisionUncertain.' + id);
       return marker === null ? '' : marker === id ?
         'A submitted decision needs status recovery. No review or decision will be retried here.' :

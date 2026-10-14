@@ -72,6 +72,20 @@ _REGISTRATION_FINALIZATION_PROFILE = (
     "serverware.signedPolicyAuthorityCurrentRootRegistrationFinalizationHeadObservation/v1",
     "serverware.policyAuthorityCurrentRootRegistrationFinalizationHeadObservation/v1",
 )
+REVIEW_AUTHORIZE_OPERATION = "jit.review-open.authorize"
+REVIEW_RECEIPT_OPERATION = "jit.review-open.receipt.issue"
+_REVIEW_AUTHORIZE_PROFILE = (
+    "serverware.policyAuthorityNativeJitReviewAuthorizeHeadQuery/v1",
+    "serverware.policyAuthorityNativeJitReviewAuthorizeHeadQueryIdentity/v1",
+    "serverware.signedPolicyAuthorityNativeJitReviewAuthorizeHeadObservation/v1",
+    "serverware.policyAuthorityNativeJitReviewAuthorizeHeadObservation/v1",
+)
+_REVIEW_RECEIPT_PROFILE = (
+    "serverware.policyAuthorityNativeJitReviewReceiptHeadQuery/v1",
+    "serverware.policyAuthorityNativeJitReviewReceiptHeadQueryIdentity/v1",
+    "serverware.signedPolicyAuthorityNativeJitReviewReceiptHeadObservation/v1",
+    "serverware.policyAuthorityNativeJitReviewReceiptHeadObservation/v1",
+)
 
 
 def _profile(operation):
@@ -88,6 +102,10 @@ def _profile(operation):
         return _REGISTRATION_EXECUTION_PROFILE
     if type(operation) is str and operation == REGISTRATION_FINALIZATION_OPERATION:
         return _REGISTRATION_FINALIZATION_PROFILE
+    if type(operation) is str and operation == REVIEW_AUTHORIZE_OPERATION:
+        return _REVIEW_AUTHORIZE_PROFILE
+    if type(operation) is str and operation == REVIEW_RECEIPT_OPERATION:
+        return _REVIEW_RECEIPT_PROFILE
     raise CurrentRootHeadError("current-root head operation is not source fixed")
 
 

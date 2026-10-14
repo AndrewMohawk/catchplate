@@ -48,7 +48,7 @@ class CurrentRootServiceError(RuntimeError):
 
 
 def _validate_configuration(config):
-    if type(config) is not tuple or len(config) not in (6, 7, 8, 9, 10, 11, 12, 13, 14, 17):
+    if type(config) is not tuple or len(config) not in (6, 7, 8, 9, 10, 11, 12, 13, 14, 17, 18):
         raise CurrentRootServiceError("current-root service configuration is not a fixed profile")
     owner, reserve_uid, reserve_gid, complete_uid, complete_gid, timeout = config[:6]
     if type(owner) is not decisions.CurrentRootDecisionOwner:
@@ -85,11 +85,18 @@ def _validate_configuration(config):
     if len(config) >= 14 and (type(config[13]) is not tuple or len(config[13]) != 2
             or any(type(value) is not int for value in config[13]) or config[13] != (65497, 65497)):
         raise CurrentRootServiceError("current-root delivery completion peer differs from fixed source")
-    if len(config) == 17:
-        for peer, expected in zip(config[14:], ((65520, 65520), (65521, 65521), (65522, 65522))):
+    if len(config) >= 17:
+        for peer, expected in zip(config[14:17], ((65520, 65520), (65521, 65521), (65522, 65522))):
             if (type(peer) is not tuple or len(peer) != 2
                     or any(type(value) is not int for value in peer) or peer != expected):
                 raise CurrentRootServiceError("current-root public revocation peer differs from fixed source")
+    if len(config) == 18:
+        peer = config[17]
+        if (type(peer) is not tuple or len(peer) != 2
+                or any(type(value) is not int or not 1 <= value <= 0xFFFFFFFF for value in peer)
+                or peer[0] != peer[1] or peer in config[6:17]
+                or peer in ((reserve_uid, reserve_gid), (complete_uid, complete_gid))):
+            raise CurrentRootServiceError("native review head peer is not a distinct admitted planner role")
     return config
 
 
@@ -246,6 +253,23 @@ class CurrentRootDecisionService:
         object.__setattr__(result, "_pid", os.getpid())
         return result
 
+    @classmethod
+    def _with_native_jit_review(cls, *, owner, timeout_seconds,
+            admitted_planner_peer_uid, admitted_planner_peer_gid):
+        """Native cold factory only; never selected by the local bootstrap.
+
+        These pins must come from that factory's independently admitted measured
+        planner role. This constructor does not admit a role or configuration;
+        it exposes no environment flag, arbitrary purpose or HTTP selection.
+        """
+        if cls is not CurrentRootDecisionService:
+            raise CurrentRootServiceError("native review requires the exact current-root service")
+        base = cls._with_public_revocation(owner=owner, timeout_seconds=timeout_seconds)
+        configured = _validate_configuration(base._configuration +
+            ((admitted_planner_peer_uid, admitted_planner_peer_gid),))
+        object.__setattr__(base, "_configuration", configured)
+        return base
+
     def serve_connection(self, connection, *, transport_deadline_ns=None):
         """Own one accepted socket, serve at most one request, then close it."""
         if type(connection) is not socket.socket:
@@ -263,7 +287,8 @@ class CurrentRootDecisionService:
             delivery_reserve_peer = configured[12] if len(configured) >= 13 else None
             delivery_complete_peer = configured[13] if len(configured) >= 14 else None
             revocation_head_peer, revocation_reserve_peer, revocation_complete_peer = (
-                configured[14:] if len(configured) == 17 else (None, None, None))
+                configured[14:17] if len(configured) >= 17 else (None, None, None))
+            native_review_head_peer = configured[17] if len(configured) == 18 else None
             # Exactly the independently admitted V9 profile, not a configurable
             # peer list or an implicit extension of legacy/V10 service modes.
             registration_head_peer = (0, 0) if len(configured) == 14 else None
@@ -280,7 +305,7 @@ class CurrentRootDecisionService:
                     finalization_complete_peer, activation_planner_peer, activation_reserve_peer,
                     activation_complete_peer, delivery_planner_peer, delivery_reserve_peer,
                     delivery_complete_peer, revocation_head_peer, revocation_reserve_peer,
-                    revocation_complete_peer, registration_head_peer):
+                    revocation_complete_peer, registration_head_peer, native_review_head_peer):
                 raise CurrentRootServiceError("current-root socket peer is not admitted")
             prefix = transport._recv_prefix(connection, deadline_ns=deadline_ns)
             expected_operation = None
@@ -345,13 +370,31 @@ class CurrentRootDecisionService:
             elif (prefix == transport.REGISTRATION_FINALIZATION_HEAD_QUERY_REQUEST_MAGIC
                     and registration_head_peer is not None):
                 action, required_peer = "registration-finalization-head", registration_head_peer
+            elif (prefix == transport.NATIVE_JIT_REVIEW_AUTHORIZE_HEAD_QUERY_REQUEST_MAGIC
+                    and native_review_head_peer is not None):
+                action, required_peer = "native-review-authorize-head", native_review_head_peer
+            elif (prefix == transport.NATIVE_JIT_REVIEW_RECEIPT_HEAD_QUERY_REQUEST_MAGIC
+                    and native_review_head_peer is not None):
+                action, required_peer = "native-review-receipt-head", native_review_head_peer
             else:
                 raise CurrentRootServiceError("current-root socket purpose is not source fixed")
             if peer != required_peer:
                 raise CurrentRootServiceError("current-root socket peer is not admitted for this purpose")
             # Exact class dispatch excludes instance method overrides. No
             # branch parses signed data or creates a second work allowance.
-            if action in ("registration-execution-head", "registration-finalization-head"):
+            if action in ("native-review-authorize-head", "native-review-receipt-head"):
+                authorize = action == "native-review-authorize-head"
+                operation = "jit.review-open.authorize" if authorize else "jit.review-open.receipt.issue"
+                original = transport._recv_native_jit_review_head_query(connection,
+                    prefix=prefix, deadline_ns=deadline_ns, operation=operation)
+                transport._check_deadline(deadline_ns)
+                method = (decisions.CurrentRootDecisionOwner.observe_native_jit_review_authorize_head
+                    if authorize else decisions.CurrentRootDecisionOwner.observe_native_jit_review_receipt_head)
+                observed = method(owner, original, transport_deadline_ns=deadline_ns)
+                transport._check_deadline(deadline_ns)
+                transport._send_native_jit_review_head_observation(connection, observed,
+                    deadline_ns=deadline_ns, operation=operation)
+            elif action in ("registration-execution-head", "registration-finalization-head"):
                 purpose = "execution" if action == "registration-execution-head" else "finalization"
                 original = transport._recv_registration_head_query(connection,
                     prefix=prefix, deadline_ns=deadline_ns, purpose=purpose)

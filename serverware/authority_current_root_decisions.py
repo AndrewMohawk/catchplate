@@ -477,11 +477,28 @@ class CurrentRootDecisionOwner:
         return CurrentRootDecisionOwner._observe_head(self, query_bytes,
             transport_deadline_ns=transport_deadline_ns, delivery=False, registration="finalization")
 
+    def observe_native_jit_review_authorize_head(self, query_bytes, *, transport_deadline_ns=None):
+        """Review authorization observation only, never a disclosure acknowledgment."""
+        return CurrentRootDecisionOwner._observe_head(self, query_bytes,
+            transport_deadline_ns=transport_deadline_ns, delivery=False,
+            native_review=head_wire.REVIEW_AUTHORIZE_OPERATION)
+
+    def observe_native_jit_review_receipt_head(self, query_bytes, *, transport_deadline_ns=None):
+        """Review receipt current read only; it cannot assert a completed commit."""
+        return CurrentRootDecisionOwner._observe_head(self, query_bytes,
+            transport_deadline_ns=transport_deadline_ns, delivery=False,
+            native_review=head_wire.REVIEW_RECEIPT_OPERATION)
+
     def _observe_head(self, query_bytes, *, transport_deadline_ns, delivery, revocation=False,
-            registration=None):
+            registration=None, native_review=None):
         if type(delivery) is not bool or type(revocation) is not bool or delivery and revocation:
             raise CurrentRootDecisionError("current-root head purpose is not source fixed")
-        if registration is not None:
+        if native_review is not None:
+            if (delivery or revocation or registration is not None or type(native_review) is not str
+                    or native_review not in (head_wire.REVIEW_AUTHORIZE_OPERATION, head_wire.REVIEW_RECEIPT_OPERATION)):
+                raise CurrentRootDecisionError("native review head cannot alias another purpose")
+            operation = native_review
+        elif registration is not None:
             if delivery or revocation:
                 raise CurrentRootDecisionError("registration head cannot alias another purpose")
             operation = registration_head_wire._operation(registration)

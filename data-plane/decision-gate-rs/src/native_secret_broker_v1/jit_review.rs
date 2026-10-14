@@ -256,6 +256,16 @@ fn validate_correlations(config: &Value, original: &originals::Originals, contro
 }
 
 impl Owner {
+    // Combined v27 must configure its separately admitted opener before any
+    // seal attempt. Existing v26 has no opener and preserves its own behavior.
+    pub(super) fn jit_review_is_cold(&self) -> bool {
+        self.jit_configuration.as_ref().is_some_and(|held| held.spent.is_empty())
+    }
+    pub(super) fn jit_review_cold_scope(&self) -> Result<&Value, String> {
+        let held = self.jit_configuration.as_ref().ok_or("opening seal owner absent")?;
+        ensure(held.spent.is_empty(), "opening seal owner already used")?;
+        Ok(&held.wire)
+    }
     pub(crate) fn jit_review_marker(&mut self, identity: &mut EnclaveRuntimeIdentityV1,
         deadline: u64) -> Result<Arc<()>, String> {
         self.check_jit_identity(identity, deadline).map(|(_, marker, _, _)| marker)

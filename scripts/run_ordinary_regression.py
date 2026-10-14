@@ -75,6 +75,16 @@ SUITES = (
     # Real crypto with synthetic keys/quotes; loader stops before native admission.
     Suite("backend", "test_authority_native_jit_review_custody.py", seconds=60),
     Suite("backend", "test_authority_native_jit_review_registration.py", seconds=60),
+    Suite("backend", "test_authority_transition_registry.py", seconds=60),
+    # Protected review components use synthetic authority/launch observations;
+    # none establishes native admission, a database commit or private disclosure.
+    # Root-owned FD metadata tests have a separate isolated root-only lane.
+    Suite("backend", "test_native_jit_review_open_owner.py", seconds=60),
+    Suite("backend", "test_authority_native_jit_review_current_chunks.py", seconds=60),
+    Suite("backend", "test_authority_native_jit_review_current_read.py", seconds=60),
+    Suite("backend", "test_authority_native_jit_review_open.py", seconds=60),
+    Suite("backend", "test_authority_launcher_native_review_credentials.py", seconds=60),
+    Suite("backend", "test_native_jit_review_portal.py", seconds=60),
     # Synthetic pending, writer-boundary, legacy-reader and ASGI controls only;
     # no native startup, PostgreSQL transaction or provider acceptance.
     Suite("backend", "test_authority_native_jit_pending.py", seconds=60),
@@ -141,6 +151,7 @@ SUITES = (
     Suite("ui_contract", "test_approval_decision_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_workload_renewal_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_pending_actions_ui.cjs", "node", seconds=60),
+    Suite("ui_contract", "test_native_jit_review_portal.cjs", "node", seconds=60),
 )
 
 
@@ -298,6 +309,8 @@ def node_completion(script, raw):
         "test_operator_pending_actions_ui.cjs": {"ok": True, "backendAcceptance": False,
             "nativeReviewAcceptance": False,
             "scope": "public queue module with inert DOM and synthetic GET responses"},
+        "test_native_jit_review_portal.cjs": {"ok": True, "synthetic": True,
+            "nativeAdmission": False, "providerRequests": False},
     }
     try:
         lines = raw.decode("utf-8").splitlines()

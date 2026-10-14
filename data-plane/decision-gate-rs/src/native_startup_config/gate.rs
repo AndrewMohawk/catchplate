@@ -163,6 +163,7 @@ impl GateConfigV1 {
             historical_broker: None,
             secret_broker,
             measured_jit_review: None, jit_review_assignment: None,
+            measured_jit_review_open: None, jit_review_open_assignment: None,
             measured_refresh,
             measured_cleanup: None,
             measured_pending_retirement: None,

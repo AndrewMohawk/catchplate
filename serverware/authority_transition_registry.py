@@ -165,9 +165,15 @@ LEGACY_PLANNABLE_OPERATIONS: Final[frozenset[str]] = frozenset(
 SUCCESSOR_PROGRAMS: Final[
     Mapping[str, authority_successor_programs.SuccessorPlanningProgram]
 ] = authority_successor_programs.PROGRAMS
-SUCCESSOR_PLANNABLE_OPERATIONS: Final[frozenset[str]] = frozenset(SUCCESSOR_PROGRAMS)
-# Generic source coverage only. Legacy v3 consumers must use the narrower set;
-# a configured successor owner is never an interchangeable v3 kernel.
+COMPONENT_ONLY_SUCCESSOR_OPERATIONS: Final[frozenset[str]] = frozenset({
+    "jit.review-open.authorize", "jit.review-open.receipt.issue",
+})
+SUCCESSOR_PLANNABLE_OPERATIONS: Final[frozenset[str]] = frozenset(
+    set(SUCCESSOR_PROGRAMS) - COMPONENT_ONLY_SUCCESSOR_OPERATIONS
+)
+# Source-complete planning paths only, not configured admission. The two native
+# review entries own real read/replay components but no bounded plan/commit
+# owner. Neither they nor a configured successor are interchangeable v3 kernels.
 PLANNABLE_OPERATIONS: Final[frozenset[str]] = (
     LEGACY_PLANNABLE_OPERATIONS | SUCCESSOR_PLANNABLE_OPERATIONS
 )
@@ -218,9 +224,18 @@ def _registry_closure_errors() -> tuple[str, ...]:
             LEGACY_PLANNABLE_OPERATIONS & SUCCESSOR_PLANNABLE_OPERATIONS,
         ),
         (
+            "component-only operations lack successor contracts",
+            COMPONENT_ONLY_SUCCESSOR_OPERATIONS - _EXPECTED_SUCCESSOR_OPERATIONS,
+        ),
+        (
+            "component-only operations are plannable",
+            COMPONENT_ONLY_SUCCESSOR_OPERATIONS & PLANNABLE_OPERATIONS,
+        ),
+        (
             "uncovered operation contracts",
             set(authority_contract.OPERATION_REGISTRY)
-            - set(PLANNABLE_OPERATIONS) - set(INTENTIONALLY_DISABLED_OPERATIONS),
+            - set(PLANNABLE_OPERATIONS) - set(INTENTIONALLY_DISABLED_OPERATIONS)
+            - COMPONENT_ONLY_SUCCESSOR_OPERATIONS,
         ),
         (
             "disabled operations are plannable",
@@ -270,7 +285,9 @@ def _registry_closure_errors() -> tuple[str, ...]:
         evidence_operation = operation in {
             "webauthn.registration.evidence.admit", "webauthn.trust.installation.admit"
         }
+        component_only = operation in COMPONENT_ONLY_SUCCESSOR_OPERATIONS
         expected_result = (
+            "read-replay-components" if component_only else
             "signed-originals" if evidence_operation or operation in {
                 "webauthn.credential.revoke", "webauthn.challenge.maintain",
                 "jit.assertion.issue"}
@@ -286,7 +303,7 @@ def _registry_closure_errors() -> tuple[str, ...]:
                     == "typed-successor-planning"),
                 ("result-kind", program.result_kind == expected_result),
                 ("factory", callable(program.factory)),
-                ("kernel-factory", callable(program.kernel_factory) if evidence_operation
+                ("kernel-factory", callable(program.kernel_factory) if evidence_operation or component_only
                     else program.kernel_factory is None),
                 ("plan-factory", callable(program.plan_factory) if expected_result == "read-acquisition"
                     else program.plan_factory is None),
@@ -312,7 +329,7 @@ def _registry_closure_errors() -> tuple[str, ...]:
 
 def successor_program(operation: str) -> authority_successor_programs.SuccessorPlanningProgram:
     """Select a fixed configured owner; never fall back to legacy planning."""
-    if type(operation) is not str or operation not in SUCCESSOR_PROGRAMS:
+    if type(operation) is not str or operation not in SUCCESSOR_PLANNABLE_OPERATIONS:
         raise ValueError("operation has no source-registered successor planning program")
     return SUCCESSOR_PROGRAMS[operation]
 

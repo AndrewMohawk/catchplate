@@ -16,7 +16,7 @@ const MAX_SIGNED_POLICY_BYTES: usize = 3 * 1024 * 1024;
 const WAIT_SLICE: Duration = Duration::from_millis(20);
 const SCHEMA: &str = "serverware.signedMeasuredAuditAuthorityPolicy/v1";
 
-enum Purpose { Audit, JitReview }
+enum Purpose { Audit, JitReview, JitReviewOpen }
 
 pub(super) struct Receiver<'a> {
     listener: VsockListenerV1,
@@ -32,6 +32,10 @@ impl<'a> Receiver<'a> {
 
     pub(super) fn bind_jit_review(port: u32, lifetime: &'a NativeRuntimeLifetimeV1) -> Result<Self, String> {
         Self::bind_purpose(port, lifetime, Purpose::JitReview)
+    }
+
+    pub(super) fn bind_jit_review_open(port: u32, lifetime: &'a NativeRuntimeLifetimeV1) -> Result<Self, String> {
+        Self::bind_purpose(port, lifetime, Purpose::JitReviewOpen)
     }
 
     fn bind_purpose(port: u32, lifetime: &'a NativeRuntimeLifetimeV1, purpose: Purpose) -> Result<Self, String> {
@@ -53,6 +57,8 @@ impl<'a> Receiver<'a> {
             Purpose::Audit => (MAX_SIGNED_POLICY_BYTES, SCHEMA, "signatureBase64Url"),
             Purpose::JitReview => (serverware_decision_gate::native_jit_review_v1::MAX_ASSIGNMENT,
                 serverware_decision_gate::native_jit_review_v1::SIGNED_ASSIGNMENT, "signature"),
+            Purpose::JitReviewOpen => (serverware_decision_gate::native_jit_review_open_v1::MAX_ASSIGNMENT,
+                serverware_decision_gate::native_jit_review_open_v1::SIGNED_ASSIGNMENT, "signature"),
         };
         lifetime.check()?;
         let accepted = listener.accept_cancellable(lifetime.deadline(), lifetime.stopped_flag());

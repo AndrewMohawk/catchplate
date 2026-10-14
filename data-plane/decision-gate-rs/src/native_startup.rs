@@ -41,6 +41,7 @@ pub(super) struct NativeStartupParametersV1 {
     pub(super) workload_trust: Option<native_workload_identity_trust::Pending>,
     pub(super) postboot_audit_port: Option<u32>,
     pub(super) postboot_jit_review_port: Option<u32>,
+    pub(super) postboot_jit_review_open_port: Option<u32>,
     pub(super) attempt_ledger_directory: PathBuf,
     pub(super) relay_assignments: Vec<NativeRelayAssignmentV1>,
     pub(super) listener_port: u32,
@@ -184,6 +185,10 @@ fn run_owned(
     {
         return Err("native startup requires cold inputs without shadow or observation owners".to_owned());
     }
+    if inputs.jit_review_open_assignment.is_some()
+        || (inputs.measured_jit_review_open.is_some() && inputs.jit_review_assignment.is_some()) {
+        return Err("combined JIT assignments must arrive through their separate actual postboot receivers".into());
+    }
     super::native_gate_inputs::validate_native_gate_static_inputs(&inputs)?;
     validate_parameters(&parameters)?;
     if inputs.measured_audit.as_ref().is_some_and(|v| v.requires_postboot_assignment())
@@ -205,9 +210,11 @@ fn run_owned(
     }
     if response_proof_identity_export == ResponseProofIdentityExport::Vsock {
         let port = super::native_public_identity_transport::PORT;
-        let browser_port = match (&inputs.measured_static_credential, &inputs.measured_static_credential_rotation) {
-            (Some(value), None) => Some(value.browser_vsock_port),
-            (None, Some(value)) => Some(value.browser_vsock_port),
+        let browser_port = match (&inputs.measured_static_credential, &inputs.measured_static_credential_rotation,
+            &inputs.measured_jit_review_open) {
+            (Some(value), None, None) => Some(value.browser_vsock_port),
+            (None, Some(value), None) => Some(value.browser_vsock_port),
+            (None, None, Some(value)) => Some(value.browser_vsock_port()),
             _ => None,
         };
         if parameters.postboot_audit_port.is_none() || parameters.postboot_audit_port == Some(port)
@@ -225,6 +232,24 @@ fn run_owned(
             || port == parameters.listener_port || response_proof_identity_export == ResponseProofIdentityExport::None
             || parameters.enrollment_authorizer.as_ref().is_some_and(|v| v.listener_port() == port)) {
         return Err("JIT startup requires its own postboot receiver and original identity export".into());
+    }
+    if inputs.measured_jit_review_open.is_some() != parameters.postboot_jit_review_open_port.is_some() {
+        return Err("JIT opening requires its separate cold profile and postboot receiver".into());
+    }
+    if let Some(config) = &inputs.measured_jit_review_open {
+        let audit = parameters.postboot_audit_port.ok_or("JIT opening requires postboot audit")?;
+        let sealing = parameters.postboot_jit_review_port.ok_or("combined JIT sealing receiver absent")?;
+        let assignment = parameters.postboot_jit_review_open_port.ok_or("JIT opening receiver absent")?;
+        let ports = [audit, sealing, assignment, config.browser_vsock_port(), parameters.listener_port,
+            super::native_public_identity_transport::PORT];
+        if response_proof_identity_export == ResponseProofIdentityExport::None
+            || inputs.measured_jit_review.is_none()
+            || !ports.iter().enumerate().all(|(index, port)|
+                (1024..u32::MAX).contains(port) && !ports[..index].contains(port))
+            || parameters.enrollment_authorizer.as_ref().is_some_and(|value|
+                value.listener_port() != parameters.listener_port) {
+            return Err("combined JIT requires original identity export and distinct purpose listeners".into());
+        }
     }
     if let Some(authorizer) = &parameters.enrollment_authorizer {
         authorizer.check()?;
@@ -368,6 +393,8 @@ fn run_owned(
         .map(|port| native_postboot_assignment::Receiver::bind(port, startup.as_ref())).transpose()?;
     let jit_receiver = parameters.postboot_jit_review_port
         .map(|port| native_postboot_assignment::Receiver::bind_jit_review(port, startup.as_ref())).transpose()?;
+    let jit_open_receiver = parameters.postboot_jit_review_open_port
+        .map(|port| native_postboot_assignment::Receiver::bind_jit_review_open(port, startup.as_ref())).transpose()?;
     match response_proof_identity_export {
         ResponseProofIdentityExport::None => {},
         ResponseProofIdentityExport::Stdout => {
@@ -402,6 +429,12 @@ fn run_owned(
         // Literal original only. Actual key/scope/assignment admission follows
         // service-token installation, before configuring this broker purpose.
         inputs.jit_review_assignment = Some(receiver.receive()?);
+        startup.check()?;
+    }
+    if let Some(receiver) = jit_open_receiver {
+        // Preserve the literal opening-purpose original. This receiver only
+        // checks framing; actual native opening-owner admission follows later.
+        inputs.jit_review_open_assignment = Some(receiver.receive()?);
         startup.check()?;
     }
     startup.check()?;

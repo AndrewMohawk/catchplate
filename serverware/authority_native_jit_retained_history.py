@@ -6,7 +6,7 @@ attestation, database provenance or current authority. Original sealing was
 admitted before retention; its expired seal window must not be renewed or
 reverified as fresh opening evidence. Fresh disclosure has a separate purpose.
 
-The only supported historical source is the explicit v349 profile below. Its
+The supported historical sources are the explicit v349/v350 profiles below. Their
 requests keep their original manifest, handlers, intents and literal bytes.
 There is no installed-manifest comparison, configurable compatibility list,
 private runtime input, key loading, decryption, resealing or persistence here.
@@ -33,6 +33,12 @@ from serverware import native_jit_review_material as material
 
 SEALED_MANIFEST = "sha256:b708d9f97ca989abf0411054bbc23d02262fb5a67bcab345246650a925e776e0"
 SEALED_SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.349"
+FRESH_SEALED_MANIFEST = "sha256:ed6d471a03516c96aa4968b89e4d220f9d5aaa0dfc4c1f848acfcc58343de4f0"
+FRESH_SEALED_SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.350"
+# Both formats retain exactly the fixed request/handler/adapter grammar below.
+# Never substitute the installed manifest: an unknown future format is refused.
+SEALED_PROFILES = ((SEALED_MANIFEST, SEALED_SOURCE_REVISION),
+    (FRESH_SEALED_MANIFEST, FRESH_SEALED_SOURCE_REVISION))
 ERROR = "Native JIT retained history is unavailable"
 _REQUEST_FIELDS = frozenset({"schema", "operation", "operationId", "requestDigest",
     "handler", "operationManifestDigest", "arguments"})
@@ -70,11 +76,11 @@ def _same(left, right):
     _require(core.canonical_bytes(left) == core.canonical_bytes(right))
 
 
-def _request(value, operation, handler, fields):
+def _request(value, operation, handler, fields, manifest):
     _require(type(value) is dict and set(value) == _REQUEST_FIELDS
         and value["schema"] == "serverware.policyAuthorityV9Request/v1"
         and value["operation"] == operation and value["handler"] == handler
-        and value["operationManifestDigest"] == SEALED_MANIFEST)
+        and value["operationManifestDigest"] == manifest)
     arguments = value["arguments"]
     _require(type(arguments) is dict and set(arguments) == fields | {"businessIntent"})
     public = {name: arguments[name] for name in fields}
@@ -82,7 +88,7 @@ def _request(value, operation, handler, fields):
         "operation": operation, "planningAdapterId": "serverware.policyAuthorityPlanningAdapter/" + handler + "/v1",
         "arguments": public})
     authorization = {"schema": "serverware.policyAuthorityV9Authorization/v1", "operation": operation,
-        "handler": handler, "operationManifestDigest": SEALED_MANIFEST, "arguments": arguments}
+        "handler": handler, "operationManifestDigest": manifest, "arguments": arguments}
     digest = core.framed_digest("serverware.policyAuthorityV9Request/v1", core.canonical_bytes(authorization))
     _require(value["requestDigest"] == digest and value["operationId"] == core.framed_digest(
         "serverware.policyAuthorityOperation/v2", operation.encode("ascii"), digest.encode("ascii")))
@@ -90,8 +96,10 @@ def _request(value, operation, handler, fields):
 
 
 def _requests(parent, child):
-    public = _request(parent, "release.reserve", "reserve_release_authorization_v2", _PARENT_FIELDS)
-    nested = _request(child, "jit.request", "ensure_jit_approval_request", _CHILD_FIELDS)
+    manifest = parent.get("operationManifestDigest")
+    _require(manifest in {profile[0] for profile in SEALED_PROFILES})
+    public = _request(parent, "release.reserve", "reserve_release_authorization_v2", _PARENT_FIELDS, manifest)
+    nested = _request(child, "jit.request", "ensure_jit_approval_request", _CHILD_FIELDS, manifest)
     _require(public["schema"] == "serverware.releaseReserveCommitments/v1"
         and nested["schema"] == "serverware.jitRequestCommitments/v2"
         and public["native_profile"] is True and public["policy_aware_profile"] is False
@@ -139,7 +147,7 @@ def _pair_bindings(row, parent, child, pair, proof):
     scope = material.validate_release_scope(pair["scope"])
     statement = proof["statement"]
     _same(scope["publicRequest"], child)
-    expected = {"sourceContractDigest": SEALED_MANIFEST,
+    expected = {"sourceContractDigest": row["source_contract_digest"],
         "parentRequestSha256": grammar.sha256(row["parent_request_original"].encode("ascii")),
         "parentRequestDigest": parent["requestDigest"], "parentOperationId": parent["operationId"],
         "requestDigest": child["requestDigest"], "operationId": child["operationId"],
@@ -179,6 +187,37 @@ def _pair_bindings(row, parent, child, pair, proof):
     _require(pair["items"][1]["plaintextSha256"] == child["arguments"]["redacted_display_digest"])
 
 
+def retained_original_documents(*, parent_original, child_original, pair_original, evidence_original):
+    """Check four literal historical documents only, never authenticated rows.
+
+No recorded-time, current approval, signature or admission claim is made by
+this helper. The native opener must first verify a genuine grant binding all
+four original hashes and enforce its current, one-use private scope.
+    """
+    try:
+        originals = {"parentOriginal": parent_original, "childOriginal": child_original,
+            "pairOriginal": pair_original, "evidenceOriginal": evidence_original}
+        _require(len(core.canonical_bytes(originals)) <= 4 * 1024 * 1024)
+        parent = grammar.document(parent_original, storage.ORIGINAL_LIMITS["parent_request_original"])
+        child = grammar.document(child_original, storage.ORIGINAL_LIMITS["child_request_original"])
+        pair = grammar.document(pair_original, storage.ORIGINAL_LIMITS["pair_original"])
+        proof = custody.authority_evidence(evidence_original)
+        _requests(parent, child)
+        scope = material.validate_release_scope(pair["scope"])
+        # This local map is only literal consistency input, never a DB row.
+        bindings = {"parent_request_original": parent_original, "child_request_original": child_original,
+            "pair_sha256": grammar.sha256(pair_original.encode("ascii")),
+            "source_contract_digest": parent["operationManifestDigest"],
+            "control_plane_configuration_digest": scope["controlPlaneConfigurationDigest"],
+            "owner_scope_digest": scope["ownerScopeDigest"], "issued_at_epoch_ns": scope["issuedAtEpochNs"],
+            "seal_expires_at_epoch_ns": scope["sealExpiresAtEpochNs"],
+            "document_expires_at_epoch_ns": scope["documentExpiresAtEpochNs"]}
+        _pair_bindings(bindings, parent, child, pair, proof)
+        return parent, child, pair, proof
+    except Exception:
+        raise RetainedHistoryError() from None
+
+
 def historical_retained_documents(*, retained_row, approval_row, now_epoch_ns):
     """Return owned parsed originals after consistency checks, NOT authority.
 
@@ -190,8 +229,7 @@ def historical_retained_documents(*, retained_row, approval_row, now_epoch_ns):
     try:
         _require(type(retained_row) is dict and set(retained_row) == set(storage.COLUMNS))
         row = retained_row
-        _require(row["source_contract_digest"] == SEALED_MANIFEST
-            and row["source_revision"] == SEALED_SOURCE_REVISION)
+        _require((row["source_contract_digest"], row["source_revision"]) in SEALED_PROFILES)
         for name in storage.DIGEST_COLUMNS:
             grammar.digest(row[name])
         grammar.kek(row["secret_kek_id"])

@@ -30,6 +30,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts import operator_guided_browser as wire
+from scripts import operator_guided_hosted_profile as hosted
 from scripts import operator_ordinary_client_fixture as oracle
 from scripts.check_operator_catalog import OperatorCatalogCheck, TOKEN, claim_fixture, features
 from scripts.check_operator_demo import AUTHORITY, CheckFailure, SHA256, require, token_file
@@ -223,10 +224,19 @@ class GuidedCheck(OperatorCatalogCheck):
             and self.proxy.address == "127.0.0.1" and self.upstream.address == "127.0.0.2"
             and str(args.ca_file) == wire.CA_PATH, "guided isolated endpoint selection refused")
         path = args.curl_binary
-        info = path.lstat()
-        require(path.is_absolute() and path.resolve() == path and stat.S_ISREG(info.st_mode)
-            and info.st_size <= 67108864 and args.expected_curl_sha256 == CURL_SHA256
-            and hashlib.sha256(path.read_bytes()).hexdigest() == CURL_SHA256, "guided cached curl differs")
+        profile = getattr(args, "profile", "homelab-cached-v1")
+        provision = getattr(args, "hosted_provision", None)
+        if profile == hosted.PROFILE:
+            require(provision == Path(hosted.PROVISION_MOUNT), "guided hosted provision mount differs")
+            receipt = hosted.read(provision)
+            require(args.expected_curl_sha256 == receipt["curl"]["sha256"], "guided hosted curl pin differs")
+            hosted.curl_file(path, receipt["curl"])
+        else:
+            require(profile == "homelab-cached-v1" and provision is None, "guided cached profile differs")
+            info = path.lstat()
+            require(path.is_absolute() and path.resolve() == path and stat.S_ISREG(info.st_mode)
+                and info.st_size <= 67108864 and args.expected_curl_sha256 == CURL_SHA256
+                and hashlib.sha256(path.read_bytes()).hexdigest() == CURL_SHA256, "guided cached curl differs")
         self.body_file = args.run_claim_file.parent / ".guided-request.json"
         fd = os.open(self.body_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "wb") as output:
@@ -564,6 +574,8 @@ def main():
     for name in ("proxy-ca-file", "control-ca-file", "management-ca-file"):
         parser.add_argument("--" + name, type=Path)
     parser.add_argument("--upstream-address")
+    parser.add_argument("--profile", choices=("homelab-cached-v1", hosted.PROFILE), default="homelab-cached-v1")
+    parser.add_argument("--hosted-provision", type=Path)
     parser.add_argument("--timeout-seconds", type=int, default=180)
     args = parser.parse_args()
     check = None

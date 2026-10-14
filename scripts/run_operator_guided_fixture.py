@@ -22,6 +22,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts import prepare_operator_guided_fixture as recipe
+from scripts import operator_guided_hosted_profile as hosted
 from scripts.check_operator_curated_gate import PROBE
 from scripts.run_operator_gmail_sdk_fixture import NODE, NODE_SHA256, CHROME, CHROME_SHA256
 from scripts.run_operator_x_post_fixture import XPostRun
@@ -33,7 +34,10 @@ CHROME_CANONICAL = Path("/srv/catchplate-fast/home-offload/operator/.cache/ms-pl
     "chromium_headless_shell-1208/chrome-headless-shell-linux64/chrome-headless-shell")
 
 
-def admitted_image_entrypoint(image, entrypoint):
+def admitted_image_entrypoint(image, entrypoint, hosted_profile=None):
+    if hosted_profile is not None:
+        hosted.validate(hosted_profile)
+        return image in {hosted_profile["app"]["id"], hosted.CLIENT_IMAGE, hosted.GATE_IMAGE} and entrypoint in (None, [])
     if image == recipe.basic.CLIENT_IMAGE:
         return entrypoint == ["/entrypoint.sh"]
     return entrypoint in (None, [])
@@ -44,13 +48,25 @@ class GuidedRun(XPostRun):
 
     def inputs(self, suffix):
         self.source_unchanged(suffix)
+        selected = getattr(self.args, "profile", "homelab-cached-v1")
+        provision = getattr(self.args, "hosted_provision", None)
+        if selected == hosted.PROFILE:
+            require(provision is not None)
+            current = hosted.read(provision, source=self.args.source, revision=self.args.commit,
+                github=hosted.github_identity(os.environ))
+            require(suffix == "before" or current == self.hosted_profile, "hosted provision changed")
+            self.hosted_profile = current
+        else:
+            require(selected == "homelab-cached-v1" and provision is None)
+            self.hosted_profile = None
         pins = ((self.args.binary, self.args.expected_binary_sha256),
             (self.args.initializer, recipe.base.INITIALIZER_SHA256), (NODE, NODE_SHA256), (CHROME, CHROME_SHA256))
         for path, expected in pins:
             resolutions = {path, CHROME_CANONICAL} if path == CHROME else {path}
             require(path.is_file() and path.resolve() in resolutions and not path.is_symlink()
                 and path.stat().st_mode & 4 and recipe.base.digest(path) == expected, "guided pinned input differs")
-        return {str(path): expected for path, expected in pins}
+        return {str(path): expected for path, expected in pins} | (
+            {str(provision): recipe.base.digest(provision)} if provision is not None else {})
 
     def public_view(self, container, mode, suffix, *, initial):
         require(re.fullmatch(r"[0-9a-f]{64}", container) and mode in {"app", "gate"})
@@ -176,18 +192,26 @@ class GuidedRun(XPostRun):
             require(Path(__file__).resolve() == args.source / SOURCE_SCRIPT)
             before = self.inputs("before")
             config = recipe.build(args.source, args.binary, args.initializer, args.job_root,
-                expected_binary_sha256=args.expected_binary_sha256)
+                expected_binary_sha256=args.expected_binary_sha256, hosted_profile=self.hosted_profile,
+                hosted_provision=getattr(args, "hosted_provision", None))
             self.project, self.services = config["name"], config["services"]
             image_ids, self.image_environments = {}, {}
             for index, image in enumerate(sorted({item["image"] for item in self.services.values()})):
                 require(re.fullmatch(r"(?:python@)?sha256:[0-9a-f]{64}", image))
                 value = json.loads(self.command("image-" + str(index), ["docker", "image", "inspect", "--format",
                     '{"id":{{json .Id}},"environment":{{json .Config.Env}},"entrypoint":{{json (index .Config "Entrypoint")}}}', image], 10))
-                require(set(value) == {"id", "environment", "entrypoint"} and admitted_image_entrypoint(image, value["entrypoint"])
+                require(set(value) == {"id", "environment", "entrypoint"}
+                    and admitted_image_entrypoint(image, value["entrypoint"], self.hosted_profile)
                     and re.fullmatch(r"sha256:[0-9a-f]{64}", value["id"])
                     and (not image.startswith("sha256:") or value["id"] == image))
                 from scripts.run_operator_npm_example_fixture import environment
                 image_ids[image], self.image_environments[image] = value["id"], environment(value["environment"])
+            if self.hosted_profile is not None:
+                require(image_ids == {self.hosted_profile["app"]["id"]: self.hosted_profile["app"]["id"],
+                    hosted.CLIENT_IMAGE: hosted.CLIENT_ID, hosted.GATE_IMAGE: self.hosted_profile["gate"]["id"]})
+                labels = json.loads(self.command("hosted-app-labels", ["docker", "image", "inspect", "--format",
+                    "{{json .Config.Labels}}", self.hosted_profile["app"]["id"]], 5))
+                require(labels == self.hosted_profile["app"]["labels"], "hosted build provenance differs")
             require(not self.container_rows("preexisting") and self.no_project_networks("preexisting-networks"))
             armed = True
             self.browser_preflight()
@@ -196,7 +220,8 @@ class GuidedRun(XPostRun):
             with compose_path.open("x", encoding="utf-8") as stream:
                 json.dump(config, stream, sort_keys=True, indent=2); stream.write("\n"); stream.flush(); os.fsync(stream.fileno())
             self.save("run-inputs.json", {"sourceCommit": args.commit, "binarySha256": args.expected_binary_sha256,
-                "initializerSha256": recipe.base.INITIALIZER_SHA256, "curlSha256": recipe.basic.CURL_SHA256,
+                "initializerSha256": recipe.base.INITIALIZER_SHA256, "curlSha256": (
+                    recipe.basic.CURL_SHA256 if self.hosted_profile is None else self.hosted_profile["curl"]["sha256"]),
                 "composeSha256": recipe.base.digest(compose_path), "project": self.project, "images": image_ids,
                 "workSeconds": WORK_SECONDS, "cleanupSeconds": CLEANUP_SECONDS, "syntheticOnly": True,
                 "realProviderVerified": False, "productionReady": False})
@@ -233,6 +258,7 @@ class GuidedRun(XPostRun):
             from scripts.check_operator_guided import validate_joined_result
             result = json.loads(raw); validate_joined_result(result)
             require(result["checker"]["dataPlaneBinaryDigest"] == "sha256:" + args.expected_binary_sha256)
+            self.save("joined-result.json", result)
             state = json.loads(self.command("checker-state", ["docker", "inspect", "--format", "{{json .State}}", identities["check"]], 5))
             require(state["Status"] == "exited" and state["ExitCode"] == 0 and not state["OOMKilled"]
                 and not self.browser_units("browser-unit-after"), "guided checker or browser remains")
@@ -266,6 +292,8 @@ def main():
         parser.add_argument("--" + name, type=absolute_path, required=True)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--expected-binary-sha256", type=sha256, required=True)
+    parser.add_argument("--profile", choices=("homelab-cached-v1", hosted.PROFILE), default="homelab-cached-v1")
+    parser.add_argument("--hosted-provision", type=absolute_path)
     args = parser.parse_args()
     for name in ("DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "DOCKER_API_VERSION"):
         os.environ.pop(name, None)

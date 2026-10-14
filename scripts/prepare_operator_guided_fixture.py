@@ -12,6 +12,7 @@ import re
 
 from scripts import prepare_operator_proxy_basic_fixture as basic
 from scripts import operator_guided_fixture_network as network
+from scripts import operator_guided_hosted_profile as hosted
 
 base = basic.base
 CONTROL_ORIGIN = "https://" + network.CONTROL_HOST
@@ -25,7 +26,15 @@ LEAVES = (".operator-publication.lock", ".serverware-operator-demo.json",
     "mitmproxy/mitmproxy-ca-cert.pem", "mitmproxy/mitmproxy-ca.pem")
 
 
-def build(source, binary, initializer, root, *, expected_binary_sha256):
+def build(source, binary, initializer, root, *, expected_binary_sha256,
+          hosted_profile=None, hosted_provision=None):
+    base.require((hosted_profile is None) == (hosted_provision is None),
+        "guided hosted profile and provision must be paired")
+    if hosted_profile is not None:
+        hosted_profile = hosted.validate(hosted_profile)
+        base.require(isinstance(hosted_provision, Path) and hosted_provision.is_absolute()
+            and ".." not in hosted_provision.parts, "exact hosted provision path required")
+    curl_sha256 = basic.CURL_SHA256 if hosted_profile is None else hosted_profile["curl"]["sha256"]
     base.require(root.parent == base.SCRATCH and re.fullmatch(r"serverware-guided-private\.[A-Za-z0-9]{6,32}", root.name),
         "fresh guided NVMe fixture root required")
     template = root.with_name("serverware-proxy-basic-private." + root.name.split(".", 1)[1])
@@ -88,7 +97,15 @@ def build(source, binary, initializer, root, *, expected_binary_sha256):
         "--ca-file", "/client-trust/inner-ca.pem", "--proxy-ca-file", "/client-trust/outer-ca.pem",
         "--upstream-ca-file", "/client-trust/upstream-ca.pem", "--admin-token-file", "/client-secrets/admin.token",
         "--fixture-marker-file", "/private-fixture.json", "--run-claim-file", "/client-work/.operator-catalog-acceptance.claim",
-        "--curl-binary", "/usr/bin/curl", "--expected-curl-sha256", basic.CURL_SHA256, "--timeout-seconds", "180"]
+        "--curl-binary", "/usr/bin/curl", "--expected-curl-sha256", curl_sha256, "--timeout-seconds", "180"]
+    if hosted_profile is not None:
+        for service in services.values():
+            if service["image"] in {base.APP_IMAGE, base.FIXTURE_IMAGE}:
+                service["image"] = hosted_profile["app"]["id"]
+        check["image"] = hosted.CLIENT_IMAGE
+        check["entrypoint"] = [hosted.PYTHON, "-B"]
+        check["command"] += ["--profile", hosted.PROFILE, "--hosted-provision", hosted.PROVISION_MOUNT]
+        check["volumes"].append(base.bind(hosted_provision, hosted.PROVISION_MOUNT))
     for name in RUNTIME_SERVICES - {"network"}:
         services[name]["network_mode"] = "service:network"
         services[name]["volumes"] += deepcopy(hosts)

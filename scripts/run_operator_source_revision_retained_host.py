@@ -4,7 +4,8 @@
 Run with python3 -I -B under an outer timeout. This owner never advances to the
 next role, retries a claim, pulls/builds images, mounts live state, promotes a
 database or rolls back. Failure keeps the copied files and private bounded logs.
-Only the returned, fully inspected container ID may be removed.
+Only the returned, fully inspected, stopped container ID may be removed.
+Running or uncertain containers are retained; cleanup never stops or forces them.
 """
 from __future__ import annotations
 
@@ -364,7 +365,7 @@ def run_role(commands, selected, expected_env, preservation, proof, context):
     save(RECEIPTS / ('host-' + role + '.claim.json'), claim)
     identifier = run = terminal = limits = restarts = None
     ok = removed = unchanged = False
-    error_type = cleanup_error = None
+    error_type = cleanup_error = cleanup_state = None
     try:
         created, raw = commands.run(selected['createArgv'], seconds=15)
         # A create timeout is ambiguous. Never recover ownership by name or
@@ -394,7 +395,14 @@ def run_role(commands, selected, expected_env, preservation, proof, context):
                 actual = commands.inspect(identifier)
                 identity(identifier, actual, selected)
                 isolation(actual, selected, expected_env)
-                commands.docker('rm', *([] if ok else ['-f']), identifier)
+                cleanup_state = {key: actual['State'].get(key) for key in (
+                    'Status', 'Pid', 'Running', 'Paused', 'Restarting', 'Dead')}
+                need(cleanup_state['Status'] in ('created', 'exited')
+                     and type(cleanup_state['Pid']) is int and cleanup_state['Pid'] == 0
+                     and all(cleanup_state[key] is False for key in ('Running', 'Paused', 'Restarting', 'Dead')))
+                # A race to running is still safe: non-forced rm refuses it.
+                # Never stop, kill, or force-remove an uncertain owned process.
+                commands.docker('rm', identifier)
             removed = not any(commands.matching(selected))
         except BaseException as error:
             cleanup_error = type(error).__name__
@@ -408,7 +416,7 @@ def run_role(commands, selected, expected_env, preservation, proof, context):
             'sourceAndCaptureUnchanged': unchanged, 'exitCode': run['exitCode'] if run else None,
             'oomKilled': terminal['OOMKilled'] if terminal else None, 'restartCount': restarts,
             'run': run, 'terminalState': terminal, 'activeLimits': limits,
-            'errorType': error_type, 'cleanupErrorType': cleanup_error,
+            'errorType': error_type, 'cleanupErrorType': cleanup_error, 'cleanupState': cleanup_state,
             'liveAccess': False, 'databasePromoted': False, 'automaticRetry': False,
             'automaticRollback': False, 'automaticContinuation': False}
         save(RECEIPTS / (role + '.json'), receipt)

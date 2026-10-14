@@ -25,7 +25,7 @@ def model(selected, *, state='created'):
     privileged = selected['role'] in ('prepare', 'result')
     return {'Id': CID, 'Name': '/' + selected['name'], 'Image': host.IMAGE, 'RestartCount': 0,
         'State': {'Status': state, 'Running': state == 'running', 'Paused': False, 'Restarting': False,
-            'Dead': False, 'ExitCode': 0, 'OOMKilled': False,
+            'Dead': False, 'ExitCode': 0, 'OOMKilled': False, 'Pid': 123 if state == 'running' else 0,
             'StartedAt': '2026-10-14T12:00:00Z', 'FinishedAt': '2026-10-14T12:00:01Z'},
         'Mounts': [{'Type': 'bind', 'Propagation': 'rprivate', 'Source': source,
             'Destination': target, 'RW': not readonly} for source, target, readonly in selected['mounts']],
@@ -330,16 +330,62 @@ class HostControls(unittest.TestCase):
         self.assertFalse(commands.removed)
         self.assertIsNone(saved[-1][1]['containerId'])
 
-    def test_timeout_removes_only_the_verified_owned_cid_without_retry(self):
+    def test_timeout_retains_running_owned_cid_without_stop_force_or_retry(self):
         commands = FakeCommands(run_status='timeout', terminal_change=lambda value: value['State'].update(
-            Status='running', Running=True))
+            Status='running', Running=True, Pid=123))
         _, saved, error = self.execute(commands)
         self.assertIsInstance(error, ValueError)
-        self.assertIn(('rm', '-f', CID), commands.events)
+        self.assertFalse(any(event[0] in ('rm', 'stop', 'kill') for event in commands.events))
         self.assertEqual(sum(event[0] == 'start' for event in commands.events), 1)
         self.assertEqual(sum(event[0] == 'create' for event in commands.events), 1)
         self.assertFalse(saved[-1][1]['ok'])
-        self.assertTrue(saved[-1][1]['containerRemoved'])
+        self.assertFalse(saved[-1][1]['containerRemoved'])
+        self.assertEqual(saved[-1][1]['containerId'], CID)
+        self.assertEqual(saved[-1][1]['cleanupState']['Pid'], 123)
+        self.assertEqual(saved[-1][1]['cleanupErrorType'], 'ValueError')
+
+    def test_timeout_removes_only_confirmed_stopped_owned_cid_non_forcibly(self):
+        for status in ('created', 'exited'):
+            commands = FakeCommands(run_status='timeout', terminal_change=lambda value: value['State'].update(
+                Status=status, Running=False, Pid=0))
+            _, saved, error = self.execute(commands)
+            self.assertIsInstance(error, ValueError)
+            self.assertIn(('rm', CID), commands.events)
+            self.assertFalse(any(event[0] in ('stop', 'kill') or '-f' in event for event in commands.events))
+            self.assertFalse(saved[-1][1]['ok'])
+            self.assertTrue(saved[-1][1]['containerRemoved'])
+
+    def test_cleanup_retains_uncertain_state_or_pid(self):
+        for changes in ({'Status': 'removing'}, {'Status': 'unknown'}, {'Pid': 1}, {'Pid': None},
+                {'Pid': False}, {'Paused': True}, {'Restarting': True}, {'Dead': True}, {'Running': None}):
+            commands = FakeCommands(run_status='timeout', terminal_change=lambda value: value['State'].update(changes))
+            _, saved, error = self.execute(commands)
+            with self.subTest(changes=changes):
+                self.assertIsInstance(error, ValueError)
+                self.assertFalse(any(event[0] in ('rm', 'stop', 'kill') for event in commands.events))
+                self.assertFalse(commands.removed)
+                self.assertEqual(saved[-1][1]['containerId'], CID)
+                self.assertFalse(saved[-1][1]['containerRemoved'])
+                self.assertIsNotNone(saved[-1][1]['cleanupState'])
+
+    def test_cleanup_inspection_failure_retains_cid_and_prior_terminal_evidence(self):
+        commands = FakeCommands()
+        original = commands.inspect
+        calls = 0
+        def inspect(identifier):
+            nonlocal calls
+            calls += 1
+            if calls == 3:
+                raise ValueError('synthetic unavailable inspection')
+            return original(identifier)
+        commands.inspect = inspect
+        _, saved, error = self.execute(commands)
+        self.assertIsInstance(error, ValueError)
+        self.assertFalse(any(event[0] in ('rm', 'stop', 'kill') for event in commands.events))
+        self.assertEqual(saved[-1][1]['containerId'], CID)
+        self.assertEqual(saved[-1][1]['terminalState']['Status'], 'exited')
+        self.assertIsNone(saved[-1][1]['cleanupState'])
+        self.assertFalse(saved[-1][1]['containerRemoved'])
 
     def test_oom_is_recorded_and_never_admitted(self):
         commands = FakeCommands(terminal_change=lambda value: value['State'].update(OOMKilled=True, ExitCode=137))

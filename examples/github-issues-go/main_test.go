@@ -9,12 +9,15 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"io"
 	"math/big"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -75,6 +78,151 @@ func TestConfigRequiresExplicitBoundedInputs(t *testing.T) {
 				t.Fatal("invalid configuration accepted")
 			}
 		})
+	}
+}
+
+func privateConfigFixture() map[string]any {
+	env := environment()
+	return map[string]any{
+		"application_id": env["SERVERWARE_APP_ID"], "access_rule_id": "22222222-2222-4222-8222-222222222222",
+		"proxy_url": env["SERVERWARE_PROXY_URL"], "proxy_authentication": "basic_and_bearer_v1",
+		"proxy_username": env["SERVERWARE_APP_ID"], "proxy_password": env["SERVERWARE_PROXY_TOKEN"],
+		"token_expires_at_epoch_ms": int64(1800000060000), "ca_file": "./serverware-ca.pem",
+		"repository":       map[string]any{"owner": "example-owner", "name": "example-repo"},
+		"upstream_url":     "https://api.github.com/repos/example-owner/example-repo/issues",
+		"operation_bundle": "github_issues_read_v1", "methods": []string{"GET"},
+		"response_mode": "unfiltered_json_or_empty_v2", "credential_input": "replace_exact",
+		"request_headers": map[string]string{"Authorization": "token " + dummyToken},
+		"query_mode":      "githubRestV1", "request_body_mode": "preserve_json_v1",
+		"client_recipe": map[string]any{"proxy_ca_file": nil, "destination_ca_file": "./serverware-ca.pem",
+			"packages":       map[string]string{"@octokit/rest": "22.0.1", "undici": "8.11.2"},
+			"sdk_auth_token": dummyToken, "minimum_node": "22.19"},
+		"note": "Synthetic unversioned console export; no provider secret.",
+	}
+}
+
+func writePrivateConfig(t *testing.T, path string, value map[string]any) {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal("could not encode synthetic config")
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal("could not write synthetic config")
+	}
+}
+
+func TestDownloadedConfigUsesOnlyExportedConnectionAndScope(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "serverware-client.private.json")
+	now := time.UnixMilli(1800000000000)
+	for _, methods := range [][]string{{"GET"}, {"GET", "POST"}, {"POST", "GET"}} {
+		saved := privateConfigFixture()
+		if len(methods) == 2 {
+			saved["operation_bundle"] = "github_issues_write_v1"
+		}
+		saved["methods"] = methods
+		// Extra recipe fields are data, never a source of execution or environment.
+		saved["commands"] = []string{"must-not-run"}
+		saved["environment"] = map[string]string{"SERVERWARE_GITHUB_OWNER": "must-not-use"}
+		saved["client_recipe"].(map[string]any)["entrypoint"] = "must-not-run"
+		writePrivateConfig(t, path, saved)
+		getenv, err := configurationEnvironment([]string{"--config", path}, func(string) string {
+			t.Fatal("file configuration consulted ambient environment")
+			return ""
+		}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := readConfig(getenv)
+		if err != nil || c.appID != environment()["SERVERWARE_APP_ID"] || c.proxyToken != environment()["SERVERWARE_PROXY_TOKEN"] ||
+			c.proxy.String() != "https://proxy.example.test:8443" || c.owner != "example-owner" || c.repo != "example-repo" ||
+			c.caFile != filepath.Join(filepath.Dir(path), "serverware-ca.pem") || c.proxyCAFile != "" || getenv("GITHUB_TOKEN") != "" {
+			t.Fatal("exported connection, relative CA, scope or environment isolation changed")
+		}
+	}
+	for _, proxyCA := range []string{"certs/outer.pem", filepath.Join(filepath.Dir(path), "absolute-outer.pem")} {
+		saved := privateConfigFixture()
+		saved["ca_file"] = filepath.Join(filepath.Dir(path), "absolute-inner.pem")
+		saved["client_recipe"].(map[string]any)["proxy_ca_file"] = proxyCA
+		writePrivateConfig(t, path, saved)
+		getenv, err := downloadedEnvironment(path, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := proxyCA
+		if !filepath.IsAbs(want) {
+			want = filepath.Join(filepath.Dir(path), want)
+		}
+		if getenv("SERVERWARE_PROXY_CA_FILE") != want || getenv("SERVERWARE_CA_FILE") != saved["ca_file"] {
+			t.Fatal("CA paths not resolved against the JSON directory")
+		}
+	}
+	// No flag preserves the original environment-only entrypoint.
+	env := environment()
+	getenv, err := configurationEnvironment(nil, func(key string) string { return env[key] }, now)
+	if err != nil || getenv("SERVERWARE_PROXY_TOKEN") != env["SERVERWARE_PROXY_TOKEN"] {
+		t.Fatal("environment-only mode changed")
+	}
+	for _, args := range [][]string{{"--config"}, {"--config", ""}, {"--unknown", path}, {"--config", path, "extra"}} {
+		if _, err := configurationEnvironment(args, os.Getenv, now); err == nil || strings.Contains(err.Error(), path) {
+			t.Fatal("invalid CLI arguments accepted or printed")
+		}
+	}
+}
+
+func TestDownloadedConfigRejectsInvalidBindingsAndFilesWithoutLeaks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "private-path-canary.json")
+	now := time.UnixMilli(1800000000000)
+	for _, change := range []map[string]any{
+		{"application_id": "private-id-canary"}, {"access_rule_id": "not-a-rule"},
+		{"proxy_authentication": "bearer"}, {"proxy_username": "33333333-3333-4333-8333-333333333333"},
+		{"proxy_password": "private-token-canary"}, {"proxy_url": "http://proxy.example.test"},
+		{"ca_file": ""}, {"token_expires_at_epoch_ms": nil}, {"token_expires_at_epoch_ms": now.UnixMilli()},
+		{"token_expires_at_epoch_ms": now.UnixMilli() - 1}, {"token_expires_at_epoch_ms": int64(9007199254740992)},
+		{"token_expires_at_epoch_ms": 1800000060000.5}, {"token_expires_at_epoch_ms": "1800000060000"},
+		{"token_expires_at_epoch_ms": json.RawMessage("1e309")}, {"operation_bundle": "npm_metadata_read_v1"},
+		{"upstream_url": "https://api.github.com/repos/other-owner/example-repo/issues"},
+		{"upstream_url": "https://api.github.com/repos/example-owner/example-repo/issues?state=all"},
+		{"upstream_url": "https://other.example.test/repos/example-owner/example-repo/issues"},
+		{"repository": map[string]string{"owner": "example-owner", "name": "../other"}},
+		{"methods": []string{}}, {"methods": []string{"POST"}}, {"methods": []string{"GET", "GET"}},
+		{"methods": []string{"GET", "POST"}}, {"methods": []string{"DELETE"}}, {"operation_bundle": "github_issues_write_v1"},
+	} {
+		saved := privateConfigFixture()
+		for key, value := range change {
+			saved[key] = value
+		}
+		writePrivateConfig(t, path, saved)
+		_, err := downloadedEnvironment(path, now)
+		if err == nil || strings.Contains(err.Error(), "canary") || strings.Contains(err.Error(), path) {
+			t.Fatal("invalid private config accepted or its values exposed")
+		}
+	}
+	for _, raw := range []string{"", "null", "{}", "[]", "{private-json-canary", "{} {}", strings.Repeat(" ", maxPrivateConfigBytes+1)} {
+		if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+			t.Fatal("could not write synthetic invalid JSON")
+		}
+		if _, err := downloadedEnvironment(path, now); err == nil || strings.Contains(err.Error(), "canary") {
+			t.Fatal("invalid file accepted or echoed")
+		}
+	}
+	writePrivateConfig(t, path, privateConfigFixture())
+	raw, _ := os.ReadFile(path)
+	raw = append(raw, bytes.Repeat([]byte(" "), maxPrivateConfigBytes-len(raw))...)
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal("could not pad bounded synthetic JSON")
+	}
+	if _, err := downloadedEnvironment(path, now); err != nil {
+		t.Fatal("64 KiB regular JSON unexpectedly refused")
+	}
+	link := filepath.Join(filepath.Dir(path), "private-link-canary.json")
+	if err := os.Symlink(path, link); err != nil {
+		t.Fatal("could not create synthetic symlink")
+	}
+	for _, refused := range []string{link, filepath.Dir(path), path + ".missing"} {
+		if _, err := downloadedEnvironment(refused, now); err == nil || strings.Contains(err.Error(), "canary") {
+			t.Fatal("non-regular or missing file accepted or echoed")
+		}
 	}
 }
 

@@ -41,7 +41,7 @@ COMMANDS = {
 }
 SOURCE_FILES = ("examples/github-issues-node/client.mjs", "examples/github-issues-node/package.json",
     "examples/github-issues-python/issues.py", "examples/github-issues-python/requirements.txt",
-    "examples/github-issues-go/main.go", "examples/github-issues-go/go.mod")
+    "examples/github-issues-go/main.go", "examples/github-issues-go/config_file.go", "examples/github-issues-go/go.mod")
 ROW_KEYS = {"ordinal", "accepted", "client", "page", "method", "target", "semanticHeaders",
     "requestBodySha256", "responseBodySha256", "responseBodyBytes", "status",
     "providerCredentialMatched", "proxyAuthorizationPresent", "allParsedHeadersValidated"}

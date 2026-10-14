@@ -20,9 +20,11 @@ neither connection can be granted or used until the upstream is enabled.
 
 1. Choose **GitHub**, then a **personal access token (PAT)** or **GitHub App**
    connection. A PAT needs a name and token. An App needs a name, App ID,
-   installation ID, private-key PEM, exact repository owner/name and Issues
+   private-key PEM, exact repository owner/name and Issues
    access; choose `read` for this read-only client. Install the App for that
-   repository with the required permission in GitHub first.
+   repository with the required permission in GitHub first. Installation ID is
+   optional when first saving: Serverware can discover it for that exact
+   repository and retains the verified ID.
 2. Create an application with **Basic proxy authentication** enabled; retain its
    application ID and one-time application token.
 3. Give that application the **GitHub issues: read** permission for exactly the
@@ -53,11 +55,39 @@ The new App flow is **not yet verified against real GitHub**;
 
 ## Run
 
-Python 3.10+ on Linux/macOS, using a dedicated virtual environment:
+Python 3.10+ on Linux/macOS. Prepare the dependencies in this example directory
+before using the downloaded configuration:
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
+```
+
+In **Proxy**, select the application and its GitHub issues permission, then
+download the private client JSON and the Serverware interception CA. Keep both
+in a private directory, outside source control. The JSON's `ca_file` must point
+to that CA; relative paths are resolved from the JSON file's directory.
+
+```bash
+chmod 600 /path/serverware-client.private.json /path/serverware-ca.pem
+.venv/bin/python -B issues.py --config /path/serverware-client.private.json --limit 100
+```
+
+The download contains the Serverware application token, not a GitHub credential.
+Use the Basic-authentication export for a `github_issues_read_v1` or
+`github_issues_write_v1` permission; this program only reads in either case.
+The application/Basic username, repository/upstream and unexpired token metadata
+must agree. The JSON is limited to 64 KiB and must be a regular file, not a
+symlink. Its connection/scope values override conflicting environment settings;
+an absent or null `client_recipe.proxy_ca_file` clears any ambient
+`SERVERWARE_PROXY_CA_FILE`. A supplied separate proxy CA is explicitly refused:
+use a publicly trusted proxy endpoint or the Node/Go example instead. Recipe
+commands, entrypoints, environment and SDK credentials are never executed or
+adopted. `--config` cannot be combined with the internal `--child` option.
+
+Environment-only setup remains supported:
+
+```bash
 
 export SERVERWARE_PROXY_URL='https://your-proxy-host:443'
 export SERVERWARE_APP_ID='your-application-uuid'
@@ -117,6 +147,16 @@ retries are disabled with the SDK's documented `retry=None`; each HTTP timeout i
 ```bash
 .venv/bin/python -B test_issues.py
 ```
+
+To check only the JSON loader and CLI without installing SDK dependencies:
+
+```bash
+python3 -B test_issues.py --config-only
+```
+
+This explicitly skips the SDK checks; it is not stock-library compatibility
+evidence. The configuration checks cover console-shaped downloads, scoped
+overrides, relative CA paths, invalid/expired files and fixed secret-free errors.
 
 The tests exercise real PyGithub pagination and final Requests serialization with
 synthetic responses at the send boundary. They check placeholder authorization,

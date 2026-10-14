@@ -1,4 +1,5 @@
 /github-issues-go
+/github-issues
 *.pem
 .env
 .env.*

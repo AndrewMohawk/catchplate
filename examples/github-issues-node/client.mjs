@@ -1,12 +1,14 @@
 // Stock Octokit + documented Undici proxy configuration; no provider token here.
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { closeSync, constants, fstatSync, openSync, readFileSync, readSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const PUBLIC_GITHUB_DUMMY = 'serverware-github-placeholder-v1';
 const OPERATIONS = new Set(['list', 'create-issue', 'create-comment']);
 const MAX_REQUESTS = 20;
 const DEADLINE_MS = 90_000;
+const MAX_CONFIG_BYTES = 64 * 1024;
+const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 
 function requireValue(condition) {
   if (!condition) throw new Error('Example configuration or operation refused');
@@ -34,7 +36,7 @@ export function configuration(env, operation = 'list') {
   requireValue(proxy.protocol === 'https:' && proxy.hostname && !proxy.username && !proxy.password
     && proxy.pathname === '/' && !proxy.search && !proxy.hash);
   const applicationId = required(env, 'SERVERWARE_APP_ID', 36);
-  requireValue(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(applicationId));
+  requireValue(UUID.test(applicationId));
   const token = required(env, 'SERVERWARE_PROXY_TOKEN', 4096);
   requireValue(/^[A-Za-z0-9_-]+$/.test(token));
   const owner = required(env, 'SERVERWARE_GITHUB_OWNER', 39);
@@ -58,6 +60,83 @@ export function configuration(env, operation = 'list') {
     ...(config.title ? { title: config.title } : {}), body: config.body,
   })) <= 65536);
   return config;
+}
+
+function readConfigurationFile(path) {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const before = fstatSync(fd);
+    requireValue(before.isFile() && before.size > 0 && before.size <= MAX_CONFIG_BYTES);
+    const bytes = Buffer.alloc(MAX_CONFIG_BYTES + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const count = readSync(fd, bytes, length, bytes.length - length, null);
+      if (count === 0) break;
+      length += count;
+    }
+    const after = fstatSync(fd);
+    requireValue(length === before.size && length <= MAX_CONFIG_BYTES
+      && ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].every((key) => before[key] === after[key]));
+    return JSON.parse(bytes.subarray(0, length).toString('utf8'));
+  } finally { closeSync(fd); }
+}
+
+export function loadClientConfig(path, env, operation = 'list', now = Date.now()) {
+  try {
+    const filename = resolve(required({ path }, 'path'));
+    const value = readConfigurationFile(filename);
+    requireValue(value !== null && typeof value === 'object' && !Array.isArray(value));
+    requireValue(typeof value.access_rule_id === 'string' && UUID.test(value.access_rule_id)
+      && value.proxy_authentication === 'basic_and_bearer_v1'
+      && value.proxy_username === value.application_id
+      && Number.isSafeInteger(now) && now >= 0
+      && Number.isSafeInteger(value.token_expires_at_epoch_ms) && value.token_expires_at_epoch_ms > now);
+    const write = value.operation_bundle === 'github_issues_write_v1';
+    requireValue(write || value.operation_bundle === 'github_issues_read_v1');
+    requireValue(operation === 'list' || write);
+    requireValue(Array.isArray(value.methods) && value.methods.length === (write ? 2 : 1)
+      && new Set(value.methods).size === value.methods.length
+      && value.methods.includes('GET') && value.methods.every((method) => method === 'GET' || (write && method === 'POST')));
+    requireValue(value.repository !== null && typeof value.repository === 'object'
+      && !Array.isArray(value.repository));
+    requireValue(value.upstream_url === 'https://api.github.com/repos/'
+      + value.repository.owner + '/' + value.repository.name + '/issues');
+    requireValue(value.client_recipe === undefined || (value.client_recipe !== null
+      && typeof value.client_recipe === 'object' && !Array.isArray(value.client_recipe)));
+    const directory = dirname(filename);
+    const caPath = (value) => resolve(directory, required({ path: value }, 'path'));
+    const proxyCa = value.client_recipe?.proxy_ca_file;
+    // Only these connection/scope fields are imported. Commands, environment,
+    // headers, provider credentials and write bodies in the JSON are inert.
+    return configuration({ ...env,
+      SERVERWARE_PROXY_URL: value.proxy_url,
+      SERVERWARE_APP_ID: value.application_id,
+      SERVERWARE_PROXY_TOKEN: value.proxy_password,
+      SERVERWARE_CA_FILE: caPath(value.ca_file),
+      SERVERWARE_PROXY_CA_FILE: proxyCa === undefined || proxyCa === null ? undefined : caPath(proxyCa),
+      SERVERWARE_GITHUB_OWNER: value.repository.owner,
+      SERVERWARE_GITHUB_REPO: value.repository.name,
+    }, operation);
+  } catch {
+    throw new Error('Example configuration or operation refused');
+  }
+}
+
+export function parseArguments(args) {
+  requireValue(Array.isArray(args) && args.every((value) => typeof value === 'string'));
+  if (args.length === 1 && args[0] === '--help') return { help: true, operation: 'list', configPath: null };
+  let operation = 'list', configPath = null, selected = false;
+  for (let index = 0; index < args.length; index++) {
+    if (args[index] === '--config') {
+      requireValue(configPath === null && index + 1 < args.length
+        && args[index + 1].length > 0 && !args[index + 1].startsWith('--'));
+      configPath = args[++index];
+    } else {
+      requireValue(!selected && OPERATIONS.has(args[index]));
+      operation = args[index]; selected = true;
+    }
+  }
+  return { help: false, operation, configPath };
 }
 
 function certificate(path, readFile) {
@@ -135,16 +214,16 @@ export function failure(error, operation) {
 }
 
 async function main() {
-  const args = process.argv.slice(2);
-  if (args.length === 1 && args[0] === '--help') {
-    console.log('node client.mjs [list|create-issue|create-comment]\nDefault: list. Configuration and write content come from environment variables; see README.md.');
-    return;
-  }
-  const operation = args[0] ?? 'list';
-  let proxy;
+  let proxy, operation = 'list';
   try {
-    requireValue(args.length <= 1);
-    const config = configuration(process.env, operation);
+    const args = parseArguments(process.argv.slice(2));
+    operation = args.operation;
+    if (args.help) {
+      console.log('node client.mjs [--config PATH] [list|create-issue|create-comment]\nDefault: list. Use a downloaded client JSON or environment configuration. Write content stays in local environment variables; see README.md.');
+      return;
+    }
+    const config = args.configPath === null ? configuration(process.env, operation)
+      : loadClientConfig(args.configPath, process.env, operation);
     const [{ Octokit }, { ProxyAgent, fetch }] = await Promise.all([import('@octokit/rest'), import('undici')]);
     const client = createClient(config, { Octokit, ProxyAgent, fetch });
     proxy = client.proxy;

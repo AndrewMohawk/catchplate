@@ -18,9 +18,13 @@ def no_network(event, args):
         raise AssertionError("Offline test attempted socket access")
 
 
-import certifi
-import requests
-from requests.adapters import HTTPAdapter
+CONFIG_ONLY = "--config-only" in sys.argv
+if CONFIG_ONLY:
+    sys.argv.remove("--config-only")
+else:
+    import certifi
+    import requests
+    from requests.adapters import HTTPAdapter
 
 import issues
 
@@ -36,6 +40,124 @@ ENV = {"SERVERWARE_PROXY_URL": "https://proxy.example.test:8443",
     "SERVERWARE_CA_FILE": "/fixture/ca.pem"}
 
 
+class ConfigurationTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name) / "serverware-client.private.json"
+        self.value = {"application_id": APP_ID, "access_rule_id": "00000000-0000-4000-8000-000000000002",
+            "proxy_url": ENV["SERVERWARE_PROXY_URL"], "proxy_authentication": "basic_and_bearer_v1",
+            "proxy_username": APP_ID, "proxy_password": TOKEN, "token_expires_at_epoch_ms": 2**53 - 1,
+            "ca_file": "./serverware-ca.pem", "repository": {"owner": "example", "name": "demo"},
+            "upstream_url": "https://api.github.com/repos/example/demo/issues",
+            "operation_bundle": "github_issues_read_v1", "methods": ["GET"],
+            "request_headers": {"Authorization": "token " + issues.PLACEHOLDER},
+            "client_recipe": {"packages": {"@octokit/rest": "22.0.1", "undici": "8.11.2"},
+                "minimum_node": "22.19", "sdk_auth_token": issues.PLACEHOLDER,
+                "proxy_ca_file": None, "destination_ca_file": "./serverware-ca.pem"}}
+
+    def write(self, value=None):
+        self.path.write_text(json.dumps(self.value if value is None else value), encoding="utf-8")
+        return self.path
+
+    def test_console_export_maps_scope_and_relative_ca_over_ambient_without_recipe_execution(self):
+        ambient = {name: "ambient-conflict" for name in ENV}
+        ambient.update(SERVERWARE_PROXY_CA_FILE="/ambient/proxy-ca.pem", GITHUB_TOKEN="do-not-use")
+        original = dict(ambient)
+        self.value["client_recipe"].update(entrypoint="do-not-execute", commands=["do-not-execute"],
+            environment={"SERVERWARE_GITHUB_OWNER": "untrusted-recipe", "HTTPS_PROXY": "wrong"})
+        for bundle in ("github_issues_read_v1", "github_issues_write_v1"):
+            self.value["operation_bundle"] = bundle
+            self.value["methods"] = ["GET"] if bundle == "github_issues_read_v1" else ["POST", "GET"]
+            with self.subTest(bundle=bundle), patch.object(issues.subprocess, "run") as run:
+                selected = issues.configuration_environment(self.write(), ambient)
+            run.assert_not_called()
+            self.assertEqual(ambient, original)
+            self.assertEqual({key: selected[key] for key in ENV if key != "SERVERWARE_CA_FILE"},
+                {key: value for key, value in ENV.items() if key != "SERVERWARE_CA_FILE"})
+            self.assertEqual(selected["SERVERWARE_CA_FILE"], str(self.path.parent / "serverware-ca.pem"))
+            self.assertNotIn("SERVERWARE_PROXY_CA_FILE", selected)
+            self.assertNotIn("GITHUB_TOKEN", issues.child_environment(selected, selected["SERVERWARE_CA_FILE"]))
+        del self.value["client_recipe"]
+        self.assertNotIn("SERVERWARE_PROXY_CA_FILE", issues.configuration_environment(self.write(), ambient))
+
+    def test_bundle_repository_upstream_identity_and_expiry_mismatches_refuse(self):
+        for key, invalid in (("operation_bundle", "alchemy_chain_status_v1"),
+                ("repository", {"owner": "example", "name": "other"}),
+                ("repository", {"owner": "example", "name": ".."}),
+                ("upstream_url", "https://api.github.com/repos/example/demo/issues?state=open"),
+                ("upstream_url", "https://other.example/repos/example/demo/issues"),
+                ("proxy_authentication", "bearer"), ("proxy_username", "different"),
+                ("application_id", "not-a-uuid"), ("access_rule_id", "not-a-uuid"),
+                ("proxy_password", "bad\npassword"), ("proxy_url", "https://user:pass@proxy.test"),
+                ("methods", ["GET", "POST"]), ("methods", ["GET", "GET"]),
+                ("methods", ["POST"]), ("methods", "GET"),
+                ("token_expires_at_epoch_ms", 1), ("token_expires_at_epoch_ms", True),
+                ("token_expires_at_epoch_ms", 2**53), ("token_expires_at_epoch_ms", 1.25),
+                ("token_expires_at_epoch_ms", float("nan")), ("token_expires_at_epoch_ms", float("inf")),
+                ("ca_file", "")):
+            with self.subTest(field=key, kind=type(invalid).__name__), self.assertRaises(ValueError):
+                issues.configuration_environment(self.write({**self.value, key: invalid}), ENV)
+
+    def test_config_is_bounded_regular_duplicate_free_json(self):
+        self.path.write_bytes(b" " * (issues.MAX_CONFIG_BYTES + 1))
+        with self.assertRaises(ValueError):
+            issues.configuration_environment(self.path, ENV)
+        with self.assertRaises((ValueError, OSError)):
+            issues.configuration_environment(self.path.parent, ENV)
+        fifo = self.path.parent / "fifo"
+        os.mkfifo(fifo)
+        with self.assertRaises(ValueError):
+            issues.configuration_environment(fifo, ENV)
+        for raw in (b"[]", b"{", b'{"application_id":"one","application_id":"two"}',
+                b'{"ignored":NaN}', b'{"ignored":1e309}', b"\xff"):
+            self.path.write_bytes(raw)
+            with self.subTest(original=raw), self.assertRaises(ValueError):
+                issues.configuration_environment(self.path, ENV)
+        encoded = json.dumps(self.value).encode("utf-8")
+        self.path.write_bytes(encoded + b" " * (issues.MAX_CONFIG_BYTES - len(encoded)))
+        self.assertEqual(issues.configuration_environment(self.path, ENV)["SERVERWARE_APP_ID"], APP_ID)
+
+    def test_config_cli_uses_parent_launcher_and_environment_only_mode_stays_available(self):
+        path = self.write()
+        with patch.dict(os.environ, {"SERVERWARE_GITHUB_OWNER": "wrong"}, clear=True), \
+                patch.object(issues, "launch", return_value=[]) as launch, \
+                patch("sys.stdout", io.StringIO()) as output:
+            self.assertEqual(issues.main(["--config", str(path), "--limit", "7"]), 0)
+        launch.assert_called_once()
+        self.assertEqual(launch.call_args.args[0]["SERVERWARE_GITHUB_OWNER"], "example")
+        self.assertEqual(launch.call_args.args[1], 7)
+        self.assertEqual(output.getvalue(), "[]\n")
+        with patch.object(issues, "launch", return_value=[]) as launch, patch("sys.stdout", io.StringIO()):
+            self.assertEqual(issues.main([]), 0)
+            self.assertIs(launch.call_args.args[0], os.environ)
+
+    def test_child_config_combination_and_malformed_json_fail_before_launch_without_secret_output(self):
+        for args in (["--child", "--config", str(self.path)], ["--config", str(self.path)]):
+            self.path.write_text('{"secret":"' + TOKEN + '",', encoding="utf-8")
+            with patch.object(issues, "launch") as launch, patch.object(issues, "read_issues") as read, \
+                    patch.object(issues, "check_versions") as versions, \
+                    patch("sys.stdout", io.StringIO()) as output, patch("sys.stderr", io.StringIO()) as errors:
+                self.assertEqual(issues.main(args), 1)
+            launch.assert_not_called(); read.assert_not_called(); versions.assert_not_called()
+            self.assertEqual(output.getvalue(), "")
+            self.assertEqual(errors.getvalue(), issues.FAILURE + "\n")
+            self.assertNotIn(TOKEN, errors.getvalue())
+
+    def test_supplied_separate_proxy_ca_has_fixed_diagnostic_before_sdk_or_launch(self):
+        self.value["client_recipe"]["proxy_ca_file"] = "./private-proxy-ca.pem"
+        path = self.write()
+        with patch.object(issues, "launch") as launch, patch.object(issues, "check_versions") as versions, \
+                patch("sys.stdout", io.StringIO()) as output, patch("sys.stderr", io.StringIO()) as errors:
+            self.assertEqual(issues.main(["--config", str(path)]), 1)
+        launch.assert_not_called(); versions.assert_not_called()
+        self.assertEqual(output.getvalue(), "")
+        self.assertEqual(errors.getvalue(), issues.PROXY_CA_FAILURE + "\n")
+        self.assertNotIn(TOKEN, errors.getvalue())
+        self.assertNotIn("private-proxy-ca.pem", errors.getvalue())
+
+
+@unittest.skipIf(CONFIG_ONLY, "SDK checks require the prepared pinned dependencies")
 class ExampleTests(unittest.TestCase):
     def test_pins(self):
         issues.check_versions()

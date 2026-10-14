@@ -2,6 +2,7 @@
 
 # Generated verification artifacts and local secret material.
 .tmp/
+serverware-client.private*.json
 
 # Python/runtime caches.
 __pycache__/

@@ -15,9 +15,11 @@ granting or using either connection still requires it to be enabled.
 
 In Serverware, choose **GitHub**, then either a personal access token (PAT,
 `github_token_v1`) or a GitHub App (`github_app_v1`) connection. A PAT needs a
-connection name and token. An App needs a name, App ID, installation ID,
+connection name and token. An App needs a name, App ID,
 private-key PEM, exact repository owner/name and Issues access; choose `read`
-for this read-only example. The App must already be installed in GitHub for that
+for this read-only example. The installation ID is optional under Advanced;
+Serverware finds and verifies it for the selected repository when omitted.
+The App must already be installed in GitHub for that
 repository with the required permission. Create a Serverware application and
 grant **GitHub issues: read** for the same exact owner/repo.
 Select the application's **Basic and Bearer** proxy authentication mode
@@ -42,7 +44,40 @@ Do not pass an App private key, JWT or installation token to this program. The
 new App flow is **not yet verified against real GitHub**;
 [its synthetic verification is recorded separately](../../docs/operator-github-client-compatibility.md#github-app-feature-verification-checkpoint).
 
-Supply these values using your environment or CI secret store:
+### Use the downloaded private configuration
+
+With Go 1.23 or later, build from this directory **before supplying any token**:
+
+```sh
+GOTOOLCHAIN=local go mod download
+GOTOOLCHAIN=local go build -o github-issues .
+```
+
+In the console's Proxy setup, select the GitHub permission and download the
+private client JSON while the page still holds your application's one-time
+token. Download and verify the public Serverware CA as well. Keep both files
+outside the repository. The default `ca_file` is `./serverware-ca.pem`; relative
+CA paths, including optional `client_recipe.proxy_ca_file`, resolve beside the
+JSON file, not from the executable's working directory.
+
+```sh
+chmod 600 /path/serverware-client.private.json
+./github-issues --config /path/serverware-client.private.json
+```
+
+The JSON contains your application's private proxy token: never commit, share,
+or print it. It must select Basic and Bearer authentication and a matching
+GitHub issues read/write permission, repository, and unexpired application
+token. This example remains read-only even with a write permission. Files must
+be regular, non-symlink JSON files no larger than 64 KiB. The existing unversioned
+console export is supported. Only connection and repository fields are read;
+embedded recipes, commands, environment blocks and entrypoints are not run.
+File values replace all connection/scope environment values; an absent optional
+proxy CA uses system trust, not an ambient `SERVERWARE_PROXY_CA_FILE`.
+
+### Use environment variables instead
+
+Without `--config`, supply these values using your environment or CI secret store:
 
 | Variable | Value |
 | --- | --- |
@@ -54,16 +89,15 @@ Supply these values using your environment or CI secret store:
 | `SERVERWARE_GITHUB_OWNER` | Exact owner selected in the permission |
 | `SERVERWARE_GITHUB_REPO` | Exact repository selected in the permission |
 
-With Go 1.23 or later, from this directory:
+Build first as above, then supply the variables and run:
 
 ```sh
-GOTOOLCHAIN=local go mod download
-GOTOOLCHAIN=local go test ./...
-GOTOOLCHAIN=local go run .
+./github-issues
 ```
 
 The test suite uses generated synthetic certificates and in-memory SDK
-responses, not GitHub or a real proxy. **`go run .` makes real read requests**
+responses, not GitHub or a real proxy; run them with `GOTOOLCHAIN=local go test ./...`.
+**Running the built executable makes real read requests**
 through the configured proxy. It prints only counts, for example
 `{"pages":2,"issues":102,"pull_requests":7}`. A request failure, two-minute total
 deadline, invalid pagination, or 100-page limit exits without reporting partial

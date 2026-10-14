@@ -9,7 +9,22 @@ client recipe. This example's mocked and real-SDK offline tests are **not eviden
 of a successful request to public GitHub**. There are no provider requests in the
 tests, and no active workflow is installed by this directory.
 
-## 1. Configure Serverware
+## 1. Install the client dependencies
+
+Use Node.js 22.19 or newer; the underlying pinned fixture used Node.js 25.5.0.
+From this directory, install dependencies **before creating an application token
+or downloading its private configuration**, so installation does not consume the
+token's lifetime:
+
+```sh
+npm ci --ignore-scripts --no-audit --no-fund
+```
+
+This explicit installation downloads the versions in the checked-in
+`package-lock.json`, without dependency lifecycle scripts. Review the lock before
+use and deliberately review updates. The client itself does not install anything.
+
+## 2. Configure Serverware
 
 In the operator UI:
 
@@ -21,9 +36,12 @@ granting or using either connection still requires the enabled upstream.
 
 1. Choose **GitHub**, then **personal access token (PAT)** or **GitHub App**.
    For a PAT, save a connection name and token. For an App, save its App ID,
-   installation ID, private-key PEM, exact repository owner/name and Issues
+   private-key PEM, exact repository owner/name and Issues
    access (`read`, or `write` for the creation commands). The App must already
-   be installed for that repository with the required permission. Provider
+   be installed for that repository with the required permission. Serverware
+   discovers and verifies its installation ID during the existing repository
+   lookup; the optional advanced installation-ID override must match exactly.
+   Saved connections and renewals keep that verified ID pinned. Provider
    credentials stay in Serverware, never in this project or the workflow.
 2. Create an application with **Basic and Bearer** proxy authentication and keep
    its application ID and token. This example uses Basic CONNECT authentication.
@@ -52,19 +70,34 @@ Do not give Octokit the App private key, a JWT or an installation token. The cli
 does not configure the proxy, save credentials, renew tokens, change policy or
 perform hardware approval. The new App flow is **not yet verified against real GitHub**; its [synthetic verification is recorded separately](../../docs/operator-github-client-compatibility.md#github-app-feature-verification-checkpoint).
 
-## 2. Install and configure the client
+## 3. Download and use the client configuration
 
-Use Node.js 22.19 or newer; the underlying pinned fixture used Node.js 25.5.0.
-From this directory:
+Select the application's GitHub permission in **Client setup**, then download
+the private client JSON and the proxy CA. Keep them outside your checkout, for
+example together in a private directory. The JSON contains the **Serverware
+application token**, not the GitHub provider credential. Do not commit or share it.
 
 ```sh
-npm ci --ignore-scripts --no-audit --no-fund
+chmod 600 /path/serverware-client.private.json
+node client.mjs --config /path/serverware-client.private.json
+# Equivalent explicit read:
+node client.mjs --config /path/serverware-client.private.json list
 ```
 
-This explicit installation downloads the versions in the checked-in
-`package-lock.json`, without running dependency lifecycle scripts. Review the
-lock before use and deliberately review updates. The client itself does not
-install anything.
+Put the downloaded CA at the JSON's `ca_file` path (normally
+`./serverware-ca.pem`). Relative CA paths are resolved against the JSON file's
+directory, not the shell's working directory. If supplied, the separate outer
+proxy CA in `client_recipe.proxy_ca_file` follows the same rule. Verify CA identity
+with the operator before trusting it.
+
+The file must be a regular JSON file no larger than 64 KiB, with an unexpired
+token, Basic proxy identity, and matching GitHub permission/repository/upstream.
+Its connection and repository settings override ambient connection settings;
+an absent outer proxy CA uses normal Node trust, even if an old environment
+variable names a CA. The JSON is data, not a script: commands, entrypoints,
+environment objects, provider credentials and write content are never imported.
+
+### Environment-only alternative
 
 Set these environment variables using your shell or secret manager:
 
@@ -86,13 +119,15 @@ explicit trusted input, not fetched over an unverified connection.
 Octokit receives only the fixed public value
 `serverware-github-placeholder-v1`. Serverware replaces it after authorization.
 `GITHUB_TOKEN` and `GH_TOKEN` are not read. Proxy identity comes only from the
-listed environment variables, not URL userinfo or ambient proxy settings.
+downloaded configuration or listed environment variables, not URL userinfo or
+ambient proxy settings.
 
-## 3. Run a read
+## 4. Run a read
 
 ```sh
-node client.mjs
-# Equivalent: npm start -- list
+node client.mjs --config /path/serverware-client.private.json
+# With the environment-only alternative:
+node client.mjs list
 ```
 
 Output is JSON containing the returned issue numbers and titles. GitHub's issue
@@ -116,6 +151,8 @@ For exactly one new issue, supply `SERVERWARE_ISSUE_TITLE` and a nonempty
 
 ```sh
 node client.mjs create-issue
+# Or use a downloaded write-enabled permission:
+node client.mjs --config /path/serverware-client.private.json create-issue
 ```
 
 For exactly one comment on an existing issue, supply `SERVERWARE_ISSUE_NUMBER`
@@ -123,10 +160,13 @@ and a nonempty `SERVERWARE_COMMENT_BODY`, then run:
 
 ```sh
 node client.mjs create-comment
+# Or use a downloaded write-enabled permission:
+node client.mjs --config /path/serverware-client.private.json create-comment
 ```
 
 Content comes from environment variables so it is not required in command-line
-arguments. Bodies are bounded and the serialized JSON must fit 64 KiB. No issue
+arguments or imported from the JSON. A read-only configuration rejects either
+write command. Bodies are bounded and the serialized JSON must fit 64 KiB. No issue
 is automatically created as a prerequisite for a comment. There are no edit,
 delete, repository-management or arbitrary-request commands.
 
@@ -145,11 +185,11 @@ node --test client.test.mjs
 The tests use Node's built-in test runner and mocked SDK/transport objects. They
 need neither installed third-party packages nor credentials, and cover exact
 repository selection, pagination-helper invocation, explicit write inputs,
-separate TLS trust, fixed dummy authentication, request bounds and redacted
+downloaded-config validation and CLI selection, separate TLS trust, fixed dummy authentication, request bounds and redacted
 failures. They do not prove real Octokit serialization, TLS, proxy forwarding or
 GitHub success; those require a separately authorized integration run.
 
-All eight mocked test groups passed locally on 2026-10-10. That result alone is
+The original eight mocked test groups passed locally on 2026-10-10. That result alone is
 not proxy integration evidence.
 
 After installing the checked-in dependencies, run the separate real-SDK checks:

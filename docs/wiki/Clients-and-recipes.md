@@ -47,7 +47,7 @@ export SERVERWARE_PROXY_TOKEN
 
 Replace the public placeholders with your deployment's values. Disable shell tracing and HTTP/SDK debug logging. Environment and process memory still contain the client token; use a trusted workstation or protected runner. Run `unset SERVERWARE_PROXY_TOKEN` when finished.
 
-The `.env.example` files document inputs; the examples do not automatically load them. **Download private client config** is available only while the page holds the matching one-time token. That JSON contains the client token, is not an executable, and is not automatically loaded by the examples. Keep it out of source control, chat and logs.
+The `.env.example` files document inputs; the examples do not automatically load them. **Download private client config** is available only while the page holds the matching one-time token. That JSON contains the client token and is not an executable. The GitHub examples accept it explicitly with `--config` as shown below; other examples still use their documented inputs. Keep it out of source control, chat and logs.
 
 ## Optional renewal for a long-running workload
 
@@ -66,6 +66,22 @@ The normal proxy passed isolated synthetic-provider checks with stock Requests 2
 ## Node.js, Python and Go: read GitHub issues
 
 Start with **GitHub issues: read** for one exact repository. Either a saved PAT or a verified GitHub App connection can supply the provider credential. Python and Go are read-only; Node also has explicit issue/comment creation commands.
+
+### Use the downloaded settings
+
+After preparing the chosen example's dependencies (and building the Go binary), choose **Download private client config** in Proxy setup. This requires standard username/password proxy login and the matching one-time client token still held by the page. Save the downloaded CA next to `serverware-client.private.json` when the CA field is `./serverware-ca.pem`, then protect the JSON with `chmod 600 /path/serverware-client.private.json`.
+
+Run one of these commands from its example directory:
+
+```bash
+node client.mjs --config /path/serverware-client.private.json
+python issues.py --config /path/serverware-client.private.json
+./github-issues --config /path/serverware-client.private.json
+```
+
+These commands read issues. The file supplies the exact repository, proxy, client login and CA paths without retyping environment variables. Relative CA paths resolve beside the JSON file, not the working directory. File settings override ambient connection/repository variables, and an expired token or incompatible profile is refused before a provider request. The file does not select an executable or trigger a write. Existing environment-only commands remain supported; Node writes still require an explicit operation and locally supplied content. PyGithub retains its combined-trust limitation and rejects a separate outer-proxy CA.
+
+### Use environment variables instead
 
 Set `SERVERWARE_GITHUB_OWNER` and `SERVERWARE_GITHUB_REPO` to the saved permission's exact values. From the repository checkout, prepare **one** example before injecting the token:
 

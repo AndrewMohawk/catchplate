@@ -4,6 +4,8 @@
 const assert = require('node:assert/strict');
 const {mutationReviewStorage} = require('./operator_mutation_recovery_test_helpers.cjs');
 const {readFileSync} = require('node:fs');
+const {mkdtemp, writeFile, rm} = require('node:fs/promises');
+const {tmpdir} = require('node:os');
 const {resolve} = require('node:path');
 const {pathToFileURL} = require('node:url');
 const vm = require('node:vm');
@@ -108,7 +110,7 @@ function context(dom = inertDom()) {
 }
 // Run the actual proxy view and private-download click handler with in-memory
 // browser download primitives. This is not a rendered browser or SDK check.
-function npmDownloadFixture(raw) {
+function npmDownloadFixture(raw, token = 'synthetic-app-token-for-private-download') {
   const current = context(); const blobs = [], downloads = [], revoked = [];
   const node = id => current.dom.getElementById(id);
   const createElement = current.dom.createElement;
@@ -139,7 +141,6 @@ function npmDownloadFixture(raw) {
   const catalog = clone(current.run('projectCatalog(input)', raw));
   node('proxy-application').value = IDS.application; node('proxy-rule').value = IDS.rule;
   node('npm-client-package').value = catalog.access_rules[0].packages?.[0] || '';
-  const token = 'synthetic-app-token-for-private-download';
   current.value.workspaceFixture = {state: {catalog, busy: false, uncertain: false}, loaded: () => true,
     subscribe(callback) { callback(); }};
   current.value.applicationsFixture = {tokenFor(id) { assert.equal(id, IDS.application); return token; }};
@@ -411,6 +412,32 @@ const tests = [
       assert(!text.includes(PRIVATE)); assert(!/11\.8\.0|21\.0\.4/.test(text));
       assert.equal(f.node('client-copy-status').textContent, 'Downloaded private client configuration. Keep it out of source control.');
     }
+  }],
+  ['actual GitHub private download loads directly in the stock-client configuration path', async () => {
+    const {githubRule, capability} = require('./test_operator_github_browser.cjs');
+    const raw = rawCatalog({credentials: [credential({connection_type: 'github_token_v1', provider_id: 'github'})],
+      rules: [githubRule()], allowed: ['https://api.github.com'], capability: null});
+    raw.capabilities.github = capability();
+    const f = npmDownloadFixture(raw, 'A'.repeat(43));
+    assert.equal(f.node('download-config').disabled, false);
+    f.node('download-config').events.click();
+    assert.equal(f.blobs.length, 1);
+    const text = await f.blobs[0].text();
+    assert(!text.includes(PRIVATE));
+    assert(f.node('client-guidance').textContent.includes('--config'));
+    const directory = await mkdtemp(resolve(tmpdir(), 'serverware-github-config-'));
+    try {
+      const path = resolve(directory, 'serverware-client.private.json');
+      await writeFile(path, text, {mode: 0o600});
+      const {loadClientConfig} = await import(pathToFileURL(resolve(__dirname, '../examples/github-issues-node/client.mjs')).href);
+      const loaded = loadClientConfig(path, {SERVERWARE_PROXY_TOKEN: 'wrong-ambient-token',
+        SERVERWARE_GITHUB_OWNER: 'wrong-owner', SERVERWARE_PROXY_CA_FILE: '/wrong/ambient.pem'}, 'list', NOW);
+      assert.equal(loaded.operation, 'list'); assert.equal(loaded.token, f.token);
+      assert.equal(loaded.applicationId, IDS.application); assert.equal(loaded.proxyUrl, raw.proxy_url);
+      assert.equal(loaded.owner, raw.access_rules[0].repository.owner); assert.equal(loaded.repo, raw.access_rules[0].repository.name);
+      assert.equal(loaded.caFile, resolve(directory, 'serverware-ca.pem')); assert.equal(loaded.proxyCaFile, null);
+      assert.throws(() => loadClientConfig(path, {}, 'create-issue', NOW));
+    } finally { await rm(directory, {recursive: true, force: true}); }
   }],
   ['setup labels distinguish reusable credentials from consuming clients', async () => {
     const f = fixture({rules: []});

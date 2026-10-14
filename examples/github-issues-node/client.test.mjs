@@ -1,7 +1,10 @@
 // No dependency installation, socket, provider or proxy is needed for these tests.
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
-import { PUBLIC_GITHUB_DUMMY, configuration, createClient, failure, perform, proxyOptions } from './client.mjs';
+import { PUBLIC_GITHUB_DUMMY, configuration, createClient, failure, loadClientConfig, parseArguments, perform, proxyOptions } from './client.mjs';
 
 const env = () => ({
   SERVERWARE_PROXY_URL: 'https://proxy.example.test:443',
@@ -12,6 +15,99 @@ const env = () => ({
   SERVERWARE_GITHUB_REPO: 'example.repo',
 });
 const pem = (label) => Buffer.from('-----BEGIN CERTIFICATE-----\n' + label + '\n-----END CERTIFICATE-----');
+const NOW = 1_791_996_000_000;
+const downloaded = () => ({
+  application_id: env().SERVERWARE_APP_ID,
+  access_rule_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+  proxy_url: env().SERVERWARE_PROXY_URL,
+  proxy_authentication: 'basic_and_bearer_v1',
+  proxy_username: env().SERVERWARE_APP_ID,
+  proxy_password: 'downloaded_synthetic_token',
+  token_expires_at_epoch_ms: NOW + 60_000,
+  ca_file: './serverware-ca.pem',
+  repository: { owner: 'downloaded-owner', name: 'downloaded.repo' },
+  upstream_url: 'https://api.github.com/repos/downloaded-owner/downloaded.repo/issues',
+  operation_bundle: 'github_issues_read_v1', methods: ['GET'],
+  client_recipe: { proxy_ca_file: null },
+});
+function configFile(t) {
+  const directory = mkdtempSync(join(tmpdir(), 'serverware-github-config-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'serverware-client.private.json');
+  return { directory, path, write(value) { writeFileSync(path, JSON.stringify(value), { mode: 0o600 }); return path; } };
+}
+
+test('downloaded console config overrides ambient connection scope and resolves CA paths', (t) => {
+  const fixture = configFile(t), value = downloaded();
+  value.client_recipe.environment = { SERVERWARE_PROXY_TOKEN: 'never-import', SERVERWARE_ISSUE_BODY: 'never-import' };
+  value.client_recipe.entrypoint = 'never-execute';
+  value.request_headers = { Authorization: 'never-import' };
+  const ambient = { ...env(), SERVERWARE_PROXY_CA_FILE: '/stale/outer.pem', GITHUB_TOKEN: 'never-import' };
+  const config = loadClientConfig(fixture.write(value), ambient, undefined, NOW);
+  assert.deepEqual(config, { operation: 'list', proxyUrl: value.proxy_url,
+    applicationId: value.application_id, token: value.proxy_password,
+    owner: value.repository.owner, repo: value.repository.name,
+    caFile: join(fixture.directory, 'serverware-ca.pem'), proxyCaFile: null });
+  assert.equal(ambient.SERVERWARE_PROXY_CA_FILE, '/stale/outer.pem');
+  value.client_recipe.proxy_ca_file = './outer.pem';
+  assert.equal(loadClientConfig(fixture.write(value), ambient, 'list', NOW).proxyCaFile, join(fixture.directory, 'outer.pem'));
+  delete value.client_recipe;
+  assert.equal(loadClientConfig(fixture.write(value), ambient, 'list', NOW).proxyCaFile, null);
+});
+
+test('config CLI defaults to reads; writes remain explicit and local-content only', (t) => {
+  const fixture = configFile(t), value = downloaded();
+  const local = { SERVERWARE_ISSUE_TITLE: 'Local title', SERVERWARE_ISSUE_BODY: 'Local body' };
+  assert.throws(() => loadClientConfig(fixture.write(value), local, 'create-issue', NOW));
+  value.operation_bundle = 'github_issues_write_v1'; value.methods = ['GET', 'POST'];
+  value.operation = 'create-issue'; value.environment = local; value.body = 'Never imported';
+  assert.equal(loadClientConfig(fixture.write(value), {}, undefined, NOW).operation, 'list');
+  assert.throws(() => loadClientConfig(fixture.path, {}, 'create-issue', NOW));
+  assert.equal(loadClientConfig(fixture.path, local, 'create-issue', NOW).body, 'Local body');
+  assert.deepEqual(parseArguments([]), { help: false, operation: 'list', configPath: null });
+  assert.deepEqual(parseArguments(['--config', fixture.path]), { help: false, operation: 'list', configPath: fixture.path });
+  assert.deepEqual(parseArguments(['--config', fixture.path, 'list']), { help: false, operation: 'list', configPath: fixture.path });
+  assert.equal(parseArguments(['create-comment', '--config', fixture.path]).operation, 'create-comment');
+  assert.equal(parseArguments(['create-issue']).operation, 'create-issue');
+  assert.equal(parseArguments(['--help']).help, true);
+  for (const args of [['--config'], ['--config', ''], ['--config', '--help'], ['--config', 'one', '--config', 'two'],
+    ['list', 'create-issue'], ['--help', 'list'], ['--unknown'], ['delete']]) assert.throws(() => parseArguments(args));
+});
+
+test('downloaded config refuses expired tokens and mismatched identity, scope or bundle', (t) => {
+  const fixture = configFile(t);
+  const invalid = [
+    { application_id: 'invalid' }, { access_rule_id: 'invalid' }, { proxy_username: 'different' },
+    { proxy_authentication: 'bearer' }, { proxy_password: 'bad token' },
+    { proxy_url: 'http://proxy.example.test' }, { ca_file: '' },
+    { token_expires_at_epoch_ms: NOW }, { token_expires_at_epoch_ms: Number.MAX_SAFE_INTEGER + 1 },
+    { token_expires_at_epoch_ms: String(NOW + 60_000) },
+    { operation_bundle: 'github_issues_other_v1' }, { methods: ['GET', 'POST'] }, { methods: ['POST'] },
+    { methods: ['GET', 'GET'] }, { methods: 'GET' },
+    { upstream_url: 'https://api.github.com/repos/other/downloaded.repo/issues' },
+    { upstream_url: 'https://api.github.com/repos/downloaded-owner/downloaded.repo/issues?query=1' },
+    { repository: { owner: '../other', name: 'downloaded.repo' } }, { repository: null },
+    { client_recipe: { proxy_ca_file: '' } }, { client_recipe: [] },
+  ];
+  for (const changes of invalid) assert.throws(() => loadClientConfig(fixture.write({ ...downloaded(), ...changes }), env(), 'list', NOW));
+  fixture.write(downloaded());
+  assert.throws(() => loadClientConfig(fixture.path, { ...env(), NODE_TLS_REJECT_UNAUTHORIZED: '0' }, 'list', NOW));
+  assert.throws(() => loadClientConfig(fixture.path, env(), 'list', NaN));
+});
+
+test('config input is bounded regular JSON and errors never include private bytes or paths', (t) => {
+  const fixture = configFile(t), json = JSON.stringify(downloaded());
+  writeFileSync(fixture.path, json.padEnd(64 * 1024, ' '));
+  assert.equal(loadClientConfig(fixture.path, {}, 'list', NOW).operation, 'list');
+  for (const raw of [json.padEnd(64 * 1024 + 1, ' '), '{"private":"secret-canary"', 'null', '[]']) {
+    writeFileSync(fixture.path, raw);
+    assert.throws(() => loadClientConfig(fixture.path, {}, 'list', NOW), { message: 'Example configuration or operation refused' });
+  }
+  assert.throws(() => loadClientConfig(fixture.directory, {}, 'list', NOW), { message: 'Example configuration or operation refused' });
+  fixture.write(downloaded());
+  const link = join(fixture.directory, 'private-link.json'); symlinkSync(fixture.path, link);
+  assert.throws(() => loadClientConfig(link, {}, 'list', NOW), { message: 'Example configuration or operation refused' });
+});
 
 test('read-only default ignores ambient provider tokens and stale write content', () => {
   const config = configuration({ ...env(), GITHUB_TOKEN: 'never_use', GH_TOKEN: 'also_never_use',

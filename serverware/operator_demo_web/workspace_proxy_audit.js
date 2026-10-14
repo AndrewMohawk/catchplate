@@ -282,6 +282,7 @@ function createProxyView(workspace, applications) {
         'Wait for the exact saved policy and resolve uncertain changes before using the recipe. ') +
         githubPermissionName(rule.operation_bundle) + ' for ' + rule.repository.owner + '/' + rule.repository.name +
         '. No response-field setup: supported JSON content/errors and selected pagination/retry metadata are preserved. ' +
+        'With standard proxy login, the Node, Python and Go examples accept the private download directly with --config; no connection variables need retyping. ' +
         'The app token authenticates only to the proxy; the fixed dummy authenticates no real GitHub account. ' +
         'Keep outer proxy trust separate from destination trust; no global TLS bypass. No automatic retry of an uncertain issue/comment creation. See Compatibility limits.';
       return;
@@ -391,7 +392,7 @@ function createProxyView(workspace, applications) {
       config.client_recipe = {packages: {'@octokit/rest': '22.0.1', undici: '8.11.2'}, minimum_node: '22.19',
         sdk_auth_token: operatorGithub.token, proxy_ca_file: element('github-proxy-ca-path').value || null,
         destination_ca_file: config.ca_file};
-      config.note += ' The public SDK dummy is not the provider token. Outer proxy TLS and destination TLS use separate trust. No automatic retry after uncertain creation.';
+      config.note += ' GitHub Node, Python and Go examples accept this file with --config when standard proxy login is enabled. Relative CA paths resolve beside this JSON file. The default job only reads issues; this file never chooses a write operation. Python uses combined trust and does not accept a separate outer-proxy CA. The public SDK dummy is not the provider token. No automatic retry after uncertain creation.';
     }
     if (isNpmRule(rule)) {
       config.operation_bundle = rule.operation_bundle; config.packages = [...rule.packages];

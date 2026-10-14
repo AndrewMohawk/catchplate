@@ -170,6 +170,17 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(budget, 600)
             self.assertEqual(runner.partition_suites(partition), (selected, budget))
 
+    def test_revocation_proof_bundle_deadline_preserves_roster_and_partition_budget(self):
+        selected, budget = runner.partition_suites("python-2")
+        proof = [suite for suite in selected
+            if suite.script == "test_authority_revocation_proof_bundle.py"]
+        self.assertEqual(len(proof), 1)
+        self.assertEqual(proof[0].seconds, 180)
+        self.assertEqual(proof[0].arguments, ())
+        self.assertEqual(len(runner.SUITES), 108)
+        self.assertEqual(budget, 600)
+        self.assertEqual(runner.MAX_PARTITION_SECONDS, 600)
+
     def test_invalid_partitions_and_broken_partition_rosters_are_refused(self):
         for partition in (None, True, 1, [], "", "python", "python-4", "node ", "ALL", "../node"):
             with self.subTest(partition=partition), self.assertRaises(runner.Refused):

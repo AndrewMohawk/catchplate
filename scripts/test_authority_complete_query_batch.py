@@ -433,12 +433,25 @@ class CompleteQueryBatchTests(unittest.TestCase):
     def test_primary_global_inventory_keeps_unchanged_roots_and_denies_class_or_key_aliases(self):
         inputs = self.fixture.arguments()
         roots = inputs["business_before_roots"]
+        authorization = inputs["authorization_before_roots"]
         self.assertTrue(any(root["table"] == "metadata_audit_outbox" for root in roots))
-        self.assertEqual(inputs["authorization_before_roots"], [])
-        for changes in ({"business_before_roots": roots[:-1]},
-                        {"business_before_roots": roots + roots[:1]},
-                        {"business_before_roots": roots[1:], "authorization_before_roots": roots[:1]}):
-            with self.subTest(changes=tuple(changes)), self.assertRaises(batch.CompleteQueryBatchError):
+        self.assertEqual(tuple(root["table"] for root in authorization), (
+            "rbac_role_bindings", "webauthn_trust_publication_high_water", "webauthn_trust_publications"))
+        result = self.verify()
+        self.assertEqual([root.json_projection() for root in result.primary.business_after_roots], roots)
+        self.assertEqual([root.json_projection() for root in result.primary.authorization_after_roots], authorization)
+        cases = (
+            ("missing-business", {"business_before_roots": roots[:-1]}),
+            ("duplicate-business", {"business_before_roots": roots + roots[:1]}),
+            ("business-as-authorization", {"business_before_roots": roots[1:],
+                "authorization_before_roots": sorted(authorization + roots[:1], key=lambda root: root["table"])}),
+            ("missing-authorization", {"authorization_before_roots": authorization[:-1]}),
+            ("duplicate-authorization", {"authorization_before_roots": authorization + authorization[:1]}),
+            ("authorization-as-business", {"authorization_before_roots": authorization[1:],
+                "business_before_roots": sorted(roots + authorization[:1], key=lambda root: root["table"])}),
+        )
+        for label, changes in cases:
+            with self.subTest(case=label), self.assertRaises(batch.CompleteQueryBatchError):
                 self.verify(**changes)
         for field, replacement in (("table", "not_a_source_table"), ("key", {"not_id": "x"}),
                                    ("keyDigest", "sha256:" + "f" * 64), ("present", 1)):

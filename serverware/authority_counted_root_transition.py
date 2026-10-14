@@ -30,10 +30,28 @@ TRANSITION_SCOPE = "write-effects-only"
 MAX_DOCUMENT_BYTES = 256 * 1024
 MAX_TOTAL_HASHES = indexed.MAX_TOTAL_HASHES
 MAX_TOTAL_INPUT_BYTES = indexed.MAX_TOTAL_INPUT_BYTES
+# Pin this component's finite source inventory and accounting together. A new
+# projector profile requires a reviewed wrapper allowance, not automatic growth.
+_SOURCE_INDEX_IDS = (
+    "webauthn_credential_id", "webauthn_credential_user_history", "webauthn_credential_live_trust",
+    "webauthn_registration_unused_global", "webauthn_registration_unused_user",
+    "webauthn_session_credential_status", "webauthn_grant_approver_active",
+    "webauthn_control_approval_approved", "webauthn_publication_bundle_digest",
+    "webauthn_publication_status", "webauthn_publication_generation",
+    "oidc_session_token_digest", "oidc_activation_delivery_session_id",
+    "oidc_activation_delivery_old_token_digest", "oidc_activation_delivery_new_token_digest",
+    "oidc_activation_delivery_assertion_digest", "oidc_activation_delivery_challenge_id",
+    "webauthn_challenge_unused_global", "webauthn_challenge_unused_user",
+    "webauthn_challenge_created_global", "webauthn_challenge_created_user",
+    "webauthn_challenge_terminal_unreferenced_global", "webauthn_challenge_scope_unused",
+    "webauthn_challenge_value",
+)
+_MAX_SOURCE_INDEXES = 24
+_MAX_TABLE_INDEXES = 9
 # One source context, reused for validation, derivation and assembly:
-# cold primary descriptor ladder66 + eleven(profile1 + empty1) + manifest1
+# cold primary descriptor ladder66 + twenty-four(profile1 + empty1) + manifest1
 # + final document digest1. No cache discount and no repeated legacy derivation.
-WRAPPER_HASH_ALLOWANCE = 66 + 2 * 11 + 1 + 1
+WRAPPER_HASH_ALLOWANCE = 66 + 2 * _MAX_SOURCE_INDEXES + 1 + 1
 TRANSITION_FIELDS = frozenset({
     "schema", "profile", "scope", "operation", "countedProfile", "projectionManifestDigest",
     "primaryTransition", "indexBeforeHeads", "indexAfterHeads", "metrics",
@@ -165,9 +183,14 @@ def _context(operation):
         contracts = primary_table_contracts(operation)
     except ValueError as exc:
         raise CountedRootTransitionError("counted transition operation is not source admitted") from exc
-    if len(projection.INDEX_IDS) != 11:
+    if (type(projection.INDEX_IDS) is not tuple or projection.INDEX_IDS != _SOURCE_INDEX_IDS
+            or len(_SOURCE_INDEX_IDS) != _MAX_SOURCE_INDEXES
+            or type(projection.ROW_HASH_WORK) is not int or projection.ROW_HASH_WORK != 2):
         raise CountedRootTransitionError("counted transition source profile/hash inventory changed")
-    profiles = {index_id: projection.profile_for(index_id) for index_id in projection.INDEX_IDS}
+    profiles = {index_id: projection.profile_for(index_id) for index_id in _SOURCE_INDEX_IDS}
+    if max(sum(item.table == table for item in profiles.values())
+           for table in {item.table for item in profiles.values()}) != _MAX_TABLE_INDEXES:
+        raise CountedRootTransitionError("counted transition source table profile/hash inventory changed")
     empties = {index_id: counted.empty_node(profile, "").digest for index_id, profile in profiles.items()}
     return _Context(operation, spec, contracts, profiles, empties, projection.projection_manifest_digest())
 
@@ -181,7 +204,7 @@ def _root_classes(context, business, authorization):
 
 
 def _heads(value, context):
-    if type(value) is not list or len(value) > 11:
+    if type(value) is not list or len(value) > _MAX_SOURCE_INDEXES:
         raise CountedRootTransitionError("counted transition index heads are not a bounded array")
     result, previous = [], ""
     writable = {item.table for item in context.contracts if item.write_access}
@@ -260,8 +283,12 @@ def _validate_metrics(raw, context, primary_metrics, before_heads):
         context_bytes += sum(8 + len(value) for value in (head["indexId"], str(head["indexRevision"]),
             head["rootDigest"], str(head["leafCount"]), str(frontier)))
         copied.append(dict(entry))
-    contexts = _integer(raw["contextHashes"], 11)
-    projection_work = _integer(raw["projectionHashAllowance"], 12 * primary_metrics["mutations"])
+    contexts = _integer(raw["contextHashes"], _MAX_SOURCE_INDEXES)
+    # At most two non-null images per mutation, each projected by all nine
+    # source-fixed challenge indexes. The real engine derives/charges its
+    # exact image/profile work; structural validation only bounds the claim.
+    projection_work = _integer(raw["projectionHashAllowance"],
+        2 * projection.ROW_HASH_WORK * _MAX_TABLE_INDEXES * primary_metrics["mutations"])
     new_rows = _integer(raw["newRowHashes"], primary_metrics["mutations"])
     hashes = _integer(raw["hashWork"], MAX_TOTAL_HASHES - WRAPPER_HASH_ALLOWANCE)
     input_bytes = _integer(raw["inputBytes"], MAX_TOTAL_INPUT_BYTES - MAX_DOCUMENT_BYTES, minimum=1)

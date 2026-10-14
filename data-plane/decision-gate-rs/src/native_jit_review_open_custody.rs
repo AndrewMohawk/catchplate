@@ -105,7 +105,7 @@ impl CustodyRuntime {
         if fresh.public_key()!=key.as_slice() || fresh.user_data()!=quote.user_data() || fresh.nonce()!=&nonce
             || fresh.document().is_empty() || fresh.document().len()>12*1024{return Err(invalid_statement("opening role-4 quote scope changed"));}
         admitted.check(broker,identity,deadline).map_err(native_proof_error)?;owner.verify_live(deadline).map_err(native_proof_error)?;
-        let proof=json!({"statement":statement,"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
+        let proof=serde_json::json!({"statement":statement,"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
             "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key()),
                 "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document())},

@@ -212,9 +212,9 @@ class CountedRootTransitionTests(unittest.TestCase):
         self.assertEqual(result.json_projection(), expected)
         self.assertEqual(result.canonical_bytes, canonical(expected))
         self.assertEqual(result.digest, transition_digest(canonical(expected)))
-        self.assertEqual(result.packaging.wrapper_hash_allowance, 90)
+        self.assertEqual(result.packaging.wrapper_hash_allowance, 116)
         self.assertEqual(result.packaging.document_bytes, len(canonical(expected)))
-        self.assertEqual(result.packaging.total_hash_work, 90 + expected["metrics"]["hashWork"])
+        self.assertEqual(result.packaging.total_hash_work, 116 + expected["metrics"]["hashWork"])
         self.assertEqual(result.packaging.total_input_bytes,
                          len(canonical(expected)) + expected["metrics"]["inputBytes"])
         self.assertEqual(transition.counted_root_transition_digest(expected), result.digest)
@@ -233,7 +233,7 @@ class CountedRootTransitionTests(unittest.TestCase):
         self.assertIs(result.primary, calls[0][1].primary)
         self.assert_roots(result)
         self.assertEqual(calls[0][0]["table_contracts"], self.fixture.contracts)
-        self.assertEqual(calls[0][0]["limits"].max_total_hashes, 8_000_000 - 90)
+        self.assertEqual(calls[0][0]["limits"].max_total_hashes, 8_000_000 - 116)
         self.assertEqual(calls[0][0]["limits"].max_total_input_bytes, 64 * 1024 * 1024 - 256 * 1024)
 
     def test_equal_update_advances_primary_and_all_member_revisions_without_hash_changes(self):
@@ -521,7 +521,7 @@ class CountedRootTransitionTests(unittest.TestCase):
     def test_operation_inventory_and_document_work_bounds_are_not_caller_expandable(self):
         self.assertEqual((transition.WRAPPER_HASH_ALLOWANCE, transition.MAX_DOCUMENT_BYTES,
                           transition.MAX_TOTAL_HASHES, transition.MAX_TOTAL_INPUT_BYTES),
-                         (90, 256 * 1024, 8_000_000, 64 * 1024 * 1024))
+                         (116, 256 * 1024, 8_000_000, 64 * 1024 * 1024))
         original = indexed.evaluate_indexed_primary_batch
         arguments = self.fixture.arguments()
         oversized = (("selected_rows", arguments["selected_rows"] * 257),
@@ -564,6 +564,86 @@ class CountedRootTransitionTests(unittest.TestCase):
         self.assertEqual(observed, [str] * 2001)
         # The last bounded scalar is encoded before its charge rejects; no
         # array/object or complete oversized document reaches serialization.
+
+    def test_current_source_context_hash_inventory_is_exact_and_finite(self):
+        with mock.patch.object(projection, "profile_for", wraps=projection.profile_for) as profiles, \
+                mock.patch.object(counted, "empty_node", wraps=counted.empty_node) as empties, \
+                mock.patch.object(projection, "projection_manifest_digest",
+                    wraps=projection.projection_manifest_digest) as manifest:
+            context = transition._context(COUNTER)
+        self.assertEqual(profiles.call_args_list, [mock.call(name) for name in INDEX_IDS])
+        self.assertEqual(empties.call_args_list,
+                         [mock.call(context.profiles[name], "") for name in INDEX_IDS])
+        self.assertEqual((len(context.profiles), profiles.call_count, empties.call_count, manifest.call_count),
+                         (24, 24, 24, 1))
+        self.assertEqual(max(sum(value.table == table for value in context.profiles.values())
+                             for table in {value.table for value in context.profiles.values()}), 9)
+        with mock.patch.object(transition, "framed_digest", wraps=transition.framed_digest) as digest:
+            result = self.derive()
+        self.assertEqual(digest.call_args_list, [mock.call(SCHEMA, result.canonical_bytes)])
+        self.assertEqual(result.packaging.wrapper_hash_allowance, 66 + 24 + 24 + 1 + 1)
+
+    def test_changed_source_inventory_and_overbound_head_metrics_are_refused(self):
+        variants = (INDEX_IDS[:-1], (*INDEX_IDS, "unknown_index"), tuple(reversed(INDEX_IDS)),
+                    (*INDEX_IDS[:-1], "unknown_index"), (*INDEX_IDS[:-1], INDEX_IDS[0]), list(INDEX_IDS))
+        for ordinal, inventory in enumerate(variants):
+            with self.subTest(inventory=ordinal), mock.patch.object(projection, "INDEX_IDS", inventory), \
+                    mock.patch.object(projection, "profile_for", wraps=projection.profile_for) as profiles, \
+                    mock.patch.object(counted, "empty_node", wraps=counted.empty_node) as empties:
+                with self.assertRaisesRegex(transition.CountedRootTransitionError, "inventory changed"):
+                    transition._context(COUNTER)
+                self.assertEqual((profiles.call_count, empties.call_count), (0, 0))
+        for work in (3, 2.0, True):
+            with self.subTest(row_hash_work=work), mock.patch.object(projection, "ROW_HASH_WORK", work), \
+                    mock.patch.object(projection, "profile_for", wraps=projection.profile_for) as profiles:
+                with self.assertRaisesRegex(transition.CountedRootTransitionError, "inventory changed"):
+                    transition._context(COUNTER)
+                profiles.assert_not_called()
+        genuine_profile = projection.profile_for
+        def changed_table(name):
+            profile = genuine_profile(name)
+            return (replace(profile, table="fixture_changed_table")
+                    if name == "webauthn_challenge_value" else profile)
+        with mock.patch.object(projection, "profile_for", side_effect=changed_table), \
+                mock.patch.object(counted, "empty_node", wraps=counted.empty_node) as empties:
+            with self.assertRaisesRegex(transition.CountedRootTransitionError, "table profile/hash inventory changed"):
+                transition._context(COUNTER)
+            empties.assert_not_called()
+        value = self.derive().json_projection()
+        too_many = copy.deepcopy(value)
+        too_many["indexBeforeHeads"] *= 9  # 27 entries exceed the exact 24-profile cap.
+        with self.assertRaisesRegex(transition.CountedRootTransitionError, "bounded array"):
+            transition.validate_counted_root_transition(too_many)
+        for field, number in (("contextHashes", 25), ("projectionHashAllowance", 38)):
+            changed = copy.deepcopy(value)
+            changed["metrics"][field] = number
+            with self.subTest(metric=field), self.assertRaisesRegex(
+                    transition.CountedRootTransitionError, "exact bounded value"):
+                transition.validate_counted_root_transition(changed)
+
+    def test_nine_challenge_profiles_charge_real_work_and_require_every_head(self):
+        before = mutation_oracle.challenge()
+        after = {**before, "used_at": mutation_oracle.EPOCH}
+        fixture = OperationFixture(REVOKE, {"webauthn_challenges": [before]},
+            (("webauthn_challenges", before["id"], "UPDATE", after),))
+        result = self.derive(fixture)
+        value = self.assert_roots(result, fixture)
+        self.assertEqual(value, fixture.expected_document())
+        self.assertEqual((len(value["indexBeforeHeads"]), value["metrics"]["contextHashes"],
+                          value["metrics"]["projectionHashAllowance"]), (9, 9, 36))
+        inputs = fixture.arguments()["index_inputs"]
+        for omitted in ("webauthn_registration_unused_global", "webauthn_challenge_value"):
+            with self.subTest(omitted=omitted), self.assertRaises(transition.CountedRootTransitionError):
+                self.derive(fixture, index_inputs=tuple(item for item in inputs if item.index_id != omitted))
+        altered = copy.deepcopy(value)
+        altered["metrics"]["projectionHashAllowance"] -= 2
+        altered["metrics"]["hashWork"] -= 2
+        self.assertEqual(transition.validate_counted_root_transition(altered), altered)
+        with mock.patch.object(indexed, "evaluate_indexed_primary_batch",
+                wraps=indexed.evaluate_indexed_primary_batch) as engine:
+            with self.assertRaisesRegex(transition.CountedRootTransitionError, "recomputed complete write delta"):
+                self.verify(altered, fixture)
+            self.assertEqual(engine.call_count, 1)
 
     def test_int64_revision_overflow_and_bypassed_counted_contexts_fail_closed(self):
         inputs = self.fixture.arguments()["index_inputs"]

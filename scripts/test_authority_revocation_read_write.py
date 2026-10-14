@@ -539,22 +539,26 @@ class RevocationReadWriteTests(unittest.TestCase):
         wrong_address = forged(first.addresses[0], key_json=b'"\xff"')
         incomplete_record = object.__new__(reads.QueryRead)
         incomplete_address = object.__new__(reads.QueryReadAddress)
+        self.assertEqual(admission.MAX_QUERY_READS, 50)
         cases = (
-            (forged(first, declared_query_json=bytearray(first.declared_query_json)), *fixture.query_reads[1:]),
-            (forged(first, declared_query_json=b"\xff\xff"), *fixture.query_reads[1:]),
-            (forged(first, addresses=(wrong_address,)), *fixture.query_reads[1:]),
-            list(fixture.query_reads),
-            (first,) * 46,
-            (forged(first, addresses=first.addresses * 194), *fixture.query_reads[1:]),
-            (incomplete_record,),
-            (forged(first, addresses=(incomplete_address,)), *fixture.query_reads[1:]),
+            ("non-bytes-query", (forged(first, declared_query_json=bytearray(first.declared_query_json)),
+                                  *fixture.query_reads[1:])),
+            ("non-ascii-query", (forged(first, declared_query_json=b"\xff\xff"), *fixture.query_reads[1:])),
+            ("non-ascii-address", (forged(first, addresses=(wrong_address,)), *fixture.query_reads[1:])),
+            ("non-tuple-inventory", list(fixture.query_reads)),
+            # The current 50-record source ceiling must reject this before
+            # generation; in-cap duplicate records instead fail later binding.
+            ("too-many-records", (first,) * 51),
+            ("too-many-addresses", (forged(first, addresses=first.addresses * 194), *fixture.query_reads[1:])),
+            ("incomplete-record", (incomplete_record,)),
+            ("incomplete-address", (forged(first, addresses=(incomplete_address,)), *fixture.query_reads[1:])),
         )
-        for changed in cases:
-            with self.subTest(kind=type(changed)), \
+        for label, changed in cases:
+            with self.subTest(case=label), \
                     patch.object(candidate, "_revocation_query_program", wraps=candidate._revocation_query_program) as generated:
                 with self.assertRaises(admission.RevocationReadWriteError):
                     self.verify(fixture, query_reads=changed)
-            self.assertEqual(generated.call_count, 0)
+                self.assertEqual(generated.call_count, 0)
         # Sharing one immutable byte object isolates aggregate raw decoding,
         # not huge unique allocations or a claimed authentic maximum program.
         payload = b"x" * (1024 * 1024)

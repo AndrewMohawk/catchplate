@@ -92,7 +92,7 @@ SUITES = (
     Suite("backend", "test_authority_schema_source.py", seconds=60),
     Suite("backend", "test_authority_verifier_read_source.py", seconds=60),
     Suite("backend", "test_authority_table_acl_source.py", seconds=60),
-    Suite("backend", "test_authority_revocation_proof_bundle.py", seconds=60),
+    Suite("backend", "test_authority_revocation_proof_bundle.py", seconds=180),
     # Protected review components use synthetic authority/launch observations;
     # none establishes native admission, a database commit or private disclosure.
     # Root-owned FD metadata tests have a separate isolated root-only lane.

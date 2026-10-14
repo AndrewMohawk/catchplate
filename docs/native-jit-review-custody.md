@@ -393,13 +393,35 @@ and covers 168 tests across seven direct proof/index suites. Ordinary CI now
 registers all six previously indirect fixture suites and the new eight-group
 authentication-state UI suite. Its 108-suite roster is split into disjoint
 12/39/41 Python and 16 Node partitions, with 600 seconds each and an independent
-signer job. Source review is complete; hosted execution of this new roster is
-still pending.
+signer job.
+
+The exact `4e78810d` [run 38516950676](https://github.com/example/private-deployment)
+then reached all 108 suites: **104 passed, three failed and one timed out**.
+There were no partition-budget non-runs or observed skips. All 16 Node suites
+passed 273 groups; the separate signer job passed all 22 tests. Ordinary Python
+suites reported 1,299 executions, including failures. Schema source (35), ACL
+source (32) and verifier (20) passed. The failed suites are complete query
+batch, counted root transition and revocation read/write. In particular, the
+newly registered counted-transition suite exposes a production inventory guard
+still fixed at 11 profiles, while the source inventory contains 24. The
+proof-bundle suite reached its own 60.008-second deadline; no completed test
+count is inferred for it.
+
+Partition durations were 272.597, 319.509, 396.354 and 5.443 seconds. All five
+ZIP digests, all 108 individual receipts and script hashes, both locks and the
+disjoint partition roster joined to the exact commit. Evidence is at
+`/srv/catchplate-fast/tmp/serverware-hosted-ci-partitions.yyUOpQK8`;
+`verification.json` SHA-256 is
+`41258f38a23ca0f7c144b6586b1a65765ff5df6af6e5c14a8a929ac2d7eab2a9`.
+The next correction retains exact source inventories and charges their actual
+hash work under the unchanged global budget. Only the proof-bundle test's
+wall-time ceiling changes from 60 to 180 seconds; the partition cap stays 600.
+These corrections are not yet execution-verified.
 
 The final local 171-test attempt never started: Docker creation exceeded its
 270-second setup ceiling, and only its owned CLI was terminated. Exact-name
 and label checks found no container; late daemon completion remains uncertain.
-The pending Rust verification likewise has not compiled or executed anything.
+That local Rust attempt likewise did not compile or execute anything.
 Its existing 846-file, 26,564,282-byte source export passed exact Git/blob and
 frozen-metadata readback after a filesystem-wide flush timed out. No second
 source copy or dependency installation was needed. Source receipt SHA-256:
@@ -431,10 +453,26 @@ retry automatically. Container ownership and uncertain cleanup remain recorded.
 The roster is exactly 29 library tests, 24 decision-gate binary tests and five
 API controls, including three expected privacy-diagnostic refusals. Compiler
 inputs and artifacts must join to the selected Git revision. The eight pure
-receipt-parser unit tests passed locally; compilation and the 58 Rust controls
-are not yet executed. This lane builds test artifacts and the protocol library,
+receipt-parser unit tests passed locally and in the first hosted attempt.
+This lane builds test artifacts and the protocol library,
 not the normal proxy executable. It establishes neither native admission nor
 deployment or whole-project acceptance.
+
+The exact `4e78810d` [attempt 38516995639](https://github.com/example/private-deployment)
+failed during actual offline library compilation after 233.994 seconds:
+`native_jit_review_open_custody.rs:108` used `json!` without importing the macro.
+The fix qualifies that single call as `serde_json::json!`, changing no statement
+or authority behavior. Public provisioning passed in 8.409 seconds. The compiler
+reported one error, not OOM or timeout; no fresh project artifact or any of the
+58 Rust control results was produced. Both owned containers were terminal and
+removed, with no pending child or uncertain cleanup.
+
+The archive digest and retained command, source, image, lock, roster and cleanup
+receipts were independently joined. Evidence is at
+`/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/hosted-native-review-38516995639.XUsZjcyb`;
+`result.json` SHA-256 is
+`3c3bc835d1aa43825e7c4b52e5a9d2986157a71b16992e3324a5057b51246829`.
+The source correction still needs compilation and tests in a new attempt.
 
 The following older checkpoints retain their original source and evidence scope.
 

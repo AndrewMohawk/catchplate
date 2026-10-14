@@ -2196,6 +2196,18 @@ class _JitReviewReceiptKernel:
         }
     )
 
+    @staticmethod
+    def _timestamp(value: Any) -> datetime:
+        try:
+            if type(value) is not str:
+                raise ValueError
+            result = datetime.fromisoformat(value)
+            if result.tzinfo is None or result.utcoffset() != timedelta(0):
+                raise ValueError
+            return result
+        except (ValueError, OverflowError):
+            raise core.TransitionKernelError("JIT review receipt lifetime is invalid") from None
+
     def queries(
         self,
         *,
@@ -2270,10 +2282,19 @@ class _JitReviewReceiptKernel:
             ),
             "JIT approval request",
         )
-        now_s = context.database_now.astimezone(timezone.utc).isoformat()
+        # This legacy receipt is not proof that a native owner opened a review.
+        # Refuse the whole reserved family, including malformed/mixed forms,
+        # before considering either fresh issuance or existing receipt replay.
+        for field in ("url", "canonical_request", "redacted_display"):
+            value = approval.get(field)
+            if type(value) is not str or value.lstrip()[:10].lower() == "native-jit":
+                raise core.TransitionKernelError("JIT review requires its native opening authority")
+        approval_expiry = self._timestamp(approval.get("expires_at"))
+        now = context.database_now.astimezone(timezone.utc)
+        now_s = now.isoformat()
         if (
             approval.get("status") != "pending"
-            or approval.get("expires_at") <= now_s
+            or approval_expiry <= now
         ):
             raise core.TransitionKernelError(
                 "JIT review receipt requires a live pending approval"
@@ -2294,13 +2315,11 @@ class _JitReviewReceiptKernel:
             "review_digest": review_digest,
         }
         if existing is None:
+            expiry = min(now + timedelta(seconds=ttl_seconds), approval_expiry)
             row = {
                 "id": receipt_id,
                 **immutable,
-                "expires_at": (
-                    context.database_now.astimezone(timezone.utc)
-                    + timedelta(seconds=ttl_seconds)
-                ).isoformat(),
+                "expires_at": expiry.isoformat(),
                 "used_at": None,
                 "created_at": now_s,
             }
@@ -2317,13 +2336,7 @@ class _JitReviewReceiptKernel:
                     live_delta=1,
                     active_delta=1,
                     next_sequence_delta=1,
-                    minimum_expiry_epoch_ns=int(
-                        (
-                            context.database_now.astimezone(timezone.utc)
-                            + timedelta(seconds=ttl_seconds)
-                        ).timestamp()
-                        * 1_000_000_000
-                    ),
+                    minimum_expiry_epoch_ns=_database_epoch_ns(expiry),
                 ),
             )
             replay = False
@@ -2335,6 +2348,12 @@ class _JitReviewReceiptKernel:
                 raise core.TransitionKernelError(
                     "JIT review receipt identity was rebound"
                 )
+            created = self._timestamp(existing.get("created_at"))
+            expiry = self._timestamp(existing.get("expires_at"))
+            if not created <= now or not created < expiry <= min(
+                created + timedelta(seconds=ttl_seconds), approval_expiry
+            ):
+                raise core.TransitionKernelError("JIT review receipt lifetime was rebound")
             row = existing
             receipt_mutations = ()
             replay = True

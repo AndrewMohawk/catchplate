@@ -38,7 +38,7 @@ spec = importlib.util.spec_from_file_location('public_renderer_only', pathlib.Pa
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 scripts = module.SCRIPT_FILES
-historical_scripts = tuple(name for name in scripts if name not in {'workspace_x_accounts.js', 'workspace_x_post.js', 'workspace_workload_renewal.js'})
+historical_scripts = tuple(name for name in scripts if name not in {'workspace_x_accounts.js', 'workspace_x_post.js', 'workspace_workload_renewal.js', 'workspace_pending_actions.js'})
 variants = []
 for omitted in ({'workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js', 'workspace_gmail_sdk.js', 'workspace_x_configuration.js'},
                 {'workspace_alchemy.js', 'workspace_aws.js', 'workspace_gmail_sdk.js', 'workspace_x_configuration.js'},
@@ -48,7 +48,11 @@ for omitted in ({'workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js', '
     module.render.cache_clear()
     variants.append({'scripts': module.SCRIPT_FILES,
         'html': base64.b64encode(module.render().encode('utf-8')).decode('ascii')})
-module.SCRIPT_FILES = tuple(name for name in scripts if name != 'workspace_workload_renewal.js')
+module.SCRIPT_FILES = tuple(name for name in scripts if name not in {'workspace_workload_renewal.js', 'workspace_pending_actions.js'})
+module.render.cache_clear()
+variants.append({'scripts': module.SCRIPT_FILES,
+    'html': base64.b64encode(module.render().encode('utf-8')).decode('ascii')})
+module.SCRIPT_FILES = tuple(name for name in scripts if name != 'workspace_pending_actions.js')
 module.render.cache_clear()
 variants.append({'scripts': module.SCRIPT_FILES,
     'html': base64.b64encode(module.render().encode('utf-8')).decode('ascii')})
@@ -190,14 +194,15 @@ const tests = [
     assert.equal(f.run('subprocessFailure("/usr/bin/docker", failure, undefined).bridge_refused'), false);
     assert.equal(forbiddenCalls, 0);
   }],
-  ['actual documentBytes matches all eight closed Python renderer rosters in both checker modes', async () => {
-    assert.equal(reference.variants.length, 8);
-    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_aws.js')), [false, false, false, true, true, true, true, true]);
-    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_gmail_sdk.js')), [false, false, false, false, true, true, true, true]);
-    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_x_configuration.js')), [false, false, false, false, false, true, true, true]);
+  ['actual documentBytes matches all nine closed Python renderer rosters in both checker modes', async () => {
+    assert.equal(reference.variants.length, 9);
+    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_aws.js')), [false, false, false, true, true, true, true, true, true]);
+    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_gmail_sdk.js')), [false, false, false, false, true, true, true, true, true]);
+    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_x_configuration.js')), [false, false, false, false, false, true, true, true, true]);
     for (const name of ['workspace_x_accounts.js', 'workspace_x_post.js'])
-      assert.deepEqual(reference.variants.map(variant => variant.scripts.includes(name)), [false, false, false, false, false, false, true, true]);
-    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_workload_renewal.js')), [false, false, false, false, false, false, false, true]);
+      assert.deepEqual(reference.variants.map(variant => variant.scripts.includes(name)), [false, false, false, false, false, false, true, true, true]);
+    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_workload_renewal.js')), [false, false, false, false, false, false, false, true, true]);
+    assert.deepEqual(reference.variants.map(variant => variant.scripts.includes('workspace_pending_actions.js')), [false, false, false, false, false, false, false, false, true]);
     for (const variant of reference.variants) {
       for (const managed of [false, true]) {
       const f = fixture({'operator_demo_portal.py': 'SCRIPT_FILES = (' + variant.scripts.map(JSON.stringify).join(', ') + ')\n'});
@@ -268,7 +273,7 @@ const tests = [
   }],
   ['X accounts and posting are admitted together only in the exact new roster', () => {
     const names = reference.variants[6].scripts;
-    assert.deepEqual(names, reference.scripts.filter(name => name !== 'workspace_workload_renewal.js'));
+    assert.deepEqual(names, reference.scripts.filter(name => !['workspace_workload_renewal.js', 'workspace_pending_actions.js'].includes(name)));
     assert.deepEqual(names.slice(names.indexOf('workspace_x.js'), names.indexOf('workspace_x.js') + 4),
       ['workspace_x.js', 'workspace_x_accounts.js', 'workspace_x_post.js', 'workspace_alchemy.js']);
     const changedRosters = [
@@ -286,7 +291,7 @@ const tests = [
   }],
   ['workload renewal is additive only in its exact new renderer roster', () => {
     const names = reference.variants[7].scripts;
-    assert.deepEqual(names, reference.scripts);
+    assert.deepEqual(names, reference.scripts.filter(name => name !== 'workspace_pending_actions.js'));
     assert.equal(names[names.indexOf('workspace_workload_renewal.js') + 1], 'workspace_applications.js');
     const changedRosters = [
       [...names, 'workspace_workload_renewal.js'],
@@ -302,7 +307,27 @@ const tests = [
     }
     assert.equal(forbiddenCalls, 0);
   }],
-  ['only the three exact X configuration rosters opt into the disabled-X GET flag and three additional reads', async () => {
+  ['pending actions is admitted only after notifications in its exact new renderer roster', () => {
+    const names = reference.variants[8].scripts;
+    assert.deepEqual(names, reference.scripts);
+    assert.deepEqual(names.slice(names.indexOf('workspace_notifications.js'), names.indexOf('workspace_notifications.js') + 3),
+      ['workspace_notifications.js', 'workspace_pending_actions.js', 'workspace_upstreams.js']);
+    const changedRosters = [
+      [...names, 'workspace_pending_actions.js'],
+      ['workspace_pending_actions.js', ...names.filter(name => name !== 'workspace_pending_actions.js')],
+      [...names.filter(name => !['workspace_pending_actions.js', 'app.js'].includes(name)), 'workspace_pending_actions.js', 'app.js'],
+      names.filter(name => name !== 'workspace_workload_renewal.js'),
+      ...reference.variants.slice(0, 7).map(variant => variant.scripts.flatMap(name =>
+        name === 'workspace_notifications.js' ? [name, 'workspace_pending_actions.js'] : [name])),
+    ];
+    for (const changed of changedRosters) {
+      const f = fixture({'operator_demo_portal.py': 'SCRIPT_FILES = (' + changed.map(JSON.stringify).join(', ') + ')\n'});
+      assert.throws(() => f.render(true), error => error.message === 'renderer_roster_refused');
+      assert.deepEqual(f.reads, ['operator_demo_portal.py'], 'refused roster never reads candidate assets');
+    }
+    assert.equal(forbiddenCalls, 0);
+  }],
+  ['only the four exact X configuration rosters opt into the disabled-X GET flag and three additional reads', async () => {
     for (const variant of reference.variants) {
       for (const managed of [false, true]) {
         const f = fixture({'operator_demo_portal.py': 'SCRIPT_FILES = (' + variant.scripts.map(JSON.stringify).join(', ') + ')\n'});
@@ -316,7 +341,7 @@ const tests = [
         }
       }
     }
-    for (const variantIndex of [5, 6, 7]) for (const managed of [false, true]) {
+    for (const variantIndex of [5, 6, 7, 8]) for (const managed of [false, true]) {
       const f = disabledX(managed, variantIndex);
       for (let index = 0; index < 3; index++) {
         const reply = await f.run('get(X_CONFIGURATION)');
@@ -367,7 +392,7 @@ const tests = [
       reply => reply.body_base64 = Buffer.from(JSON.stringify({...X_DISABLED, extra: true})).toString('base64'),
       reply => reply.body_base64 = Buffer.from('[]').toString('base64'),
       reply => reply.body_base64 = Buffer.from('{').toString('base64')]) {
-      for (const variantIndex of [5, 6, 7]) {
+      for (const variantIndex of [5, 6, 7, 8]) {
         const f = disabledX(false, variantIndex); mutate(f.context.fixtureReply);
         await assert.rejects(f.run('get(X_CONFIGURATION)'));
         assert.equal(f.run('xConfigurationBrowserReadComplete'), false);

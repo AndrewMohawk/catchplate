@@ -42,6 +42,24 @@ A real required action belongs on its authenticated review page. Notification li
 
 ## Inspect a client's request
 
+### Find a pending action
+
+New workspace builds include **Pending actions** for saved request metadata.
+Deployment status is recorded in the
+[project tracker](https://github.com/AndrewMohawk/serverware/blob/main/docs/project-completion.md#pending-actions--implemented-deployment-pending).
+Choose **Select request** to inspect its ID, client, route, method, expiry and
+policy. Reopening its exact link keeps that selection; a missing request never
+silently selects another. The queue shows at most the first 100 visible pending
+records, so an absent record is not proof of approval or denial.
+
+An empty queue is different from a load or authentication failure. Refresh only
+reads metadata. When protected review is unavailable, this page cannot approve,
+deny, decrypt private request details or complete a security-key action. A saved
+unknown decision outcome is not automatically retried. Notification delivery
+does not change any of these permissions.
+
+### Inspect audit history
+
 1. Open **Audit log → Refresh log**.
 2. Filter for **Allowed responses** or **Blocked / withheld responses**, or search by client, credential, permission or event.
 3. Match the recorded identity and outcome to the request you actually ran. Use **Load older events** if needed.

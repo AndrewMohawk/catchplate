@@ -50,6 +50,8 @@ class Suite:
 SUITES = (
     Suite("backend", "test_operator_demo_runtime.py"),
     Suite("backend", "test_operator_workspace_api.py"),
+    Suite("backend", "test_approval_capabilities_http.py", seconds=120),
+    Suite("backend", "test_authority_jit_review_receipt.py", seconds=60),
     Suite("backend", "test_operator_workload_renewal_contract.py", seconds=60),
     Suite("backend", "test_proxy_managed_renewal.py", seconds=60),
     Suite("backend", "test_operator_workload_renewal_store.py"),
@@ -122,6 +124,7 @@ SUITES = (
     Suite("notifications", "test_operator_notification_google_events.py"),
     Suite("notifications", "test_operator_notification_google_integration.py"),
     Suite("notifications", "test_operator_notification_provider_integration.py"),
+    Suite("ui_contract", "test_operator_catalog_assets.py", seconds=60),
     Suite("ui_contract", "test_operator_catalog_browser.cjs", "node", ("--self-test",), 60),
     Suite("ui_contract", "test_operator_guided_browser.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_npm_ui.cjs", "node", seconds=60),
@@ -135,6 +138,7 @@ SUITES = (
     Suite("ui_contract", "test_operator_runtime_browser_assets.cjs", "node", seconds=60),
     Suite("ui_contract", "test_approval_decision_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_workload_renewal_ui.cjs", "node", seconds=60),
+    Suite("ui_contract", "test_operator_pending_actions_ui.cjs", "node", seconds=60),
 )
 
 
@@ -253,6 +257,9 @@ def node_completion(script, raw):
             "scope": "actual approval UI functions with inert DOM and synthetic API/WebAuthn; not browser or protected authority acceptance"},
         "test_operator_workload_renewal_ui.cjs": {"ok": True, "browser": False, "network": False,
             "source": "closed renewal DTO and inert DOM only"},
+        "test_operator_pending_actions_ui.cjs": {"ok": True, "backendAcceptance": False,
+            "nativeReviewAcceptance": False,
+            "scope": "public queue module with inert DOM and synthetic GET responses"},
     }
     def unique(pairs):
         value = {}
@@ -270,6 +277,9 @@ def node_completion(script, raw):
             count = int(match[1]) if match else 0
         else:
             expected = shapes[script]
+            if script == "test_operator_pending_actions_ui.cjs":
+                expected = {**expected, "sourceSha256": hashlib.sha256(
+                    (ROOT / "serverware/operator_demo_web/workspace_pending_actions.js").read_bytes()).hexdigest()}
             result = json.loads(lines[-1], object_pairs_hook=unique)
             if type(result) is not dict or set(result) != set(expected) | {"groups"} \
                     or any(type(result[key]) is not type(value) or result[key] != value for key, value in expected.items()):
@@ -280,7 +290,7 @@ def node_completion(script, raw):
         if script in {"test_operator_catalog_browser.cjs", "test_operator_gmail_sdk_languages.cjs"}:
             return count if len(lines) == 1 else None
         return count if len(lines) - 1 == count and all(line.startswith("PASS ") for line in lines[:-1]) else None
-    except (ValueError, KeyError, UnicodeError):
+    except (OSError, ValueError, KeyError, UnicodeError):
         return None
 
 

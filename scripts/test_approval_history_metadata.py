@@ -223,7 +223,7 @@ class ApprovalRequestMetadataTests(unittest.TestCase):
         return {**{name: row[name] for name in METADATA_PUBLIC},
                 "approver_policy": json.loads(row["approver_policy_json"]) if row["approver_policy_json"] else None}
 
-    def query(self, identifier):
+    def query(self, identifier=None, *, listing=False, status=None, limit=50):
         selected = set()
         refused = []
         queries = []
@@ -243,7 +243,8 @@ class ApprovalRequestMetadataTests(unittest.TestCase):
         self.connection.set_authorizer(authorize)
         self.connection.set_trace_callback(queries.append)
         try:
-            result = db.get_approval_request_metadata(identifier)
+            result = (db.list_approvals(status=status, limit=limit) if listing
+                      else db.get_approval_request_metadata(identifier))
         finally:
             self.connection.set_authorizer(None)
             self.connection.set_trace_callback(None)
@@ -289,6 +290,21 @@ class ApprovalRequestMetadataTests(unittest.TestCase):
             redacted_display=json.dumps({"approver_policy": STORED_POLICY}))
         self.assertIsNone(expected["approver_policy"])
         self.assertEqual(self.query("selected"), expected)
+
+    def test_queue_selects_only_public_columns_with_exact_status_order_and_limit(self):
+        older = self.insert("older", requested_at="2026-10-12T00:00:00Z")
+        newer = self.insert("newer", requested_at="2026-10-13T00:00:00Z")
+        denied = self.insert("denied", status="denied", requested_at="2026-10-14T00:00:00Z")
+        self.assertEqual(self.query(listing=True, status="pending"), [newer, older])
+        self.assertEqual(self.query(listing=True, status="pending", limit=1), [newer])
+        self.assertEqual(self.query(listing=True), [denied, newer, older])
+        self.assertEqual(self.query(listing=True, status="pending", limit=0), [])
+
+    def test_queue_status_is_parameterized_and_native_material_is_not_read(self):
+        expected = self.insert(canonical_request="native-jit:v1:private-canonical",
+            redacted_display="native-jit:v1:private-display")
+        self.assertEqual(self.query(listing=True, status="pending"), [expected])
+        self.assertEqual(self.query(listing=True, status="pending' OR 1=1 --"), [])
 
 
 if __name__ == "__main__":

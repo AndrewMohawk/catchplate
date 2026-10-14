@@ -67,10 +67,13 @@ else {
   const xConfiguration = createXConfigurationView(workspace);
   connect = createConnectView(workspace, applications, proxy);
   const notifications = createNotificationsView(workspace);
+  const pendingActions = createPendingActionsView({onAuthenticationLost: workspace.authenticationLost});
+  workspace.onAuthenticationLost(pendingActions.authenticationLost);
   xAccounts = createXAccountsView(workspace, applications, connect);
   createGoogleView(workspace, applications, connect);
   function navigate() {
-    let view = location.hash.slice(1) || 'overview';
+    const approvalLocation = pendingApprovalLocation(location.pathname);
+    let view = location.hash.slice(1) || (approvalLocation ? 'pending-actions' : 'overview');
     if (view === 'main-content') { element('main-content').focus(); return; }
     if (!Object.hasOwn(operatorViews, view)) { view = 'overview'; history.replaceState(null, '', '#overview'); }
     for (const name of Object.keys(operatorViews)) {
@@ -81,6 +84,8 @@ else {
     element('page-label').textContent = operatorViews[view]; document.title = operatorViews[view] + ' - Serverware operator workspace';
     connect.show(view === 'connect');
     notifications.show(view === 'notifications');
+    pendingActions.show(view === 'pending-actions', {requestedId: approvalLocation?.id,
+      invalidLink: approvalLocation?.invalid === true});
     upstreams.show(view === 'proxy');
     googleConfiguration.show(view === 'proxy');
     xConfiguration.show(view === 'proxy');

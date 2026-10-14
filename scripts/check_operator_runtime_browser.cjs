@@ -31,9 +31,11 @@ const X_ACCOUNTS_SCRIPTS = X_CONFIGURATION_SCRIPTS.flatMap(name => name === 'wor
   [name, 'workspace_x_accounts.js', 'workspace_x_post.js'] : [name]);
 const WORKLOAD_RENEWAL_SCRIPTS = X_ACCOUNTS_SCRIPTS.flatMap(name => name === 'workspace_applications.js' ?
   ['workspace_workload_renewal.js', name] : [name]);
+const PENDING_ACTIONS_SCRIPTS = WORKLOAD_RENEWAL_SCRIPTS.flatMap(name => name === 'workspace_notifications.js' ?
+  [name, 'workspace_pending_actions.js'] : [name]);
 const SCRIPT_ROSTERS = [PRE_GMAIL_SCRIPTS.filter(name => !['workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js'].includes(name)),
   PRE_GMAIL_SCRIPTS.filter(name => !['workspace_alchemy.js', 'workspace_aws.js'].includes(name)),
-  PRE_GMAIL_SCRIPTS.filter(name => name !== 'workspace_aws.js'), PRE_GMAIL_SCRIPTS, SCRIPTS, X_CONFIGURATION_SCRIPTS, X_ACCOUNTS_SCRIPTS, WORKLOAD_RENEWAL_SCRIPTS];
+  PRE_GMAIL_SCRIPTS.filter(name => name !== 'workspace_aws.js'), PRE_GMAIL_SCRIPTS, SCRIPTS, X_CONFIGURATION_SCRIPTS, X_ACCOUNTS_SCRIPTS, WORKLOAD_RENEWAL_SCRIPTS, PENDING_ACTIONS_SCRIPTS];
 const sha = value => createHash('sha256').update(value).digest('hex');
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ?
   Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
@@ -172,10 +174,10 @@ function sourceScriptFiles() {
 }
 function disabledXConfigurationForSource() {
   const selected = serial(sourceScriptFiles());
-  return [X_CONFIGURATION_SCRIPTS, X_ACCOUNTS_SCRIPTS, WORKLOAD_RENEWAL_SCRIPTS].some(roster => selected === serial(roster));
+  return [X_CONFIGURATION_SCRIPTS, X_ACCOUNTS_SCRIPTS, WORKLOAD_RENEWAL_SCRIPTS, PENDING_ACTIONS_SCRIPTS].some(roster => selected === serial(roster));
 }
 function selectXConfigurationProfile() {
-  if (managedX) need([X_ACCOUNTS_SCRIPTS, WORKLOAD_RENEWAL_SCRIPTS].some(roster => serial(sourceScriptFiles()) === serial(roster)), 'managed_x_source_profile_refused');
+  if (managedX) need([X_ACCOUNTS_SCRIPTS, WORKLOAD_RENEWAL_SCRIPTS, PENDING_ACTIONS_SCRIPTS].some(roster => serial(sourceScriptFiles()) === serial(roster)), 'managed_x_source_profile_refused');
   xConfigurationDisabled = !managedX && disabledXConfigurationForSource();
 }
 function documentBytes() {

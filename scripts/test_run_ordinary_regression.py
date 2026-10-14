@@ -43,6 +43,8 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual((denial.category, denial.runtime, denial.arguments, denial.seconds),
                 ("backend", "python", (), 60))
         self.assertIn("test_operator_notification_google_events.py", paths)
+        self.assertIn("test_approval_capabilities_http.py", paths)
+        self.assertIn("test_authority_jit_review_receipt.py", paths)
         for script in ("test_operator_workload_renewal_contract.py", "test_proxy_managed_renewal.py",
                 "test_operator_workload_renewal_store.py", "test_operator_workload_renewal_api.py",
                 "test_operator_workload_renewal.py", "test_managed_client.py",
@@ -65,6 +67,12 @@ class RunnerTests(unittest.TestCase):
         decisions = next(row for row in runner.SUITES if row.script == "test_approval_decision_ui.cjs")
         self.assertEqual((decisions.category, decisions.runtime, decisions.arguments, decisions.seconds),
             ("ui_contract", "node", (), 60))
+        pending = next(row for row in runner.SUITES if row.script == "test_operator_pending_actions_ui.cjs")
+        self.assertEqual((pending.category, pending.runtime, pending.arguments, pending.seconds),
+            ("ui_contract", "node", (), 60))
+        assets = next(row for row in runner.SUITES if row.script == "test_operator_catalog_assets.py")
+        self.assertEqual((assets.category, assets.runtime, assets.arguments, assets.seconds),
+            ("ui_contract", "python", (), 60))
         for script in ("test_operator_guided_checker.py", "test_operator_guided_fixture.py",
                 "test_operator_guided_browser.cjs"):
             guided = next(row for row in runner.SUITES if row.script == script)
@@ -231,6 +239,11 @@ class RunnerTests(unittest.TestCase):
                 "scope": "actual approval UI functions with inert DOM and synthetic API/WebAuthn; not browser or protected authority acceptance"}, "PASS fixture\n"),
             "test_operator_workload_renewal_ui.cjs": ({"ok": True, "browser": False, "network": False,
                 "source": "closed renewal DTO and inert DOM only"}, "PASS fixture\n"),
+            "test_operator_pending_actions_ui.cjs": ({"ok": True, "backendAcceptance": False,
+                "nativeReviewAcceptance": False,
+                "scope": "public queue module with inert DOM and synthetic GET responses",
+                "sourceSha256": hashlib.sha256((runner.ROOT /
+                    "serverware/operator_demo_web/workspace_pending_actions.js").read_bytes()).hexdigest()}, "PASS fixture\n"),
         }
         self.assertEqual({row.script for row in runner.SUITES if row.runtime == "node"},
             set(examples) | {"test_operator_runtime_browser_assets.cjs"})
@@ -246,7 +259,7 @@ class RunnerTests(unittest.TestCase):
                 for key in shape:
                     self.assertIsNone(runner.node_completion(script, wire({name: value for name, value in valid.items()
                         if name != key})))
-                    if key in {"browser", "network"}:
+                    if key in {"browser", "network", "backendAcceptance", "nativeReviewAcceptance"}:
                         self.assertIsNone(runner.node_completion(script, wire({**valid, key: True})))
                         self.assertIsNone(runner.node_completion(script, wire({**valid, key: 0})))
                 self.assertIsNone(runner.node_completion(script, b""))
@@ -263,10 +276,22 @@ class RunnerTests(unittest.TestCase):
                 b"no backend or enforcement acceptance", b"backend and enforcement accepted")))
         asset = "test_operator_runtime_browser_assets.cjs"
         self.assertEqual(runner.node_completion(asset,
-            b"PASS fixture\nPASS 1 pure runtime-browser asset groups; no browser or service calls\n"), 1)
+            b"PASS fixture\n" * 33 + b"PASS 33 pure runtime-browser asset groups; no browser or service calls\n"), 33)
         for raw in (b"", b"PASS 0 pure runtime-browser asset groups; no browser or service calls\n",
-                b"PASS 2 pure runtime-browser asset groups; no browser or service calls\n"):
+                b"PASS 2 pure runtime-browser asset groups; no browser or service calls\n",
+                b"PASS fixture\n" * 32 + b"PASS 33 pure runtime-browser asset groups; no browser or service calls\n"):
             self.assertIsNone(runner.node_completion(asset, raw))
+        pending = "test_operator_pending_actions_ui.cjs"
+        pending_shape = {**examples[pending][0], "groups": 18}
+        def pending_wire(value, count=18):
+            return b"PASS fixture\n" * count + json.dumps(value).encode() + b"\n"
+        self.assertEqual(runner.node_completion(pending, pending_wire(pending_shape)), 18)
+        for count in (17, 19):
+            self.assertIsNone(runner.node_completion(pending, pending_wire(pending_shape, count)))
+        for digest in ("0" * 64, "not-a-hash", None):
+            self.assertIsNone(runner.node_completion(pending, pending_wire({**pending_shape, "sourceSha256": digest})))
+        with patch.object(runner.Path, "read_bytes", side_effect=OSError):
+            self.assertIsNone(runner.node_completion(pending, pending_wire(pending_shape)))
         script = "test_operator_npm_install_ui.cjs"
         for code, status in (("print('')", "node_completion_unobserved"),
                 ("raise RuntimeError('private')", "failed")):

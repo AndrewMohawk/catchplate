@@ -82351,6 +82351,7 @@ def deny_request(
 
 
 def list_approvals(status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    """List public metadata without fetching private review or assertion material."""
     args: list[Any] = []
     where = ""
     if status:
@@ -82359,7 +82360,8 @@ def list_approvals(status: str | None = None, limit: int = 50) -> list[dict[str,
     args.append(limit)
     with connect() as conn:
         rows = conn.execute(
-            f"SELECT * FROM approval_requests {where} ORDER BY requested_at DESC LIMIT ?",
+            f"SELECT {', '.join(_APPROVAL_PUBLIC_FIELDS)}, approver_policy_json "
+            f"FROM approval_requests {where} ORDER BY requested_at DESC LIMIT ?",
             args,
         ).fetchall()
     return [row_to_approval_public(row) for row in rows]

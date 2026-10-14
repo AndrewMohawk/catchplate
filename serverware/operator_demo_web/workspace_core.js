@@ -179,7 +179,7 @@ function chooseModeOptions(id, items, placeholder) {
   }
 }
 const operatorViews = {connect: 'Set up access', overview: 'Overview', credentials: 'Credentials', applications: 'Clients',
-  'access-rules': 'Permissions', proxy: 'Proxy setup', audit: 'Audit log', notifications: 'Notifications'};
+  'access-rules': 'Permissions', 'pending-actions': 'Pending actions', proxy: 'Proxy setup', audit: 'Audit log', notifications: 'Notifications'};
 function operatorSyntheticPermissions(catalog) {
   // Destination matching is not provenance: preserve names/records and require
   // an explicit choice even if only one saved permission matches the fixture.
@@ -455,11 +455,11 @@ function projectCatalog(value) {
     observed_activity: projectObservedAccountActivity(value.observed_activity, credentials, applications, accessRules)};
 }
 function createOperatorWorkspace() {
-  let writeInFlight = false;
+  let writeInFlight = false, authenticationRequired = false;
   const consentOwners = new Set();
   const state = {catalog: null, consentHold: false, uncertain: false,
     get busy() { return writeInFlight || this.consentHold; }, set busy(value) { writeInFlight = value; }};
-  const listeners = []; let epoch = 0; let poll; let polls = 0;
+  const listeners = [], authenticationListeners = []; let epoch = 0; let poll; let polls = 0;
   const emit = () => {
     listeners.forEach(callback => callback());
     if (!state.catalog) for (const id of ['credentials-list', 'applications-list', 'access-rules-list']) {
@@ -474,11 +474,17 @@ function createOperatorWorkspace() {
     return !limit || limit.active < limit.active_max && limit.retained < limit.retained_max;
   }
   function loaded() { const policy = state.catalog?.policy; return Boolean(policy && policy.activation === 'active' && policy.loaded_policy_hash === policy.policy_hash); }
+  function authenticationLost() {
+    ++epoch; clearTimeout(poll); authenticationRequired = true; state.catalog = null;
+    element('load-error-text').textContent = 'Your session or request origin could not be verified. Reload and sign in again.';
+    element('load-error').hidden = false; element('mutation-review-confirm').disabled = true;
+    try { authenticationListeners.forEach(callback => callback()); } finally { emit(); }
+  }
   async function api(path, options = {}) {
     const response = await fetch(path, {credentials: 'same-origin', cache: 'no-store', redirect: 'error',
       signal: AbortSignal.timeout(30000), ...options});
     if ([401, 403].includes(response.status)) {
-      state.catalog = null; emit(); throw operatorError('Your session or request origin could not be verified. Reload and sign in again.');
+      authenticationLost(); throw operatorError('Your session or request origin could not be verified. Reload and sign in again.');
     }
     if (!response.ok) {
       const messages = {404: 'The resource was not found. Review refreshed saved state.',
@@ -491,12 +497,15 @@ function createOperatorWorkspace() {
     return response.json();
   }
   async function refresh({manual = false} = {}) {
+    // Only an explicit refresh may re-establish a session. An older response,
+    // queued poll or post-mutation refresh must not undo authentication loss.
+    if (authenticationRequired && !manual) return false;
     if (manual) polls = 0;
     clearTimeout(poll); const version = ++epoch;
     try {
       const next = projectCatalog(await api('/api/operator-demo/catalog'));
       if (version !== epoch) return false;
-      state.catalog = next; element('load-error').hidden = true;
+      authenticationRequired = false; state.catalog = next; element('load-error').hidden = true;
       element('mutation-review-confirm').disabled = !state.uncertain;
       emit();
       if (!loaded() && polls++ < 15) poll = setTimeout(() => refresh(), 2000);
@@ -536,7 +545,8 @@ function createOperatorWorkspace() {
     state.uncertain = false; element('mutation-review').hidden = true; emit();
   });
   window.addEventListener('pagehide', () => clearTimeout(poll));
-  return {state, api, refresh, mutate, requireReview, ready, loaded, emit, writeInFlight: () => writeInFlight,
+  return {state, api, refresh, mutate, requireReview, ready, loaded, emit, authenticationLost, writeInFlight: () => writeInFlight,
+    onAuthenticationLost: callback => authenticationListeners.push(callback),
     setConsentHold(value, owner = 'google-consent') {
       if (value) consentOwners.add(owner); else consentOwners.delete(owner);
       const held = consentOwners.size > 0;

@@ -79,6 +79,8 @@ class OperatorCatalogAssets(unittest.TestCase):
             for consumer in ('workspace_resources.js', 'workspace_proxy_audit.js', 'workspace_connect.js', 'app.js'):
                 self.assertLess(reads.index(provider), reads.index(consumer))
         self.assertEqual(reads.count('workspace_notifications.js'), 1)
+        self.assertEqual(reads.count('workspace_pending_actions.js'), 1)
+        self.assertLess(reads.index('workspace_pending_actions.js'), reads.index('app.js'))
         self.assertEqual(reads.count('workspace_upstreams.js'), 1)
         self.assertLess(reads.index('workspace_upstreams.js'), reads.index('app.js'))
         self.assertNotIn('__OPERATOR_DEMO_', document)
@@ -90,7 +92,7 @@ class OperatorCatalogAssets(unittest.TestCase):
         ids = [attrs['id'] for _, attrs, _ in items if 'id' in attrs]
         self.assertEqual(len(ids), len(set(ids)))
         index = {attrs['id']: (tag, attrs) for tag, attrs, _ in items if 'id' in attrs}
-        for name in ('overview', 'credentials', 'applications', 'access-rules', 'proxy', 'audit', 'notifications'):
+        for name in ('overview', 'credentials', 'applications', 'access-rules', 'pending-actions', 'proxy', 'audit', 'notifications'):
             self.assertEqual(index[name][0], 'section')
             self.assertTrue(any(tag == 'a' and attrs.get('href') == '#' + name for tag, attrs, _ in items))
 
@@ -99,7 +101,7 @@ class OperatorCatalogAssets(unittest.TestCase):
         parsed = Elements(document)
         self.assertEqual([item['href'] for item in parsed.navigation], [
             '#overview', '#credentials', '#applications', '#access-rules',
-            '#proxy', '#audit', '#notifications'])
+            '#pending-actions', '#proxy', '#audit', '#notifications'])
         self.assertRegex(document, r'href="#credentials">Credentials</a>')
         self.assertRegex(document, r'href="#applications">Clients</a>')
         self.assertRegex(document, r'id="overview-connect-service"[^>]*>Set up access</a>')
@@ -237,8 +239,12 @@ class OperatorCatalogAssets(unittest.TestCase):
         for forbidden in ('localStorage', 'indexedDB', 'innerHTML', '--insecure', '--proxy-insecure'):
             self.assertFalse(forbidden in script, forbidden + ' is not permitted in public assets')
         for name, source in scripts.items():
-            if name not in {'workspace_google_reauthorization.js', 'workspace_google_configuration.js', 'workspace_x_configuration.js', 'workspace_x_accounts.js', 'workspace_notifications.js', 'workspace_upstreams.js'}:
+            if name not in {'workspace_google_reauthorization.js', 'workspace_google_configuration.js', 'workspace_x_configuration.js', 'workspace_x_accounts.js', 'workspace_notifications.js', 'workspace_upstreams.js', 'workspace_pending_actions.js'}:
                 self.assertFalse('sessionStorage' in source, name + ' must not persist client state')
+        pending_actions = scripts['workspace_pending_actions.js']
+        self.assertIn("sessionStorage.getItem('serverware.approvalDecisionUncertain.' + id)", pending_actions)
+        for mutation in ('sessionStorage.setItem', 'sessionStorage.removeItem', 'sessionStorage.clear'):
+            self.assertNotIn(mutation, pending_actions, 'metadata queue must not change decision recovery state')
         # Reauthorization retains only a public operation UUID for lost-response
         # recovery. Its existing browser suite checks the actual storage value;
         # no provider secret or application token may use this exception.
@@ -261,17 +267,22 @@ class OperatorCatalogAssets(unittest.TestCase):
         self.assertLess(configuration.index('if (!retain({operation_id: payload.operation_id, kind}))'),
                         configuration.index("const pending = request(googleConfigurationPath +"))
         # X first-save recovery stores the UUID string alone, not its client
-        # settings, receipt or secret. Close every storage access and both
-        # producer paths; this is not a general exception for the new asset.
+        # settings, receipt or secret. Close every storage access, the single
+        # save producer and confirmed retirement. Viewing history cannot write.
         def assert_x_public_reference(source):
             self.assertEqual(re.findall(r'\bsessionStorage\.([A-Za-z]+)\(([^)]*)\)', source),
                              [('getItem', 'xConfigurationKey'), ('setItem', 'xConfigurationKey, id'),
-                              ('removeItem', 'xConfigurationKey')])
-            self.assertEqual(len(re.findall(r'\bsessionStorage\b', source)), 3)
+                              ('getItem', 'xConfigurationKey'), ('removeItem', 'xConfigurationKey'),
+                              ('getItem', 'xConfigurationKey')])
+            self.assertEqual(len(re.findall(r'\bsessionStorage\b', source)), 5)
             self.assertIn("xConfigurationKey = 'serverware.operator.x.configuration.operation.v1'", source)
             self.assertIn('if (saved !== null) { if (!upstreamUUID(saved)) throw new Error(); operationId = saved; }', source)
             self.assertEqual(re.findall(r'\bretain\(([^()]*)\)', source),
-                             ['id', 'next.operation.operation_id', 'payload.operation_id'])
+                             ['id', 'payload.operation_id'])
+            self.assertIn('operationId !== id || sessionStorage.getItem(xConfigurationKey) !== id', source)
+            self.assertIn('if (sessionStorage.getItem(xConfigurationKey) !== null) throw new Error();', source)
+            self.assertIn('if (!refreshed || !current())', source)
+            self.assertIn('retire(operationId);', source)
             self.assertIn('const next = projectXConfiguration(await request(xConfigurationPath));', source)
             self.assertIn('payload = {operation_id: crypto.randomUUID(),', source)
             self.assertLess(source.index('if (!retain(payload.operation_id))'),

@@ -17985,6 +17985,33 @@ def break_glass_grant(
     }
 
 
+@app.get("/api/approvals/capabilities")
+def approval_capabilities(
+    request: Request,
+    identity: AdminIdentity = Depends(require_admin),
+) -> Response:
+    """Describe this actor's available UI actions without opening authority."""
+    headers = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+    if (request.scope.get("query_string", b"")
+            or request.scope.get("raw_path", b"/api/approvals/capabilities")
+                != b"/api/approvals/capabilities"
+            or request.headers.get("content-length", "0") != "0"
+            or request.headers.get("transfer-encoding") is not None):
+        raise HTTPException(status_code=400,
+            detail="approval capabilities requires an exact bodyless request", headers=headers)
+    can_list = identity.has_any_role({"approver", "auditor"})
+    # Neither ordinary host trust, environment flags nor the existing sealing
+    # owner grants native review disclosure. No admitted current-read opener
+    # exists yet; do not bootstrap one or advertise decisions from this read.
+    return JSONResponse({
+        "schema": "serverware.approvalCapabilities/v1",
+        "can_list": can_list,
+        "can_open_native_review": False,
+        "can_decide": False,
+        "reason": "protected_review_unavailable" if can_list else "role_required",
+    }, headers=headers)
+
+
 @app.get("/api/approvals")
 def approvals(
     status: str | None = None,

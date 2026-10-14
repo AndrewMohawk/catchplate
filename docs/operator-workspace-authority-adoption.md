@@ -156,6 +156,32 @@ evidence and must remain labelled as such.
 
 ## External prerequisites versus unfinished code
 
+### Review disclosure without control-plane plaintext access
+
+Source review identified a compatible direct-browser design using the existing
+native static-credential `Accepted`/`BrowserTls` pattern. A dedicated authenticated
+portal coordinator opens a fixed native review page. Native retains a secret
+nonce under its own HttpOnly host-only cookie and returns only a signed public
+challenge. The portal authorizes that challenge through the existing measured
+planner, using the original portal OIDC session and current approval, retained
+pair, policy, WebAuthn, RBAC and trust roots. The grant binds the exact native
+owner, challenge, recipient and original deadline; sealing authority alone is
+insufficient.
+
+Only the signed grant and opaque originals cross the exact-origin/exact-window
+browser handoff. A separately admitted native opening owner verifies the native
+cookie and actual TLS/broker ownership, opens and renders on the native origin,
+and returns public opening evidence for the independently checked receipt
+transaction. Keep portal cookies and WebAuthn ceremonies on their configured
+origin/RP. The dedicated coordinator needs a narrow COOP popup exception; the
+whole workspace must not gain it. Do not assume two browser fetches reuse a TLS
+connection or replace native TLS with host termination. Native rendering also
+needs an immutable source-owned review digest, not the mutable legacy history
+document. This connected flow is not implemented by the metadata queue, the
+existing seal owner, static intake or a legacy review receipt.
+
+### Remaining prerequisites
+
 The owner integrations, adoption contract, provider/notification adapters and
 preservation tests are implementable code work. They are not blocked merely by
 the absence of a new pilot.

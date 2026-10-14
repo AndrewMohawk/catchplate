@@ -4,7 +4,7 @@
 Nothing here stops/captures live services, promotes a database, runs the Rust
 binary, retries a claim, restores a backup or declares its own container removed.
 """
-from contextlib import closing, redirect_stdout
+from contextlib import closing, contextmanager, redirect_stdout
 import importlib
 import json
 import os
@@ -113,7 +113,51 @@ def migration_cli(role):
         runpy.run_path(str(path), run_name="__main__")
 
 
-def freeze_migrated():
+@contextmanager
+def held_database_bytes(shared, directory, output):
+    """Hold the pre-start generation; this is not database/schema admission."""
+    directory, output = Path(directory), Path(output)
+    path = directory / shared.DATABASE
+    shared.sidecars_absent(directory)
+    h.need(not any(os.path.lexists(output / (role + ".claim.json"))
+        for role in ("startup1", "startup2")))
+    with shared.held_file(path) as (fd, original, raw):
+        commitment = {"name": shared.DATABASE, "sha256": h.sha(raw),
+            "bytes": len(raw), "identity": list(original)}
+
+        def verify():
+            shared.sidecars_absent(directory)
+            h.need(not any(os.path.lexists(output / (role + ".claim.json"))
+                for role in ("startup1", "startup2")))
+            h.need(shared.identity(os.fstat(fd)) == original
+                and shared.identity(path.stat(follow_symlinks=False)) == original)
+            current = os.pread(fd, shared.MAX_FILE + 1, 0)
+            h.need(len(current) == commitment["bytes"] and h.sha(current) == commitment["sha256"]
+                and shared.identity(os.fstat(fd)) == original
+                and shared.identity(path.stat(follow_symlinks=False)) == original)
+            shared.sidecars_absent(directory)
+
+        verify()
+        yield commitment, verify
+        verify()  # Includes the generation after the byte receipt has been fsynced.
+
+
+def save_database_bytes(output, value):
+    """Exclusive, read-only receipt; failed role/host receipts never authorize use."""
+    path = Path(output) / "migrated-database-bytes.json"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(h.canon(value) + b"\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    directory_fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def freeze_migrated(inputs_sha, proof):
     shared = observer()
     migration = importlib.import_module("migrate_operator_authority_source_revision")
     h.need(Path(migration.__file__) == Path("/app/scripts/migrate_operator_authority_source_revision.py")
@@ -122,39 +166,54 @@ def freeze_migrated():
     helpers = migration.source(pins, Path("/data"))
     shared.sidecars_absent(Path("/data"))
     before = h.read("/out/serverware.sqlite3.baseline.json")
-    plan = h.read("/out/plan.json")
-    receipt = h.read("/out/apply.json")
+    plan_raw, receipt_raw = h.raw_file("/out/plan.json"), h.raw_file("/out/apply.json")
+    plan, receipt = h.strict_json(plan_raw), h.strict_json(receipt_raw)
+    h.need(plan["schema"] == migration.SCHEMA and plan["transitionId"] == migration.TRANSITION
+        and plan["pinsSha256"] == migration.PIN_SHA256 == "sha256:" + h.PIN_SHA
+        and plan["targetContractDigest"] == pins["target"]["sourceContractDigest"])
     h.need(receipt["schema"] == migration.RECEIPT_SCHEMA and receipt["status"] == "committed"
         and receipt["transitionId"] == migration.TRANSITION and receipt["pinsSha256"] == migration.PIN_SHA256
         and receipt["planSha256"] == shared.sha(shared.canonical(plan))
         and receipt["backupSha256"] == shared.sha(h.raw_file("/out/recovered-main.backup"))
         and receipt["beforeContract"] == h.read("/out/baseline-contract.json")
         and receipt["rebuiltTables"] == list(migration.CHANGED_TABLES))
-    with closing(sqlite3.connect("file:/data/serverware.sqlite3?mode=ro&immutable=1", uri=True, timeout=0)) as conn:
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA query_only=ON")
-        conn.execute("BEGIN")
-        admitted = migration.inspect(conn, pins, helpers, target=True)
-        after = h.db_snapshot(conn, shared)
-        conn.rollback()
-    migration.require_delta(before["objects"], after["objects"], pins)
-    h.need(after["orderedAudit"] == before["orderedAudit"]
-        and after["persistentJournalFormat"] == before["persistentJournalFormat"]
-        and set(after["rows"]) == set(before["rows"])
-        and all(after["rows"][name] == row for name, row in before["rows"].items() if name != shared.CONTRACT_TABLE))
-    h.need(admitted["contract"] == receipt["afterContract"] and admitted["contractRowid"] == plan["contractRowid"]
-        and admitted["orderedAudit"] == plan["orderedAudit"] == receipt["orderedAudit"]
-        and receipt["preservedOldRowsSha256"] == shared.sha(shared.canonical(
-            {name: row for name, row in before["rows"].items() if name != shared.CONTRACT_TABLE})))
-    h.need({key: value for key, value in receipt["beforeContract"].items() if key not in migration.CONTRACT_FIELDS}
-        == {key: value for key, value in receipt["afterContract"].items() if key not in migration.CONTRACT_FIELDS})
-    h.need(shared.tree(Path("/data")) == h.read("/out/recovered-files.json")
-        and h.custody_snapshot() == h.read("/out/custody-baseline.json"))
-    h.save("/out/migrated-database.json", after)
-    h.save("/out/expected-contract.json", admitted["contract"])
+    with held_database_bytes(shared, Path("/data"), Path("/out")) as (commitment, verify):
+        with closing(sqlite3.connect("file:/data/serverware.sqlite3?mode=ro&immutable=1", uri=True, timeout=0)) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA query_only=ON")
+            conn.execute("BEGIN")
+            admitted = migration.inspect(conn, pins, helpers, target=True)
+            after = h.db_snapshot(conn, shared)
+            conn.rollback()
+        migration.require_delta(before["objects"], after["objects"], pins)
+        h.need(after["orderedAudit"] == before["orderedAudit"]
+            and after["persistentJournalFormat"] == before["persistentJournalFormat"]
+            and set(after["rows"]) == set(before["rows"])
+            and all(after["rows"][name] == row for name, row in before["rows"].items() if name != shared.CONTRACT_TABLE))
+        h.need(admitted["contract"] == receipt["afterContract"] and admitted["contractRowid"] == plan["contractRowid"]
+            and admitted["orderedAudit"] == plan["orderedAudit"] == receipt["orderedAudit"]
+            and receipt["preservedOldRowsSha256"] == shared.sha(shared.canonical(
+                {name: row for name, row in before["rows"].items() if name != shared.CONTRACT_TABLE})))
+        h.need({key: value for key, value in receipt["beforeContract"].items() if key not in migration.CONTRACT_FIELDS}
+            == {key: value for key, value in receipt["afterContract"].items() if key not in migration.CONTRACT_FIELDS})
+        h.need(shared.tree(Path("/data")) == h.read("/out/recovered-files.json")
+            and h.custody_snapshot() == h.read("/out/custody-baseline.json"))
+        h.save("/out/migrated-database.json", after)
+        h.save("/out/expected-contract.json", admitted["contract"])
+        h.need(h.raw_file("/out/plan.json") == plan_raw and h.raw_file("/out/apply.json") == receipt_raw)
+        verify()
+        save_database_bytes("/out", {"schema": "serverware.sourceRevisionRetainedDatabaseBytes/v1",
+            "candidateCommit": COMMIT, "inputsSha256": inputs_sha, "sourceProof": proof,
+            "transitionId": migration.TRANSITION, "pinsSha256": migration.PIN_SHA256,
+            "planSha256": receipt["planSha256"], "planFileSha256": h.sha(plan_raw),
+            "migrationReceiptSha256": h.sha(receipt_raw), "migratedBaselineSha256": h.sha(h.canon(after)),
+            "database": commitment, "observation": "freeze-before-first-startup",
+            "sidecarsAbsent": True, "startupClaimsAbsent": True, "databasePromoted": False,
+            "requiredPhaseReceipt": "phase-freeze.json", "hostCleanupVerification": "required"})
     h.save("/out/freeze.json", {"ok": True, "tables": len(after["rows"]),
         "auditCount": after["rows"]["audit_events"]["count"], "orderedAudit": after["orderedAudit"],
-        "migratedBaselineSha256": h.sha(h.canon(after)), "migrationReceiptSha256": h.sha(h.raw_file("/out/apply.json")),
+        "migratedBaselineSha256": h.sha(h.canon(after)), "migrationReceiptSha256": h.sha(receipt_raw),
+        "migratedDatabaseBytesSha256": h.sha(h.raw_file("/out/migrated-database-bytes.json")),
         "exactFourContractFieldsOnly": True, "allOtherRowsExact": True, "custodyExact": True})
 
 
@@ -233,7 +292,7 @@ def main():
     elif role in ("plan", "apply"):
         migration_cli(role)
     elif role == "freeze":
-        freeze_migrated()
+        freeze_migrated(inputs_sha, proof)
     elif role.startswith("startup"):
         h.startup(role, observer())
     elif role.startswith("observe"):

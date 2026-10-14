@@ -309,7 +309,7 @@ def _complete_native_review_on_work(*, process, originals, expectations,
     # Only the real fixed client can publish the completion. A generic executor
     # reply or a caller-provided receipt cannot reach the signing suffix.
     completion_original = evidence.production._callback(work,
-        lambda: transport._exchange_on_configuration(decision_config,
+        lambda: transport._exchange_native_jit_review_on_configuration(decision_config,
             action="complete", request_bytes=complete_original, deadline_ns=bound))
     live()
     receipt = authorization._verify_receipt_on_work(receipt_bytes=completion_original,

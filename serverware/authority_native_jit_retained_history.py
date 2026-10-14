@@ -6,7 +6,7 @@ attestation, database provenance or current authority. Original sealing was
 admitted before retention; its expired seal window must not be renewed or
 reverified as fresh opening evidence. Fresh disclosure has a separate purpose.
 
-The supported historical sources are the explicit v349/v350 profiles below. Their
+The supported historical sources are the explicit v349/v350/v351 profiles below. Their
 requests keep their original manifest, handlers, intents and literal bytes.
 There is no installed-manifest comparison, configurable compatibility list,
 private runtime input, key loading, decryption, resealing or persistence here.
@@ -35,10 +35,14 @@ SEALED_MANIFEST = "sha256:b708d9f97ca989abf0411054bbc23d02262fb5a67bcab345246650
 SEALED_SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.349"
 FRESH_SEALED_MANIFEST = "sha256:ed6d471a03516c96aa4968b89e4d220f9d5aaa0dfc4c1f848acfcc58343de4f0"
 FRESH_SEALED_SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.350"
-# Both formats retain exactly the fixed request/handler/adapter grammar below.
+SEALED_351_MANIFEST = "sha256:bb0f9a53066e10042f83a1576d2c44b1dcf497eee457bb8d3146d86f4d526256"
+SEALED_351_SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.351"
+# .351 adds successor receipt-frame custody, not a new sealing/request format.
+# All three profiles retain the fixed request/handler/adapter grammar below.
 # Never substitute the installed manifest: an unknown future format is refused.
 SEALED_PROFILES = ((SEALED_MANIFEST, SEALED_SOURCE_REVISION),
-    (FRESH_SEALED_MANIFEST, FRESH_SEALED_SOURCE_REVISION))
+    (FRESH_SEALED_MANIFEST, FRESH_SEALED_SOURCE_REVISION),
+    (SEALED_351_MANIFEST, SEALED_351_SOURCE_REVISION))
 ERROR = "Native JIT retained history is unavailable"
 _REQUEST_FIELDS = frozenset({"schema", "operation", "operationId", "requestDigest",
     "handler", "operationManifestDigest", "arguments"})

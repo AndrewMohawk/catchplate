@@ -47,6 +47,10 @@ NATIVE_JIT_REVIEW_AUTHORIZE_HEAD_QUERY_REQUEST_MAGIC = b"SWJAQR01"
 NATIVE_JIT_REVIEW_AUTHORIZE_HEAD_OBSERVATION_RESPONSE_MAGIC = b"SWJAST01"
 NATIVE_JIT_REVIEW_RECEIPT_HEAD_QUERY_REQUEST_MAGIC = b"SWJJQR01"
 NATIVE_JIT_REVIEW_RECEIPT_HEAD_OBSERVATION_RESPONSE_MAGIC = b"SWJJST01"
+NATIVE_JIT_REVIEW_RESERVE_REQUEST_MAGIC = b"SWJNRS01"
+NATIVE_JIT_REVIEW_COMPLETE_REQUEST_MAGIC = b"SWJNCP01"
+NATIVE_JIT_REVIEW_REQUEST_MAGICS = (
+    NATIVE_JIT_REVIEW_RESERVE_REQUEST_MAGIC, NATIVE_JIT_REVIEW_COMPLETE_REQUEST_MAGIC)
 REQUEST_MAGICS = (RESERVE_REQUEST_MAGIC, COMPLETE_REQUEST_MAGIC)
 MAX_REQUEST_BYTES = 256 * 1024
 MAX_RECEIPT_BYTES = 16 * 1024
@@ -100,6 +104,24 @@ def _recv_request(connection, *, prefix, deadline_ns):
     if type(prefix) is not bytes or prefix not in REQUEST_MAGICS:
         raise AuthorityTransportError("current-root request magic is invalid")
     action = "reserve" if prefix == RESERVE_REQUEST_MAGIC else "complete"
+    return _recv_control(connection, action=action, deadline_ns=deadline_ns)
+
+
+def _native_jit_review_action(action):
+    _action(action)
+    return (NATIVE_JIT_REVIEW_RESERVE_REQUEST_MAGIC if action == "reserve"
+        else NATIVE_JIT_REVIEW_COMPLETE_REQUEST_MAGIC)
+
+
+def _recv_native_jit_review_request(connection, *, prefix, deadline_ns):
+    """Native peer/purpose admission must precede this opaque body read."""
+    if type(prefix) is not bytes or prefix not in NATIVE_JIT_REVIEW_REQUEST_MAGICS:
+        raise AuthorityTransportError("native review current-root request magic is invalid")
+    action = "reserve" if prefix == NATIVE_JIT_REVIEW_RESERVE_REQUEST_MAGIC else "complete"
+    return _recv_control(connection, action=action, deadline_ns=deadline_ns)
+
+
+def _recv_control(connection, *, action, deadline_ns):
     length = int.from_bytes(io._recv_exact_until(connection, 8, deadline_ns=deadline_ns), "big")
     if not 2 <= length <= MAX_REQUEST_BYTES:
         raise AuthorityTransportError("current-root request length exceeds its source bound")
@@ -242,6 +264,9 @@ def _socket_exchange(config, *, purpose, original_bytes, deadline_ns):
     elif type(purpose) is str and purpose == "revocation-head":
         magic, maximum = REVOCATION_HEAD_QUERY_REQUEST_MAGIC, MAX_HEAD_QUERY_BYTES
         response_magic, response_maximum = REVOCATION_HEAD_OBSERVATION_RESPONSE_MAGIC, MAX_HEAD_OBSERVATION_BYTES
+    elif type(purpose) is str and purpose in ("native-review-reserve", "native-review-complete"):
+        magic = _native_jit_review_action("reserve" if purpose == "native-review-reserve" else "complete")
+        maximum, response_magic, response_maximum = MAX_REQUEST_BYTES, RESPONSE_MAGIC, MAX_RECEIPT_BYTES
     else:
         magic, maximum = _action(purpose), MAX_REQUEST_BYTES
         response_magic, response_maximum = RESPONSE_MAGIC, MAX_RECEIPT_BYTES
@@ -291,6 +316,13 @@ def _exchange_on_configuration(config, *, action, request_bytes, deadline_ns):
     # fixed entrypoint and cannot be smuggled through a decision action.
     _action(action)
     return _socket_exchange(config, purpose=action,
+        original_bytes=request_bytes, deadline_ns=deadline_ns)
+
+
+def _exchange_native_jit_review_on_configuration(config, *, action, request_bytes, deadline_ns):
+    """Fixed native receipt decision route; no generic action is widened."""
+    _native_jit_review_action(action)
+    return _socket_exchange(config, purpose="native-review-" + action,
         original_bytes=request_bytes, deadline_ns=deadline_ns)
 
 
@@ -468,6 +500,11 @@ class CurrentRootDecisionClient:
     def exchange(self, *, action, request_bytes, deadline_ns):
         configured = CurrentRootDecisionClient._snapshot_configuration(self)
         return _exchange_on_configuration(configured,
+            action=action, request_bytes=request_bytes, deadline_ns=deadline_ns)
+
+    def exchange_native_jit_review(self, *, action, request_bytes, deadline_ns):
+        configured = CurrentRootDecisionClient._snapshot_configuration(self)
+        return _exchange_native_jit_review_on_configuration(configured,
             action=action, request_bytes=request_bytes, deadline_ns=deadline_ns)
 
     def lookup(self, *, query_bytes, deadline_ns):

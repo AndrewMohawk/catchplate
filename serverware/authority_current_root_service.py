@@ -28,6 +28,10 @@ separate registration nonce-head reads. This peer cannot reserve, complete,
 look up receipts or request any other head purpose through those routes.
 All reach genuine owner paths without a service parser or allowance.
 No independent signer, SQL, success substitute or automatic retry exists here.
+The native profile keeps planner head reads separate from issuer reservation
+and executor completion. Native control prefixes admit only the signed review
+receipt operation; existing generic prefixes remain revocation-only for those
+same issuer/executor peers. No native lookup or retry route is introduced.
 Failure after publication or send is not evidence of rollback/absence.
 """
 from __future__ import annotations
@@ -93,10 +97,8 @@ def _validate_configuration(config):
     if len(config) == 18:
         peer = config[17]
         if (type(peer) is not tuple or len(peer) != 2
-                or any(type(value) is not int or not 1 <= value <= 0xFFFFFFFF for value in peer)
-                or peer[0] != peer[1] or peer in config[6:17]
-                or peer in ((reserve_uid, reserve_gid), (complete_uid, complete_gid))):
-            raise CurrentRootServiceError("native review head peer is not a distinct admitted planner role")
+                or any(type(value) is not int for value in peer) or peer != (65518, 65518)):
+            raise CurrentRootServiceError("native review head peer differs from the fixed measured planner role")
     return config
 
 
@@ -258,9 +260,11 @@ class CurrentRootDecisionService:
             admitted_planner_peer_uid, admitted_planner_peer_gid):
         """Native cold factory only; never selected by the local bootstrap.
 
-        These pins must come from that factory's independently admitted measured
-        planner role. This constructor does not admit a role or configuration;
-        it exposes no environment flag, arbitrary purpose or HTTP selection.
+        The factory must admit planner 65518, issuer 65521 and executor 65522
+        from the actual authority launch identities and signed role enrollment.
+        These source-fixed IDs match authority_launcher/authority_fd_entrypoint;
+        this constructor does not itself admit a role or configuration. Native
+        prefixes do not broaden those roles' existing revocation-only prefixes.
         """
         if cls is not CurrentRootDecisionService:
             raise CurrentRootServiceError("native review requires the exact current-root service")
@@ -309,7 +313,15 @@ class CurrentRootDecisionService:
                 raise CurrentRootServiceError("current-root socket peer is not admitted")
             prefix = transport._recv_prefix(connection, deadline_ns=deadline_ns)
             expected_operation = None
-            if prefix == transport.RESERVE_REQUEST_MAGIC:
+            native_control = prefix in transport.NATIVE_JIT_REVIEW_REQUEST_MAGICS
+            if native_control:
+                if native_review_head_peer is None:
+                    raise CurrentRootServiceError("native review decision profile is not admitted")
+                action = ("reserve" if prefix == transport.NATIVE_JIT_REVIEW_RESERVE_REQUEST_MAGIC
+                    else "complete")
+                required_peer = revocation_reserve_peer if action == "reserve" else revocation_complete_peer
+                expected_operation = "jit.review-open.receipt.issue"
+            elif prefix == transport.RESERVE_REQUEST_MAGIC:
                 action, required_peer = "reserve", reserve_peer
                 if revocation_reserve_peer is not None and peer == revocation_reserve_peer:
                     required_peer = revocation_reserve_peer
@@ -444,7 +456,9 @@ class CurrentRootDecisionService:
                 transport._check_deadline(deadline_ns)
                 transport._send_observation(connection, observation, deadline_ns=deadline_ns)
             else:
-                received_action, original = transport._recv_request(connection,
+                receive = (transport._recv_native_jit_review_request if native_control
+                    else transport._recv_request)
+                received_action, original = receive(connection,
                     prefix=prefix, deadline_ns=deadline_ns)
                 if received_action != action:
                     raise CurrentRootServiceError("current-root framing action changed")

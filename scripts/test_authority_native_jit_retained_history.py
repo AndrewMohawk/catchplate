@@ -226,6 +226,13 @@ class HistoricalRetentionTests(unittest.TestCase):
     def test_explicit_historical_profile_not_installed_manifest_or_request_constructor(self):
         self.assertEqual(self.parse()[0]["operationManifestDigest"], MANIFEST)
         self.assertEqual(history.SEALED_SOURCE_REVISION, REVISION)
+        self.assertEqual(history.SEALED_PROFILES, (
+            (MANIFEST, REVISION),
+            ("sha256:ed6d471a03516c96aa4968b89e4d220f9d5aaa0dfc4c1f848acfcc58343de4f0",
+                "serverware.policyCandidateAuthoritySource/2026-07-30.350"),
+            ("sha256:bb0f9a53066e10042f83a1576d2c44b1dcf497eee457bb8d3146d86f4d526256",
+                "serverware.policyCandidateAuthoritySource/2026-07-30.351"),
+        ))
         # This assertion remains meaningful after installed metadata advances;
         # it never patches it or regenerates the fixture with its digest.
         self.assertEqual(self.row["source_contract_digest"], MANIFEST)

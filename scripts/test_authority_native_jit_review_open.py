@@ -375,7 +375,7 @@ class HistoricalProfileTests(unittest.TestCase):
         self.assertIn((manifest, revision), history.SEALED_PROFILES)
         self.assertNotEqual(manifest, authority.OPERATION_MANIFEST_DIGEST)
 
-    def test_current_351_sealing_pending_projection_is_not_an_admitted_historical_profile(self):
+    def test_fresh_351_sealing_and_pending_originals_have_explicit_historical_compatibility(self):
         fixture = pending_fixture.Fixture(self.pki)
         self.assertIsNone(fixture.verify())
         derived = private.derive_native_requests(fixture.crypto.runtime)
@@ -386,21 +386,38 @@ class HistoricalProfileTests(unittest.TestCase):
         retained = rows["policy_authority_native_jit_review_pairs"]
         self.assertEqual(retained["source_revision"],
             "serverware.policyCandidateAuthoritySource/2026-07-30.351")
+        self.assertEqual(retained["source_contract_digest"],
+            "sha256:bb0f9a53066e10042f83a1576d2c44b1dcf497eee457bb8d3146d86f4d526256")
         self.assertEqual(retained["source_contract_digest"], authority.OPERATION_MANIFEST_DIGEST)
-        self.assertNotIn((retained["source_contract_digest"], retained["source_revision"]),
+        self.assertIn((retained["source_contract_digest"], retained["source_revision"]),
             history.SEALED_PROFILES)
-        with self.assertRaisesRegex(history.RetainedHistoryError, "^" + history.ERROR + "$"):
-            history.historical_retained_documents(retained_row=retained,
-                approval_row=rows["approval_requests"], now_epoch_ns=NOW + 90 * SECOND)
+        before = copy.deepcopy((retained, rows["approval_requests"]))
+        parsed = history.historical_retained_documents(retained_row=retained,
+            approval_row=rows["approval_requests"], now_epoch_ns=NOW + 90 * SECOND)
+        self.assertEqual(parsed[:2], (fixture.parent, fixture.child))
+        for column, document in zip(("parent_request_original", "child_request_original",
+                "pair_original", "proof_original"), parsed, strict=True):
+            self.assertEqual(canonical(document).decode("ascii"), retained[column])
+        self.assertEqual(history.retained_original_documents(
+            parent_original=retained["parent_request_original"],
+            child_original=retained["child_request_original"],
+            pair_original=retained["pair_original"],
+            evidence_original=retained["proof_original"]), parsed)
+        self.assertEqual((retained, rows["approval_requests"]), before)
 
     def test_unknown_future_profile_and_revision_mismatch_fail_closed(self):
         for manifest, revision in ((OTHER, old_fixture.REVISION),
-                (old_fixture.MANIFEST, history.FRESH_SEALED_SOURCE_REVISION)):
-            fixture = old_fixture.Fixture(self.pki)
-            fixture.row.update(source_contract_digest=manifest, source_revision=revision)
-            with self.assertRaises(history.RetainedHistoryError):
-                history.historical_retained_documents(retained_row=fixture.row,
-                    approval_row=fixture.approval, now_epoch_ns=NOW + 90 * SECOND)
+                (old_fixture.MANIFEST, history.FRESH_SEALED_SOURCE_REVISION),
+                (history.FRESH_SEALED_MANIFEST, history.SEALED_351_SOURCE_REVISION),
+                (history.SEALED_351_MANIFEST, history.FRESH_SEALED_SOURCE_REVISION),
+                (history.SEALED_351_MANIFEST, "serverware.policyCandidateAuthoritySource/2026-07-30.352"),
+                (OTHER, "serverware.policyCandidateAuthoritySource/2026-07-30.352")):
+            with self.subTest(manifest=manifest, revision=revision):
+                fixture = old_fixture.Fixture(self.pki, manifest=manifest)
+                fixture.row["source_revision"] = revision
+                with self.assertRaises(history.RetainedHistoryError):
+                    history.historical_retained_documents(retained_row=fixture.row,
+                        approval_row=fixture.approval, now_epoch_ns=NOW + 90 * SECOND)
 
 
 if __name__ == "__main__":

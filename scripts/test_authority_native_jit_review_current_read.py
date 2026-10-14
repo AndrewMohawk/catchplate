@@ -4,17 +4,21 @@
 Synthetic full SQL rows and independent radix trees exercise the actual closed
 chunk/replay schedule, token join and membership engine. They do not authenticate
 the test request, current roots, native challenge, route policy or cold owner.
-The head controls exercise purpose domains/framing only, not an enrolled live
-root service. No connections, injected successful authority or provider calls.
+The route controls use local socket pairs and a deliberately refusing decision
+boundary, not an enrolled live root service or injected successful authority.
+No database, provider or deployed service calls occur.
 """
 from __future__ import annotations
 
 import copy
 import hashlib
+import ast
 from pathlib import Path
+import socket
 import sys
 import time
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -277,13 +281,120 @@ class NativeJitReviewReadControls(unittest.TestCase):
         old = service.CurrentRootDecisionService._with_public_revocation(owner=owner, timeout_seconds=1)
         self.assertEqual(len(old._snapshot_configuration()), 17)
         fresh = service.CurrentRootDecisionService._with_native_jit_review(owner=owner, timeout_seconds=1,
-            admitted_planner_peer_uid=64000, admitted_planner_peer_gid=64000)
+            admitted_planner_peer_uid=65518, admitted_planner_peer_gid=65518)
         self.assertEqual(fresh._snapshot_configuration()[:17], old._snapshot_configuration())
-        self.assertEqual(fresh._snapshot_configuration()[17], (64000, 64000))
-        for uid, gid in ((0, 0), (65520, 65520), (65514, 65514), (64000, 64001), (True, True)):
+        self.assertEqual(fresh._snapshot_configuration()[17], (65518, 65518))
+        for uid, gid in ((0, 0), (65520, 65520), (65514, 65514), (64000, 64000),
+                (65518, 65519), (True, True)):
             with self.subTest(uid=uid, gid=gid), self.assertRaises(RuntimeError):
                 service.CurrentRootDecisionService._with_native_jit_review(owner=owner, timeout_seconds=1,
                     admitted_planner_peer_uid=uid, admitted_planner_peer_gid=gid)
+
+    def test_native_peers_match_both_existing_authority_launchers(self):
+        for name in ("authority_launcher.py", "authority_fd_entrypoint.py"):
+            tree = ast.parse((Path(__file__).resolve().parents[1] / "serverware" / name).read_text())
+            assignments = [node.value for node in tree.body if isinstance(node, ast.Assign)
+                and any(isinstance(target, ast.Name) and target.id == "ROLE_IDENTITIES"
+                    for target in node.targets)]
+            self.assertEqual(len(assignments), 1)
+            identities = ast.literal_eval(assignments[0])
+            self.assertEqual({role: identities[role] for role in ("planner", "issuer", "executor")},
+                {"planner": (65518, 65518), "issuer": (65521, 65521), "executor": (65522, 65522)})
+
+    def _route(self, *, uid, magic, native=True, reached=False):
+        # Only routing is under test: the actual decision boundary always
+        # refuses, so no fabricated signature, receipt or committed state exists.
+        owner = object.__new__(decisions.CurrentRootDecisionOwner)
+        selected = (service.CurrentRootDecisionService._with_native_jit_review(owner=owner,
+            timeout_seconds=1, admitted_planner_peer_uid=65518, admitted_planner_peer_gid=65518)
+            if native else service.CurrentRootDecisionService._with_public_revocation(owner=owner, timeout_seconds=1))
+        left, right = socket.socketpair()
+        original = b'{"synthetic":"opaque control, never authenticated"}'
+        try:
+            right.sendall(magic + len(original).to_bytes(8, "big") + original)
+            right.shutdown(socket.SHUT_WR)
+            with patch.object(service, "_accepted_peer", return_value=(uid, uid, 1234)), \
+                    patch.object(decisions.CurrentRootDecisionOwner, "apply",
+                        side_effect=RuntimeError("synthetic decision refusal")) as apply, \
+                    patch.object(source.transport, "_recv_native_jit_review_request",
+                        wraps=source.transport._recv_native_jit_review_request) as receive_native, \
+                    patch.object(source.transport, "_recv_request", wraps=source.transport._recv_request) as receive:
+                with self.assertRaises(RuntimeError) as error:
+                    selected.serve_connection(left)
+                self.assertEqual(left.fileno(), -1)
+                if reached:
+                    self.assertEqual(str(error.exception), "synthetic decision refusal")
+                    apply.assert_called_once()
+                    args, kwargs = apply.call_args
+                    self.assertIs(args[0], owner)
+                    self.assertEqual(args[1], original)
+                    self.assertEqual(receive.call_count + receive_native.call_count, 1)
+                    return kwargs
+                apply.assert_not_called()
+                receive.assert_not_called()
+                receive_native.assert_not_called()
+                return None
+        finally:
+            left.close()
+            right.close()
+
+    def test_native_decisions_reach_only_exact_action_and_receipt_operation(self):
+        for uid, magic, action in (
+                (65521, source.transport.NATIVE_JIT_REVIEW_RESERVE_REQUEST_MAGIC, "reserve"),
+                (65522, source.transport.NATIVE_JIT_REVIEW_COMPLETE_REQUEST_MAGIC, "complete")):
+            with self.subTest(action=action):
+                result = self._route(uid=uid, magic=magic, reached=True)
+                self.assertEqual(result["expected_action"], action)
+                self.assertEqual(result["expected_operation"], source.contract.RECEIPT)
+
+    def test_native_routes_refuse_other_roles_and_old_profile_before_body(self):
+        for magic, allowed in ((source.transport.NATIVE_JIT_REVIEW_RESERVE_REQUEST_MAGIC, 65521),
+                (source.transport.NATIVE_JIT_REVIEW_COMPLETE_REQUEST_MAGIC, 65522)):
+            self._route(uid=allowed, magic=magic, native=False)
+            for uid in (0, 64000, 65518, 65519, 65520, 65521, 65522, 65514, 65515):
+                if uid != allowed:
+                    with self.subTest(magic=magic, uid=uid):
+                        self._route(uid=uid, magic=magic)
+
+    def test_native_profile_preserves_generic_revocation_and_unrelated_routes(self):
+        for native in (False, True):
+            for uid, magic, action, operation in (
+                    (65521, source.transport.RESERVE_REQUEST_MAGIC, "reserve", "webauthn.credential.revoke"),
+                    (65522, source.transport.COMPLETE_REQUEST_MAGIC, "complete", "webauthn.credential.revoke"),
+                    (65505, source.transport.RESERVE_REQUEST_MAGIC, "reserve", "oidc.session.activate"),
+                    (65503, source.transport.COMPLETE_REQUEST_MAGIC, "complete", "oidc.session.activate"),
+                    (65499, source.transport.RESERVE_REQUEST_MAGIC, "reserve", "oidc.session.activation-delivery.consume"),
+                    (65497, source.transport.COMPLETE_REQUEST_MAGIC, "complete", "oidc.session.activation-delivery.consume")):
+                with self.subTest(native=native, uid=uid):
+                    result = self._route(uid=uid, magic=magic, native=native, reached=True)
+                    self.assertEqual((result["expected_action"], result["expected_operation"]), (action, operation))
+        self._route(uid=65518, magic=source.transport.RESERVE_REQUEST_MAGIC)
+        self._route(uid=65518, magic=source.transport.COMPLETE_REQUEST_MAGIC)
+        self._route(uid=65518, magic=source.transport.QUERY_REQUEST_MAGIC)
+
+    def test_native_client_route_does_not_expand_generic_action_or_frame_allowlist(self):
+        wire = source.transport
+        client = wire.CurrentRootDecisionClient(path="/synthetic-never-connected.sock", timeout_seconds=1,
+            expected_peer_uid=0, expected_peer_gid=0)
+        for action in ("native-review-reserve", "native-review-complete", "query", "head", None):
+            with patch.object(wire, "_socket_exchange") as exchange:
+                with self.assertRaises(wire.AuthorityTransportError):
+                    client.exchange(action=action, request_bytes=b"{}", deadline_ns=1)
+                with self.assertRaises(wire.AuthorityTransportError):
+                    client.exchange_native_jit_review(action=action, request_bytes=b"{}", deadline_ns=1)
+                exchange.assert_not_called()
+        for action in ("reserve", "complete"):
+            with patch.object(wire, "_socket_exchange", side_effect=RuntimeError("no connection")) as exchange:
+                with self.assertRaisesRegex(RuntimeError, "no connection"):
+                    client.exchange_native_jit_review(action=action, request_bytes=b"{}", deadline_ns=1)
+                self.assertEqual(exchange.call_args.kwargs["purpose"], "native-review-" + action)
+        self.assertTrue(set(wire.NATIVE_JIT_REVIEW_REQUEST_MAGICS).isdisjoint(wire.REQUEST_MAGICS))
+        for magic in wire.NATIVE_JIT_REVIEW_REQUEST_MAGICS:
+            with self.assertRaises(wire.AuthorityTransportError):
+                wire._recv_request(None, prefix=magic, deadline_ns=1)
+        for magic in wire.REQUEST_MAGICS:
+            with self.assertRaises(wire.AuthorityTransportError):
+                wire._recv_native_jit_review_request(None, prefix=magic, deadline_ns=1)
 
 
 if __name__ == "__main__":

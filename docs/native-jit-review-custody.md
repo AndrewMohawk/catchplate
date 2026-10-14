@@ -23,10 +23,24 @@ completion remains unavailable. Focused original-replay and schema/privilege
 checks passed; a real PostgreSQL commit and this completion path have not yet
 been exercised together.
 
+Native receipt reserve/completion now have separate current-root wire routes.
+Only the native service profile accepts them, with the existing measured issuer
+and executor identities and the exact `jit.review-open.receipt.issue` operation.
+The completion owner uses the native route; generic revocation, activation and
+delivery routes are unchanged. The planner remains read-only. Cold startup must
+still admit the roles/enrollment and select this profile; the constructor alone
+does not establish that admission.
+
 This is source implementation, not activation. The cold HTTP service connection,
 key-backed decision join and same-attempt proxy continuation are still missing.
 `native_jit_review_open_service.selected()` remains disabled, and the deployed
 ordinary instance has not been migrated to this new schema contract.
+
+Retained-history parsing explicitly supports the frozen `.349`, `.350` and
+`.351` manifest/revision pairs. The `.351` receipt-frame change leaves sealing,
+request and pair formats unchanged; it does not require resealing old requests.
+Fresh `.351` pending originals and the older profiles passed the 22 focused
+history checks. Unknown profiles and crossed manifest/revision pairs still fail.
 
 ## What the new profile selects
 
@@ -346,7 +360,7 @@ Its 32 MiB selected-row and 96 MiB original limits cannot be routed through the
 old 4 MiB plan / 64 MiB packet by increasing a generic limit. Tokens must remain
 transient, and uncertain commits must not generate fresh disclosure authority.
 Native decisions and exact approved-request continuation remain separate work.
-Fresh database creation uses the current v350 revision constraints. This does
+Fresh database creation uses the current v351 revision constraints. This does
 not define an upgrade of an existing v349 store: that needs an explicit
 preservation-aware migration, including unchanged historical native-pair rows.
 Do not rebuild current-only constraints around old rows or rewrite signed

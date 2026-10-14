@@ -436,8 +436,28 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         self.assertEqual(len(crypto), 1)
         self.assertIn(crypto[0], list(ast.walk(postgres)))
         self.assert_shape(crypto[0], "_postgres_metadata_crypto_required(conn)")
+        locking = calls(postgres, "_lock_postgres_metadata_initialization_authorities")
+        self.assertEqual(len(locking), 1)
+        self.assert_shape(locking[0], "_lock_postgres_metadata_initialization_authorities(conn)")
+        self.assertLess(locking[0].lineno, crypto[0].lineno)
+        migration_lock = [call for call in calls(postgres, "execute")
+                          if call.args and isinstance(call.args[0], ast.Constant)
+                          and call.args[0].value == "SELECT pg_advisory_xact_lock(?)"]
+        self.assertEqual(len(migration_lock), 1)
+        self.assert_shape(migration_lock[0].func, "conn.execute")
+        self.assert_shape(migration_lock[0].args[1], "(_METADATA_MIGRATION_LOCK_KEY,)")
+        self.assertLess(migration_lock[0].lineno, locking[0].lineno)
+        lock_owner = function(tree, "_lock_postgres_metadata_initialization_authorities")
+        held = []
         for lock in ("_lock_policy_candidate_authority", "_lock_policy_high_water"):
-            self.assertLess(calls(postgres, lock)[0].lineno, crypto[0].lineno)
+            sites = calls(lock_owner, lock)
+            self.assertEqual(len(sites), 1)
+            self.assert_shape(sites[0], lock + "(conn)")
+            held.append(sites[0])
+        self.assertLess(held[0].lineno, held[1].lineno)
+        for forbidden in ("connect", "_metadata_pg_connect_raw", "_metadata_pg_bootstrap_connect_raw",
+                          "commit", "rollback", "close"):
+            self.assertEqual(calls(lock_owner, forbidden), [])
         needed = next(node for node in postgres.body if isinstance(node, ast.If)
                       and node.test is crypto[0])
         self.assertEqual(len(calls(needed, "load_bound_secret_keyring")), 1)
@@ -713,14 +733,28 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         expected = function(tree, "_policy_candidate_authority_expected_structure_manifest")
         defaults = dict(zip((arg.arg for arg in expected.args.kwonlyargs), expected.args.kw_defaults))
         self.assert_shape(defaults["legacy_completed_v9_receipt"], "False")
-        self.assertIsInstance(expected.body[0], ast.Try)
+        self.assert_shape(defaults["local_audit_reader_profile"], "None")
+        profile_guard = expected.body[0]
+        self.assertIsInstance(profile_guard, ast.If)
+        self.assert_shape(profile_guard.test, "local_audit_reader_profile is not None")
+        self.assert_shape(profile_guard.body[0].value,
+                          "authority_local_audit_reader.require_profile(local_audit_reader_profile)")
+        profile_refusal = profile_guard.body[1]
+        self.assert_shape(profile_refusal.test,
+                          "legacy_completed_v9_receipt or not isinstance(conn, PostgresMetadataConnection)")
+        self.assertIsInstance(profile_refusal.body[0], ast.Raise)
+        self.assert_shape(profile_refusal.body[0].exc,
+            "PolicyCandidateAuthorityError('local audit reader profile requires fresh PostgreSQL source derivation')")
+        self.assertEqual(profile_guard.orelse, [])
+        validation = expected.body[1]
+        self.assertIsInstance(validation, ast.Try)
         checked = calls(expected, "require_metadata_schema_program")
         self.assertEqual(len(checked), 1)
-        self.assertIn(checked[0], list(ast.walk(expected.body[0])))
+        self.assertIn(checked[0], list(ast.walk(validation)))
         self.assert_shape(checked[0].args[0], "source_schema_program")
         self.assert_shape(keyword(checked[0], "legacy_completed_v9_receipt"),
                           "legacy_completed_v9_receipt")
-        handlers = expected.body[0].handlers
+        handlers = validation.handlers
         self.assertEqual(len(handlers), 1)
         self.assert_shape(handlers[0].type, "ValueError")
         self.assertIsInstance(handlers[0].body[0], ast.Raise)
@@ -780,12 +814,37 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
             "metadata_schema_source.metadata_schema_source().encode('utf-8'))")
         for key_name, expression in (
             ("objectOwnershipContract", repr("serverware.policyAuthorityObjectOwnership/v1")),
-            ("authorityOwnerRole", "_METADATA_STORE_AUTHORITY_OWNER_ROLE"),
+            ("authorityOwnerRole", "owner_role"),
         ):
             bindings = [value for key, value in zip(mapping.keys, mapping.values)
                         if isinstance(key, ast.Constant) and key.value == key_name]
             self.assertEqual(len(bindings), 1)
             self.assert_shape(bindings[0], expression)
+        default_roles = [node for node in digest.body if isinstance(node, ast.Assign)
+                         and any(isinstance(target, ast.Name) and target.id == "owner_role"
+                                 for target in node.targets)]
+        self.assertEqual(len(default_roles), 1)
+        self.assert_shape(default_roles[0].value, "_METADATA_STORE_AUTHORITY_OWNER_ROLE")
+        selected_scopes = [node for node in digest.body if isinstance(node, ast.If)
+                           and calls(node, "require")]
+        self.assertEqual(len(selected_scopes), 1)
+        selected_scope = selected_scopes[0]
+        self.assert_shape(selected_scope.test, "database_configuration is not None")
+        admission = assignment(selected_scope, "database_configuration")
+        self.assert_shape(admission.value, "require(database_configuration)")
+        owner = assignment(selected_scope, "owner_role")
+        self.assert_shape(owner.value, "OWNER_ROLE")
+        imports = [node for node in selected_scope.body if isinstance(node, ast.ImportFrom)]
+        self.assertEqual(len(imports), 1)
+        self.assertEqual(imports[0].module, "serverware.authority_database_configuration")
+        self.assertEqual([(alias.name, alias.asname) for alias in imports[0].names],
+                         [("OWNER_ROLE", None), ("require", None)])
+        _, configuration = read_source("serverware/authority_database_configuration.py")
+        self.assert_shape(assignment(configuration, "OWNER_ROLE").value,
+                          "'serverware_policy_authority_owner'")
+        self.assertLess(default_roles[0].lineno, selected_scope.lineno)
+        self.assertLess(admission.lineno, owner.lineno)
+        self.assertLess(selected_scope.end_lineno, material[0].lineno)
         returns = [node for node in digest.body if isinstance(node, ast.Return)]
         self.assertEqual(len(returns), 1)
         self.assert_shape(returns[0].value.args[-1], "material")
@@ -948,7 +1007,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
     def test_retained_parent_and_sidecar_have_exact_columns_and_closed_protocol_lifecycle(self):
         parent = self.extension.split("policy_authority_planner_transactions (", 1)[1].split(");", 1)[0]
         sidecar = self.extension.split("policy_authority_revocation_retained_plans (", 1)[1].split(");", 1)[0]
-        columns = lambda value: re.findall(r"^                ([a-z_]+) (?:TEXT|BIGINT)\b", value, re.MULTILINE)
+        columns = lambda value: re.findall(r"^                ([a-z][a-z0-9_]*) (?:TEXT|BIGINT)\b", value, re.MULTILINE)
         self.assertEqual(len(columns(parent)), 36)
         self.assertEqual(columns(parent)[:3], ["planner_transaction_id", "plan_protocol", "retained_record_digest"])
         self.assertEqual(columns(sidecar), [
@@ -1077,7 +1136,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
     def test_capability_custody_has_exact_columns_protocols_transport_and_minimal_foreign_keys(self):
         parent = self.base.split("policy_authority_writer_capabilities (", 1)[1].split(");", 1)[0]
         sidecar = self.extension.split("policy_authority_revocation_retained_capabilities (", 1)[1].split(");", 1)[0]
-        parent_columns = re.findall(r"^                    ([a-z_]+) (?:TEXT|BIGINT)\b", parent, re.MULTILINE)
+        parent_columns = re.findall(r"^                    ([a-z][a-z0-9_]*) (?:TEXT|BIGINT)\b", parent, re.MULTILINE)
         self.assertEqual(parent_columns, [
             "capability_id", "capability_protocol", "capability_record_digest", "capability_digest",
             "envelope_id", "operation", "operation_id", "handler_name", "request_digest",
@@ -1093,7 +1152,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
             "authorization_projection_digest", "selected_business_rows_digest", "mutation_plan_digest",
             "deadline_epoch_ns",
         ])
-        self.assertEqual(re.findall(r"^                ([a-z_]+) (?:TEXT|BIGINT)\b", sidecar, re.MULTILINE), [
+        self.assertEqual(re.findall(r"^                ([a-z][a-z0-9_]*) (?:TEXT|BIGINT)\b", sidecar, re.MULTILINE), [
             "capability_id", "capability_protocol", "capability_record_digest", "planner_transaction_id",
             "plan_protocol", "retained_record_digest", "execution_envelope_id", "capability_digest",
             "root_transition_digest", "authority_snapshot_digest", "exact_request_bytes_digest",

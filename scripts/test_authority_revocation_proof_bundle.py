@@ -221,7 +221,7 @@ class RevocationProofBundleTests(unittest.TestCase):
         result = self.derive(fixture)
         bundle, transition = self.assert_documents(fixture, result)
         self.assertEqual(len(bundle["inputs"]["queryReads"]), 12)
-        self.assertEqual(len(transition["indexBeforeHeads"]), 8)
+        self.assertEqual(len(transition["indexBeforeHeads"]), 9)
         self.assertEqual(transition["primaryTransition"]["metrics"]["mutations"], 3)
         # Encoding/capture are invocation costs, not retained proof semantics.
         self.assertNotIn("ownershipBytes", transition["metrics"])
@@ -293,11 +293,11 @@ class RevocationProofBundleTests(unittest.TestCase):
                         wraps=retained.mixed.read_write.verify_complete_read_write_batch) as older_public:
                 result = (retained.verify_revocation_proof_bundle(bundle=bundle, transition=transition)
                           if replay else self.derive(fixture))
-            self.assertEqual(worker.call_count, 1)
-            self.assertEqual((public.call_count, older_public.call_count), (0, 0))
-            self.assertEqual(len(captures), 1)
-            self.assertIs(result.primary, observed[0][1].write.primary)
-            self.assertEqual(observed[0][0][0], bundle["inputs"])
+                self.assertEqual(worker.call_count, 1)
+                self.assertEqual((public.call_count, older_public.call_count), (0, 0))
+                self.assertEqual(len(captures), 1)
+                self.assertIs(result.primary, observed[0][1].write.primary)
+                self.assertEqual(observed[0][0][0], bundle["inputs"])
 
     def test_derive_owns_every_raw_graph_before_first_real_bundle_hash(self):
         fixture = fixture_oracle.RevocationObservationFixture(pending_count=2)
@@ -686,12 +686,12 @@ class RevocationProofBundleTests(unittest.TestCase):
                     patch.object(retained._PackagingLedger, "release_compact_hold", new=release):
                 result = (retained.verify_revocation_proof_bundle(bundle=bundle, transition=transition)
                           if replay else self.derive(fixture))
-            self.assertEqual((len(observed), len(released)), (1, 1))
-            self.assertIs(observed[0], released[0])
-            self.assertEqual(observed_units(observed[0].work.metrics), expected["total"])
-            with self.assertRaises(retained.RevocationProofBundleError):
-                original_release(observed[0])
-            self.assertEqual(result.packaging.total_hashes, expected["total"]["hash_work"])
+                self.assertEqual((len(observed), len(released)), (1, 1))
+                self.assertIs(observed[0], released[0])
+                self.assertEqual(observed_units(observed[0].work.metrics), expected["total"])
+                with self.assertRaises(retained.RevocationProofBundleError):
+                    original_release(observed[0])
+                self.assertEqual(result.packaging.total_hashes, expected["total"]["hash_work"])
 
     def test_exact_limits_lossless_shapes_and_wire_caps_deny_before_expensive_steps(self):
         fixture = fixture_oracle.RevocationObservationFixture()

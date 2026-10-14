@@ -32,13 +32,31 @@ import test_authority_index_range as counted_oracle
 PROFILE_TABLES = {
     "webauthn_credentials": ("webauthn_credential_id", "webauthn_credential_user_history",
                              "webauthn_credential_live_trust"),
-    "webauthn_challenges": ("webauthn_registration_unused_global", "webauthn_registration_unused_user"),
-    "oidc_browser_sessions": ("webauthn_session_credential_status",),
+    "webauthn_challenges": ("webauthn_registration_unused_global", "webauthn_registration_unused_user",
+        "webauthn_challenge_unused_global", "webauthn_challenge_unused_user",
+        "webauthn_challenge_created_global", "webauthn_challenge_created_user",
+        "webauthn_challenge_terminal_unreferenced_global", "webauthn_challenge_scope_unused",
+        "webauthn_challenge_value"),
+    "oidc_browser_sessions": ("webauthn_session_credential_status", "oidc_session_token_digest"),
+    "oidc_session_activation_deliveries": ("oidc_activation_delivery_session_id",
+        "oidc_activation_delivery_old_token_digest", "oidc_activation_delivery_new_token_digest",
+        "oidc_activation_delivery_assertion_digest", "oidc_activation_delivery_challenge_id"),
     "approval_grants": ("webauthn_grant_approver_active",),
     "control_plane_approvals": ("webauthn_control_approval_approved",),
     "webauthn_trust_publications": ("webauthn_publication_bundle_digest", "webauthn_publication_status",
                                   "webauthn_publication_generation"),
 }
+
+EPOCH = "1970-01-01T00:00:00+00:00"
+CHALLENGE_ID = "00000000-0000-0000-0000-000000000001"
+
+
+def challenge(identifier=CHALLENGE_ID, **changes):
+    """Complete synthetic fresh-source row; no legacy challenge-ID adoption."""
+    return {"id": identifier, "challenge_type": "registration", "used_at": None,
+            "expires_at": EPOCH, "created_at": EPOCH, "user_id": "user",
+            "challenge": "fixture-challenge", "scope_key": None,
+            "retention_reference_mask": 0, **changes}
 
 
 def values(value):
@@ -290,35 +308,51 @@ class IndexedMutationTests(unittest.TestCase):
         self.assertEqual(len(fixture.indexes["webauthn_credential_live_trust"]["targets"]), 1)
 
     def test_challenge_expiry_user_and_membership_moves_cover_both_registration_indexes(self):
-        before = {"id": "challenge", "challenge_type": "registration", "used_at": None,
-                  "expires_at": "1970-01-01T00:00:00+00:00", "user_id": "old-user"}
+        before = challenge(user_id="old-user")
         moved = {**before, "expires_at": "1970-01-01T00:00:00.000001+00:00", "user_id": "new-user"}
-        for after in (moved, {**moved, "used_at": "consumed"}):
+        for after in (moved, {**moved, "used_at": EPOCH}):
             with self.subTest(member=after["used_at"] is None):
                 fixture = MutationFixture({"webauthn_challenges": [before]},
-                    (("webauthn_challenges", "challenge", "UPDATE", after),),
-                    expiry_before={"challenge": 0}, expiry_after={"challenge": 1})
+                    (("webauthn_challenges", CHALLENGE_ID, "UPDATE", after),),
+                    expiry_before={CHALLENGE_ID: 0}, expiry_after={CHALLENGE_ID: 1})
                 result = self.assert_exact(fixture)
-                self.assertEqual(len(result.after_heads), 2)
+                self.assertEqual(len(result.after_heads), 9)
                 for head in result.after_heads:
-                    self.assertEqual(head.index_root.count, int(after["used_at"] is None))
-                    self.assertEqual(head.index_revision, 30)
+                    if head.index_id in ("webauthn_registration_unused_global", "webauthn_registration_unused_user",
+                            "webauthn_challenge_unused_global", "webauthn_challenge_unused_user",
+                            "webauthn_challenge_scope_unused"):
+                        self.assertEqual(head.index_root.count, int(after["used_at"] is None))
+                    elif head.index_id == "webauthn_challenge_terminal_unreferenced_global":
+                        self.assertEqual(head.index_root.count, int(after["used_at"] is not None))
+                    else:
+                        self.assertEqual(head.index_root.count, 1)
+                    self.assertEqual(head.index_revision,
+                        29 if head.index_id == "webauthn_challenge_terminal_unreferenced_global"
+                        and after["used_at"] is None else 30)
 
     def test_neither_member_still_requires_both_heads_and_real_readonly_root_folds(self):
-        before = {"id": "excluded", "challenge_type": "authentication", "used_at": None,
-                  "expires_at": "1970-01-01T00:00:00+00:00", "user_id": "user"}
-        retained = {**before, "id": "retained", "challenge_type": "registration"}
+        before = challenge(challenge_type="authentication")
+        retained_id = "00000000-0000-0000-0000-000000000002"
+        retained = {**before, "id": retained_id, "challenge_type": "registration"}
         fixture = MutationFixture({"webauthn_challenges": [before, retained]},
-            (("webauthn_challenges", "excluded", "UPDATE", {**before, "used_at": "changed"}),),
-            expiry_before={"excluded": 0, "retained": 0})
+            (("webauthn_challenges", CHALLENGE_ID, "UPDATE", {**before, "used_at": EPOCH}),),
+            expiry_before={CHALLENGE_ID: 0, retained_id: 0})
         result = self.assert_exact(fixture)
-        self.assertEqual(result.before_heads, result.after_heads)
-        for info in fixture.indexes.values():
+        # The two registration indexes still see neither image. New source
+        # challenge profiles must independently maintain this same full row.
+        legacy = ("webauthn_registration_unused_global", "webauthn_registration_unused_user")
+        self.assertEqual(tuple(head for head in result.before_heads if head.index_id in legacy),
+                         tuple(head for head in result.after_heads if head.index_id in legacy))
+        self.assertEqual(len(result.after_heads), 9)
+        for name in legacy:
+            info = fixture.indexes[name]
             self.assertEqual(info["targets"], {})
             self.assertTrue(info["frontier"])
             self.assertTrue(all(type(value) is contract.OpaqueSubtree and len(value.prefix) == 1
                                 for value in info["frontier"]))
-        for _, metrics in result.metrics.indexes:
+        for name, metrics in result.metrics.indexes:
+            if name not in legacy:
+                continue
             self.assertEqual((metrics.changes, metrics.opened_nodes, metrics.child_slots), (0, 1, 32))
             self.assertGreater(metrics.before_hashes, 0)
             self.assertEqual(metrics.before_hashes, metrics.after_hashes)
@@ -342,31 +376,41 @@ class IndexedMutationTests(unittest.TestCase):
                  ("control_plane_approvals", "approver_webauthn_credential_id", "status", "approved", "rejected"))
         for table, binding, field, member, nonmember in cases:
             before = {"id": "same-id", binding: "old-credential", field: member}
+            if table == "oidc_browser_sessions":
+                before["token_digest"] = "sha256:" + "a" * 64
             for after in ({**before, binding: "new-credential"}, {**before, field: nonmember}):
                 with self.subTest(table=table, value=after[field]):
                     fixture = MutationFixture({table: [before]}, ((table, "same-id", "UPDATE", after),))
                     result = self.assert_exact(fixture)
-                    self.assertEqual(len(result.after_heads), 1)
-                    self.assertEqual(result.after_heads[0].index_root.count, int(after[field] == member))
-                    self.assertEqual(result.after_heads[0].index_revision, 30)
+                    self.assertEqual(len(result.after_heads), 2 if table == "oidc_browser_sessions" else 1)
+                    for head in result.after_heads:
+                        self.assertEqual(head.index_root.count,
+                            1 if head.index_id == "oidc_session_token_digest" else int(after[field] == member))
+                        self.assertEqual(head.index_revision, 30)
 
     def test_all_eleven_profiles_and_same_primary_id_across_tables_remain_distinct(self):
+        # Retain the historical test ID while covering the exact current roster.
+        identifier = CHALLENGE_ID
         tables = {
-            "webauthn_credentials": [credential("same-id")],
-            "webauthn_challenges": [{"id": "same-id", "challenge_type": "registration", "used_at": None,
-                "expires_at": "1970-01-01T00:00:00+00:00", "user_id": "user"}],
-            "oidc_browser_sessions": [{"id": "same-id", "bound_webauthn_credential_id": "credential", "status": "active"}],
-            "approval_grants": [{"id": "same-id", "approver_webauthn_credential_id": "credential", "state": "active"}],
-            "control_plane_approvals": [{"id": "same-id", "approver_webauthn_credential_id": "credential", "status": "approved"}],
-            "webauthn_trust_publications": [{"id": "same-id", "scope": "global", "status": "pending",
+            "webauthn_credentials": [credential(identifier)],
+            "webauthn_challenges": [challenge(identifier)],
+            "oidc_browser_sessions": [{"id": identifier, "bound_webauthn_credential_id": "credential",
+                "status": "active", "token_digest": "sha256:" + "a" * 64}],
+            "oidc_session_activation_deliveries": [{"id": identifier, "session_id": "session",
+                "old_token_digest": "sha256:" + "a" * 64, "new_token_digest": "sha256:" + "b" * 64,
+                "assertion_digest": "sha256:" + "c" * 64, "challenge_id": identifier}],
+            "approval_grants": [{"id": identifier, "approver_webauthn_credential_id": "credential", "state": "active"}],
+            "control_plane_approvals": [{"id": identifier, "approver_webauthn_credential_id": "credential", "status": "approved"}],
+            "webauthn_trust_publications": [{"id": identifier, "scope": "global", "status": "pending",
                 "bundle_digest": "bundle", "rollback_epoch": 0, "sequence": 1}],
         }
-        actions = tuple((table, "same-id", "UPDATE", {**rows[0], "nonselector": "new-fullrow-雪"})
+        actions = tuple((table, identifier, "UPDATE", {**rows[0], "nonselector": "new-fullrow-雪"})
                         for table, rows in sorted(tables.items()))
-        fixture = MutationFixture(tables, actions, expiry_before={"same-id": 0})
+        fixture = MutationFixture(tables, actions, expiry_before={identifier: 0})
         result = self.assert_exact(fixture)
-        self.assertEqual(len(result.after_heads), 11)
-        self.assertEqual(len({row["keyDigest"] for row in fixture.selected}), 6)
+        self.assertEqual(len(result.after_heads), 24)
+        self.assertEqual({head.index_id for head in result.after_heads}, set(join_oracle.INDEX_IDS))
+        self.assertEqual(len({row["keyDigest"] for row in fixture.selected}), 7)
         arguments = fixture.arguments()
         reordered = indexed.evaluate_indexed_primary_batch(**{**arguments,
             "selected_rows": tuple(reversed(arguments["selected_rows"])),
@@ -375,6 +419,29 @@ class IndexedMutationTests(unittest.TestCase):
         self.assertEqual(reordered.before_heads, result.before_heads)
         self.assertEqual(reordered.after_heads, result.after_heads)
         self.assertEqual(reordered.primary.business_after_roots, result.primary.business_after_roots)
+
+    def test_session_token_index_remains_required_and_populated_after_revocation(self):
+        before = {"id": "session", "bound_webauthn_credential_id": "credential", "status": "active",
+                  "token_digest": "sha256:" + "a" * 64}
+        after = {**before, "status": "revoked"}
+        fixture = MutationFixture({"oidc_browser_sessions": [before]},
+            (("oidc_browser_sessions", "session", "UPDATE", after),))
+        result = self.assert_exact(fixture)
+        self.assertEqual({head.index_id: (head.index_revision, head.index_root.count)
+                          for head in result.after_heads},
+                         {"oidc_session_token_digest": (30, 1),
+                          "webauthn_session_credential_status": (30, 0)})
+        arguments = fixture.arguments()
+        for omitted in ("oidc_session_token_digest", "webauthn_session_credential_status"):
+            with self.subTest(omitted=omitted), self.assertRaisesRegex(
+                    indexed.IndexedMutationError, "exactly every affected source profile"):
+                indexed.evaluate_indexed_primary_batch(**{**arguments,
+                    "index_inputs": tuple(item for item in arguments["index_inputs"] if item.index_id != omitted)})
+        changed = MutationFixture({"oidc_browser_sessions": [before]},
+            (("oidc_browser_sessions", "session", "UPDATE",
+              {**after, "token_digest": "sha256:" + "b" * 64}),))
+        self.assert_exact(changed)
+        self.assertEqual(len(changed.indexes["oidc_session_token_digest"]["targets"]), 2)
 
     def test_equal_rows_advance_each_member_revision_even_when_all_digests_stay_equal(self):
         fixture = MutationFixture({"webauthn_credentials": [self.before]},
@@ -486,10 +553,9 @@ class IndexedMutationTests(unittest.TestCase):
             (("webauthn_credentials", bad_old["id"], "UPDATE", {**bad_old, "attestation_trusted": 1}),))
         with self.assertRaises(indexed.projection.IndexProjectionError):
             self.verify(fixture)
-        before = {"id": "challenge", "challenge_type": "registration", "used_at": None,
-                  "expires_at": "1970-01-01T00:00:00+00:00", "user_id": "user"}
+        before = challenge()
         fixture = MutationFixture({"webauthn_challenges": [before]},
-            (("webauthn_challenges", "challenge", "UPDATE", before),), expiry_before={"challenge": 0})
+            (("webauthn_challenges", CHALLENGE_ID, "UPDATE", before),), expiry_before={CHALLENGE_ID: 0})
         arguments = fixture.arguments()
         arguments["mutations"][0]["row"]["expires_at"] = "1970-01-01T00:00:00Z"
         with self.assertRaises(indexed.projection.IndexProjectionError):
@@ -619,7 +685,7 @@ class IndexedMutationTests(unittest.TestCase):
                 indexed.evaluate_indexed_primary_batch(**{**arguments,
                     "index_inputs": (item, *arguments["index_inputs"][1:])})
         result = indexed.evaluate_indexed_primary_batch(**arguments)
-        for item in (list(arguments["index_inputs"]), result, arguments["index_inputs"] * 4):
+        for item in (list(arguments["index_inputs"]), result, arguments["index_inputs"] * 9):
             with self.subTest(kind=type(item)), self.assertRaisesRegex(indexed.IndexedMutationError, "bounded exact tuple"):
                 indexed.evaluate_indexed_primary_batch(**{**arguments, "index_inputs": item})
         for name in ("verified_primary", "projection", "changes"):

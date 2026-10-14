@@ -12,9 +12,11 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 import sys
 import unittest
 from dataclasses import FrozenInstanceError, fields, replace
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from unittest import mock
@@ -38,6 +40,29 @@ PARTITION_DOMAIN = "serverware.policyAuthorityIndexPartition/v1"
 CREDENTIAL = "webauthn_credential_id"
 REGISTRATION = "webauthn_registration_unused_global"
 I64 = 2**63 - 1
+INDEX_IDS = (
+    "webauthn_credential_id", "webauthn_credential_user_history", "webauthn_credential_live_trust",
+    "webauthn_registration_unused_global", "webauthn_registration_unused_user",
+    "webauthn_session_credential_status", "webauthn_grant_approver_active",
+    "webauthn_control_approval_approved", "webauthn_publication_bundle_digest",
+    "webauthn_publication_status", "webauthn_publication_generation",
+    "oidc_session_token_digest", "oidc_activation_delivery_session_id",
+    "oidc_activation_delivery_old_token_digest", "oidc_activation_delivery_new_token_digest",
+    "oidc_activation_delivery_assertion_digest", "oidc_activation_delivery_challenge_id",
+    "webauthn_challenge_unused_global", "webauthn_challenge_unused_user",
+    "webauthn_challenge_created_global", "webauthn_challenge_created_user",
+    "webauthn_challenge_terminal_unreferenced_global", "webauthn_challenge_scope_unused",
+    "webauthn_challenge_value",
+)
+CHALLENGE_TIMESTAMPS = {
+    "webauthn_challenge_unused_global": "expires_at",
+    "webauthn_challenge_unused_user": "expires_at",
+    "webauthn_challenge_created_global": "created_at",
+    "webauthn_challenge_created_user": "created_at",
+    "webauthn_challenge_terminal_unreferenced_global": "used_at",
+}
+CHALLENGE_INDEX_IDS = (*CHALLENGE_TIMESTAMPS,
+    "webauthn_challenge_scope_unused", "webauthn_challenge_value")
 
 
 def utf8_json(value):
@@ -116,8 +141,69 @@ def descriptor(index_id):
                 [["minimum_rollback_epoch", "int64"], ["minimum_sequence", "int64"]],
                 "global/pending-or-published", [], "signed64-rollback-epoch/signed64-sequence",
                 "generation-pair-inclusive-to-partition-end/not-a-maximum-claim"),
+            "oidc_session_token_digest": (
+                "oidc_browser_sessions", [["id", "text"], ["token_digest", "text"]],
+                [["token_digest", "text"]], "all-rows-including-expired-or-revoked", ["token_digest"],
+                "zero16", "whole-equality-partition"),
+            "oidc_activation_delivery_session_id": (
+                "oidc_session_activation_deliveries", [["id", "text"], ["session_id", "text"]],
+                [["session_id", "text"]], "all-rows-including-expired-or-consumed", ["session_id"],
+                "zero16", "whole-equality-partition"),
+            "oidc_activation_delivery_old_token_digest": (
+                "oidc_session_activation_deliveries", [["id", "text"], ["old_token_digest", "text"]],
+                [["old_token_digest", "text"]], "all-rows-including-expired-or-consumed", ["old_token_digest"],
+                "zero16", "whole-equality-partition"),
+            "oidc_activation_delivery_new_token_digest": (
+                "oidc_session_activation_deliveries", [["id", "text"], ["new_token_digest", "text"]],
+                [["new_token_digest", "text"]], "all-rows-including-expired-or-consumed", ["new_token_digest"],
+                "zero16", "whole-equality-partition"),
+            "oidc_activation_delivery_assertion_digest": (
+                "oidc_session_activation_deliveries", [["id", "text"], ["assertion_digest", "text"]],
+                [["assertion_digest", "text"]], "all-rows-including-expired-or-consumed", ["assertion_digest"],
+                "zero16", "whole-equality-partition"),
+            "oidc_activation_delivery_challenge_id": (
+                "oidc_session_activation_deliveries", [["id", "text"], ["challenge_id", "text"]],
+                [["challenge_id", "text"]], "all-rows-including-expired-or-consumed", ["challenge_id"],
+                "zero16", "whole-equality-partition"),
+            "webauthn_challenge_unused_global": (
+                "webauthn_challenges", [["id", "challenge-id"], ["expires_at", "utc-expiry"],
+                ["used_at", "nullable-utc-expiry"]], [["cutoff_us", "int64"], ["direction", "challenge-direction"]],
+                "used_at-is-null", [], "signed64-expires_at/generated-challenge-id-text-order",
+                "source-direction-timestamp-cutoff"),
+            "webauthn_challenge_unused_user": (
+                "webauthn_challenges", [["id", "challenge-id"], ["expires_at", "utc-expiry"],
+                ["used_at", "nullable-utc-expiry"], ["user_id", "text"]],
+                [["user_id", "text"], ["cutoff_us", "int64"], ["direction", "challenge-direction"]],
+                "used_at-is-null", ["user_id"], "signed64-expires_at/generated-challenge-id-text-order",
+                "source-direction-timestamp-cutoff"),
+            "webauthn_challenge_created_global": (
+                "webauthn_challenges", [["id", "challenge-id"], ["created_at", "utc-expiry"]],
+                [["cutoff_us", "int64"], ["direction", "challenge-direction"]],
+                "all-rows-including-terminal", [], "signed64-created_at/generated-challenge-id-text-order",
+                "source-direction-timestamp-cutoff"),
+            "webauthn_challenge_created_user": (
+                "webauthn_challenges", [["id", "challenge-id"], ["created_at", "utc-expiry"], ["user_id", "text"]],
+                [["user_id", "text"], ["cutoff_us", "int64"], ["direction", "challenge-direction"]],
+                "all-rows-including-terminal", ["user_id"], "signed64-created_at/generated-challenge-id-text-order",
+                "source-direction-timestamp-cutoff"),
+            "webauthn_challenge_terminal_unreferenced_global": (
+                "webauthn_challenges", [["id", "challenge-id"], ["used_at", "nullable-utc-expiry"],
+                ["retention_reference_mask", "reference-mask"]],
+                [["cutoff_us", "int64"], ["direction", "challenge-direction"]],
+                "used_at-is-nonnull/authenticated-reference-mask-zero", [],
+                "signed64-used_at/generated-challenge-id-text-order", "source-direction-timestamp-cutoff"),
+            "webauthn_challenge_scope_unused": (
+                "webauthn_challenges", [["id", "challenge-id"], ["challenge_type", "text"], ["user_id", "text"],
+                ["scope_key", "nullable-text"], ["used_at", "nullable-utc-expiry"]],
+                [["challenge_type", "text"], ["user_id", "text"], ["scope_key", "nullable-text"]],
+                "used_at-is-null/no-expiry-filter", ["challenge_type", "user_id", "scope_key"],
+                "zero8/generated-challenge-id-text-order", "whole-equality-partition"),
+            "webauthn_challenge_value": (
+                "webauthn_challenges", [["id", "challenge-id"], ["challenge", "text"]],
+                [["challenge", "text"]], "all-rows-including-terminal", ["challenge"],
+                "zero8/generated-challenge-id-text-order", "whole-equality-partition"),
         }[index_id]
-    return {
+    result = {
         "schema": "serverware.policyAuthorityIndexProjection/v1",
         "countedProfile": COUNTED_PROFILE, "indexId": index_id, "table": table,
         "primaryKeyColumn": "id",
@@ -144,6 +230,13 @@ def descriptor(index_id):
         "partitionFraming": "u64be-length/every-frame-including-domain",
         "keySuffix": "BusinessKey/v1-lowercase-SHA256-hex",
     }
+    if index_id in CHALLENGE_INDEX_IDS:
+        result["keyBytes"] = [32, 8, 1, 32, 7]
+        result["keySuffix"] = "UUID36-class0-padded16-or-sha256-class1/zero7/exact-text-order"
+        result["challengeIdAdmission"] = "fresh-only/canonical-lowercase-UUID36-or-sha256/no-legacy-adoption"
+        if index_id in CHALLENGE_TIMESTAMPS:
+            result["textEnums"]["challenge-direction"] = ["at-or-before", "strictly-after", "all"]
+    return result
 
 
 def expected_profile(index_id):
@@ -162,6 +255,31 @@ def ordered_integer(value):
     return (value + 2**63).to_bytes(8, "big").hex()
 
 
+def timestamp_us(value):
+    """Independent exact UTC fixture clock conversion, without floating point."""
+    if type(value) is not str or re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{6})?\+00:00", value) is None:
+        raise AssertionError("fixture timestamp must have exact canonical UTC spelling")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise AssertionError("fixture timestamp must be a real UTC date") from exc
+    if parsed.isoformat() != value:
+        raise AssertionError("fixture timestamp must omit an all-zero fractional part")
+    elapsed = parsed - datetime(1970, 1, 1, tzinfo=timezone.utc)
+    return (elapsed.days * 86400 + elapsed.seconds) * 1_000_000 + elapsed.microseconds
+
+
+def challenge_order_suffix(value):
+    """Independent generated-ID order tail; no primary-key hash substitution."""
+    if type(value) is str and re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", value):
+        return "00" + "".join(value.split("-")) + "0" * 46
+    if type(value) is str and re.fullmatch(r"sha256:[0-9a-f]{64}", value):
+        return "01" + value[7:] + "0" * 14
+    raise AssertionError("fixture challenge ID must be canonical UUID36 or sha256 text")
+
+
 def expected_interval(profile, selector):
     definition = descriptor(profile.index_id)
     part = {name: selector[name] for name in definition["partitionFields"]}
@@ -177,6 +295,17 @@ def expected_interval(profile, selector):
     elif profile.index_id == "webauthn_publication_generation":
         lower = (prefix + ordered_integer(selector["minimum_rollback_epoch"])
                  + ordered_integer(selector["minimum_sequence"]) + "0" * 64)
+    elif profile.index_id in CHALLENGE_TIMESTAMPS:
+        cutoff, direction = selector["cutoff_us"], selector["direction"]
+        if direction == "at-or-before":
+            if cutoff != I64:
+                upper = prefix + ordered_integer(cutoff + 1) + "0" * 80
+        elif direction == "strictly-after":
+            if cutoff == I64:
+                return contract.KeyInterval(lower, lower)
+            lower = prefix + ordered_integer(cutoff + 1) + "0" * 80
+        elif direction != "all":
+            raise AssertionError("fixture challenge direction must be explicit")
     return contract.KeyInterval(lower, upper)
 
 
@@ -184,9 +313,22 @@ def expected_leaf(profile, row, selected, proof, *, expiry_us=None):
     name = profile.index_id
     values = {field: row[field] for field in descriptor(name)["partitionFields"] if field in row}
     order = "0" * 32
+    if name in CHALLENGE_INDEX_IDS:
+        if name in ("webauthn_challenge_unused_global", "webauthn_challenge_unused_user",
+                    "webauthn_challenge_scope_unused") and row["used_at"] is not None:
+            return None
+        if name == "webauthn_challenge_terminal_unreferenced_global" and (
+                row["used_at"] is None or row["retention_reference_mask"] != 0):
+            return None
+        time_order = (ordered_integer(timestamp_us(row[CHALLENGE_TIMESTAMPS[name]]))
+                      if name in CHALLENGE_TIMESTAMPS else "0" * 16)
+        return contract.IndexLeaf(partition(profile, values) + time_order + challenge_order_suffix(row["id"]),
+                                  selected["keyDigest"], proof["rowDigest"])
     if name in (REGISTRATION, "webauthn_registration_unused_user"):
         if row["challenge_type"] != "registration" or row["used_at"] is not None:
             return None
+        if expiry_us is None:
+            expiry_us = timestamp_us(row["expires_at"])
         if type(expiry_us) is not int:
             raise AssertionError("fixture expiry is independently supplied integer microseconds")
         order = ordered_integer(expiry_us) + "0" * 16
@@ -348,6 +490,13 @@ class AuthorityIndexJoinTests(unittest.TestCase):
             self.assertEqual(leaf.key[-64:], leaf.primary_key_digest[7:])
 
     def test_all_eleven_source_profiles_join_real_rows_with_independent_encodings(self):
+        # Preserve the historical test ID while exercising the exact current 24 profiles.
+        challenge = {
+            "challenge_type": "authentication", "challenge": "challenge-雪", "user_id": "alice",
+            "scope_key": None, "used_at": None, "retention_reference_mask": 0,
+            "created_at": "1969-12-31T23:59:59.999999+00:00",
+            "expires_at": "1970-01-01T00:00:00.000001+00:00",
+        }
         cases = (
             (CREDENTIAL, {"credential_id": "雪"}, {"credential_id": "雪", "revoked_at": "old"}),
             ("webauthn_credential_user_history", {"user_id": "alice"},
@@ -371,14 +520,44 @@ class AuthorityIndexJoinTests(unittest.TestCase):
              {"scope": "global", "status": "published"}),
             ("webauthn_publication_generation", {"minimum_rollback_epoch": -1, "minimum_sequence": 2},
              {"scope": "global", "status": "published", "rollback_epoch": -1, "sequence": 2}),
+            ("oidc_session_token_digest", {"token_digest": "token"},
+             {"token_digest": "token", "status": "revoked", "expires_at": "old"}),
+            ("oidc_activation_delivery_session_id", {"session_id": "session"}, {"session_id": "session"}),
+            ("oidc_activation_delivery_old_token_digest", {"old_token_digest": "old-token"},
+             {"old_token_digest": "old-token"}),
+            ("oidc_activation_delivery_new_token_digest", {"new_token_digest": "new-token"},
+             {"new_token_digest": "new-token"}),
+            ("oidc_activation_delivery_assertion_digest", {"assertion_digest": "assertion"},
+             {"assertion_digest": "assertion"}),
+            ("oidc_activation_delivery_challenge_id", {"challenge_id": "challenge"}, {"challenge_id": "challenge"}),
+            ("webauthn_challenge_unused_global", {"cutoff_us": 0, "direction": "strictly-after"}, challenge),
+            ("webauthn_challenge_unused_user", {"user_id": "alice", "cutoff_us": 0, "direction": "strictly-after"},
+             challenge),
+            ("webauthn_challenge_created_global", {"cutoff_us": -2, "direction": "strictly-after"}, challenge),
+            ("webauthn_challenge_created_user", {"user_id": "alice", "cutoff_us": -2, "direction": "strictly-after"},
+             challenge),
+            ("webauthn_challenge_terminal_unreferenced_global", {"cutoff_us": 0, "direction": "at-or-before"},
+             {**challenge, "used_at": "1970-01-01T00:00:00+00:00"}),
+            ("webauthn_challenge_scope_unused",
+             {"challenge_type": "authentication", "user_id": "alice", "scope_key": None}, challenge),
+            ("webauthn_challenge_value", {"challenge": "challenge-雪"}, challenge),
         )
-        self.assertEqual(set(projection.INDEX_IDS), {name for name, _, _ in cases})
+        self.assertEqual(len(INDEX_IDS), 24)
+        self.assertEqual(projection.INDEX_IDS, INDEX_IDS)
+        self.assertEqual(tuple(name for name, _, _ in cases), INDEX_IDS)
         for name, selector, row in cases:
             with self.subTest(index=name):
-                fixture = JoinFixture([{"id": "id-雪", **row}], index_id=name,
-                                      selector=selector, expiry_us={"id-雪": 1})
+                ids = (("12345678-1234-4234-8234-123456789abc", "sha256:" + "a" * 64)
+                       if name in CHALLENGE_INDEX_IDS else ("id-雪",))
+                fixture = JoinFixture([{"id": identifier, **row} for identifier in ids], index_id=name,
+                                      selector=selector, expiry_us={identifier: 1 for identifier in ids})
                 self.assertEqual(projection.profile_for(name), fixture.profile)
-                self.assertEqual(len(self.assert_exact(fixture).leaves), 1)
+                self.assertEqual(len(self.assert_exact(fixture).leaves), len(ids))
+                if name in CHALLENGE_TIMESTAMPS:
+                    for cutoff in (-(2**63), -1, 0, 1, I64):
+                        for direction in ("at-or-before", "strictly-after", "all"):
+                            query = {**selector, "cutoff_us": cutoff, "direction": direction}
+                            self.assertEqual(projection.query_interval(name, query), expected_interval(fixture.profile, query))
 
     def test_registration_microsecond_cutoff_and_generation_lexicographic_boundaries(self):
         rows = [{"id": label, "challenge_type": "registration", "used_at": None, "expires_at": stamp}

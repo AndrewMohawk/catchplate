@@ -31,6 +31,12 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_SECONDS = 900
+MAX_PARTITION_SECONDS = 600
+PARTITIONS = ("all", "python-1", "python-2", "python-3", "node")
+# Fixed source boundaries, not timing-dependent discovery. Historical hosted
+# observations were roughly 335/277/308s, before two new direct suites per shard.
+# The last includes an incomplete notification run; these are not acceptance.
+PYTHON_PARTITION_BOUNDARIES = ("test_operator_workload_renewal.py", "test_native_jit_prepare.py")
 MAX_OUTPUT_BYTES = 100 * 1024
 SCHEMA = "serverware.ordinaryRegression/v1"
 EXCLUDED = ("rendered_browser", "stock_sdk", "rust_data_plane", "live_deployment", "native_admission")
@@ -57,6 +63,10 @@ SUITES = (
     Suite("backend", "test_proxy_managed_renewal.py", seconds=60),
     Suite("backend", "test_operator_workload_renewal_store.py"),
     Suite("backend", "test_operator_workload_renewal_api.py", seconds=60),
+    # Direct shared-fixture controls are distributed across the fixed shards;
+    # importing these fixtures from another suite does not test their methods.
+    Suite("backend", "test_authority_index_join.py", seconds=60),
+    Suite("backend", "test_authority_indexed_mutation.py", seconds=60),
     Suite("backend", "test_operator_workload_renewal.py"),
     Suite("backend", "test_managed_client.py", seconds=60),
     Suite("backend", "test_operator_managed_helper_connected.py", seconds=60),
@@ -104,7 +114,11 @@ SUITES = (
     Suite("backend", "test_authority_release_private_input.py", seconds=60),
     Suite("backend", "test_authority_release_private_request.py", seconds=60),
     Suite("backend", "test_authority_release_private_ingress.py", seconds=60),
+    Suite("backend", "test_authority_complete_query_batch.py", seconds=60),
+    Suite("backend", "test_authority_counted_root_transition.py", seconds=60),
     Suite("backend", "test_native_jit_prepare.py", seconds=60),
+    Suite("backend", "test_authority_complete_read_write.py", seconds=60),
+    Suite("backend", "test_authority_revocation_read_write.py", seconds=60),
     Suite("backend", "test_approval_history_metadata.py", seconds=60),
     Suite("backend", "test_operator_catalog_npm_install.py"),
     Suite("backend", "test_github_app.py"),
@@ -159,11 +173,39 @@ SUITES = (
     Suite("ui_contract", "test_operator_workload_renewal_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_pending_actions_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_native_jit_review_portal.cjs", "node", seconds=60),
+    Suite("ui_contract", "test_operator_auth_state_ui.cjs", "node", seconds=60),
 )
 
 
 class Refused(ValueError):
     """Only fixed public reason codes may leave preflight."""
+
+
+def partition_suites(partition):
+    """One deterministic partition of the complete reviewed source roster."""
+    if type(partition) is not str or partition not in PARTITIONS:
+        raise Refused("invalid_partition")
+    if not SUITES or len({suite.script for suite in SUITES}) != len(SUITES) \
+            or any(suite.runtime not in {"python", "node"} for suite in SUITES):
+        raise Refused("invalid_suite_roster")
+    if partition == "all":
+        return SUITES, MAX_SECONDS
+    if partition == "node":
+        selected = tuple(suite for suite in SUITES if suite.runtime == "node")
+    else:
+        python = tuple(suite for suite in SUITES if suite.runtime == "python")
+        names = tuple(suite.script for suite in python)
+        if any(boundary not in names for boundary in PYTHON_PARTITION_BOUNDARIES):
+            raise Refused("partition_boundary_missing")
+        boundaries = tuple(names.index(boundary) + 1 for boundary in PYTHON_PARTITION_BOUNDARIES)
+        if boundaries[0] >= boundaries[1]:
+            raise Refused("partition_boundary_order")
+        cuts = (0, *boundaries, len(python))
+        index = ("python-1", "python-2", "python-3").index(partition)
+        selected = python[cuts[index]:cuts[index + 1]]
+    if not selected:
+        raise Refused("empty_partition")
+    return selected, MAX_PARTITION_SECONDS
 
 
 def require_offline_network():
@@ -318,6 +360,8 @@ def node_completion(script, raw):
             "scope": "public queue module with inert DOM and synthetic GET responses"},
         "test_native_jit_review_portal.cjs": {"ok": True, "synthetic": True,
             "nativeAdmission": False, "providerRequests": False},
+        "test_operator_auth_state_ui.cjs": {"ok": True,
+            "scope": "actual workspace, notification and audit controllers; inert DOM and synthetic deferred GETs, not browser or backend acceptance"},
     }
     try:
         lines = raw.decode("utf-8").splitlines()
@@ -403,6 +447,7 @@ def save(path, value):
 
 
 def run(args):
+    suites, maximum_seconds = partition_suites(args.partition)
     require_offline_network()  # Before children, output creation, or fixture state.
     python = executable(args.python)
     node = executable(args.node or shutil.which("node") or "")
@@ -419,8 +464,8 @@ def run(args):
     output.mkdir(mode=0o700)
     began = time.monotonic()
     rows = []
-    for index, suite in enumerate(SUITES):
-        remaining = MAX_SECONDS - (time.monotonic() - began)
+    for index, suite in enumerate(suites):
+        remaining = maximum_seconds - (time.monotonic() - began)
         row = {"category": suite.category, "script": suite.script, "arguments": list(suite.arguments),
             "sourceSha256": hashlib.sha256((ROOT / "scripts" / suite.script).read_bytes()).hexdigest()}
         if remaining <= 0:
@@ -442,14 +487,20 @@ def run(args):
         print(json.dumps({"script": suite.script, "status": row["status"],
             "exitCode": row["exitCode"]}), flush=True)
     result = {"schema": SCHEMA, "success": all(row["status"] == "passed" for row in rows),
+        "partition": args.partition, "totalSuiteCount": len(SUITES),
+        "suiteRosterSha256": hashlib.sha256(json.dumps([
+            {"category": suite.category, "script": suite.script, "runtime": suite.runtime,
+                "arguments": list(suite.arguments), "seconds": suite.seconds}
+            for suite in SUITES], sort_keys=True, separators=(",", ":")).encode("ascii")).hexdigest(),
         "scope": "ordinary-app offline component regressions", "network": "loopback-only",
         "sourceRoot": str(ROOT), "requirementsSha256": hashlib.sha256((ROOT / "requirements.lock").read_bytes()).hexdigest(),
         "managedClientRequirementsSha256": hashlib.sha256((ROOT / "examples" / "managed-client" / "requirements.lock").read_bytes()).hexdigest(),
-        "elapsedSeconds": round(time.monotonic() - began, 3), "maximumSeconds": MAX_SECONDS,
+        "elapsedSeconds": round(time.monotonic() - began, 3), "maximumSeconds": maximum_seconds,
         "maximumOutputBytesPerSuite": MAX_OUTPUT_BYTES, "suites": rows,
         "notExecuted": list(EXCLUDED), "productionAcceptance": False}
     save(output / "result.json", result)
-    print(json.dumps({"success": result["success"], "suites": len(rows), "notExecuted": list(EXCLUDED)}))
+    print(json.dumps({"success": result["success"], "partition": args.partition,
+        "suites": len(rows), "notExecuted": list(EXCLUDED)}))
     return 0 if result["success"] else 1
 
 
@@ -458,6 +509,8 @@ def main():
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--node")
     parser.add_argument("--dependency-root", type=Path)
+    parser.add_argument("--partition", choices=PARTITIONS, default="all",
+        help="fixed CI partition (600s each), or the complete roster (default, 900s)")
     parser.add_argument("--output", type=Path, required=True, help="new directory in a private writable parent")
     args = parser.parse_args()
     os.umask(0o077)

@@ -38,9 +38,82 @@ PHASE2 = (
     "policy_authority_tombstones",
     "policy_authority_work_pages",
 )
-ADDITIONAL = tuple(sorted((*PHASE2,
+LEGACY_ADDITIONAL = tuple(sorted((*PHASE2,
     "policy_authority_authorization_dependency_manifests",
     "policy_authority_operation_mutation_templates")))
+# Independently spelled current closure, not copied from the producer at test
+# time. Keep the historical twelve-table component separately exact below.
+ADDITIONAL = tuple(sorted((
+    "credential_currentness_barriers",
+    "credential_currentness_challenges",
+    "credential_currentness_holders",
+    "credential_currentness_roots",
+    "credential_generations",
+    "oauth_capture_retirement_attempts",
+    "oauth_capture_retirement_reservations",
+    "oauth_exchange_reservations",
+    "oauth_family_retirements",
+    "oauth_measured_capture_retirement_custody",
+    "oauth_measured_exchange_custody",
+    "oauth_measured_pending_retirement_custody",
+    "oauth_measured_reconnect_custody",
+    "oauth_measured_refresh_cleanup_custody",
+    "oauth_measured_refresh_custody",
+    "oauth_measured_setup_custody",
+    "oauth_measured_succession_custody",
+    "oauth_pending_family_retirements",
+    "oauth_pending_retirement_attempts",
+    "oauth_pending_retirement_reservations",
+    "oauth_provider_retirements",
+    "oauth_reconnect_authorizations",
+    "oauth_refresh_cleanup_attempts",
+    "oauth_refresh_cleanup_reservations",
+    "oauth_refresh_reservations",
+    "oauth_retirement_scope_heads",
+    "oauth_retirement_scopes",
+    "oauth_retirement_successions",
+    "oauth_retirement_succession_attempts",
+    "oauth_retirement_succession_materials",
+    "oauth_retirement_succession_snapshots",
+    "oauth_retirement_successor_generations",
+    "oauth_revocation_attempts",
+    "oauth_revocation_reservations",
+    "oauth_revocation_work",
+    "oauth_setup_audit_links",
+    "policy_authority_activation_evidence_bindings",
+    "policy_authority_authorization_dependency_manifests",
+    "policy_authority_bounded_aggregate_states",
+    "policy_authority_continuations",
+    "policy_authority_exact_pages",
+    "policy_authority_external_evidence_receipts",
+    "policy_authority_native_jit_review_pairs",
+    "policy_authority_opaque_values",
+    "policy_authority_operation_mutation_templates",
+    "policy_authority_sealed_values",
+    "policy_authority_secondary_index_heads",
+    "policy_authority_successor_execution_custody",
+    "policy_authority_tombstones",
+    "policy_authority_work_pages",
+    "policy_canary_delivery_heads",
+    "policy_canary_delivery_parts",
+    "policy_canary_delivery_slots",
+    "policy_canary_intake_batches",
+    "policy_native_activation_finalizations",
+    "policy_native_activation_holds",
+    "policy_native_activation_preparations",
+    "policy_native_canary_heads",
+    "policy_native_canary_ready",
+    "policy_shadow_generation_claims",
+    "setup_native_ca_installations",
+    "setup_native_canary_associations",
+    "setup_native_enrollments",
+    "setup_native_final_attempts",
+    "setup_native_hardware_attempts",
+    "setup_native_runtime_attempts",
+    "setup_policy_continuations",
+    "setup_session_events",
+    "setup_sessions",
+)))
 COUNTED_COLUMNS = {
     "policy_authority_counted_index_heads": (
         "index_id", "table_name", "counted_profile", "projection_digest",
@@ -60,6 +133,7 @@ COUNTED_SIGNATURES = {
     "serverware_policy_authority_counted_branch": ("text", "text", "text[]", "bigint[]"),
     "serverware_policy_authority_counted_expiry_micros": ("text",),
     "serverware_policy_authority_counted_signed_order": ("bigint",),
+    "serverware_policy_authority_counted_challenge_id_order": ("text",),
     "serverware_policy_authority_counted_field": ("jsonb", "text", "text"),
     "serverware_policy_authority_counted_project": ("text", "jsonb"),
     "serverware_policy_authority_counted_apply_index": ("text", "text", "jsonb", "jsonb"),
@@ -179,11 +253,15 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         self.assertIs(type(authority_contract.V9_ADDITIONAL_PROTECTED_TABLES), tuple)
         self.assertEqual(authority_contract.PHASE2_STORE_TABLES, PHASE2)
         self.assertEqual(authority_contract.V9_ADDITIONAL_PROTECTED_TABLES, ADDITIONAL)
-        self.assertEqual(len(set(ADDITIONAL)), 12)
-        self.assertEqual(set(ADDITIONAL) - set(PHASE2), {
+        self.assertEqual(len(ADDITIONAL), 69)
+        self.assertEqual(len(set(ADDITIONAL)), 69)
+        self.assertEqual(len(LEGACY_ADDITIONAL), 12)
+        self.assertEqual(len(set(LEGACY_ADDITIONAL)), 12)
+        self.assertEqual(set(LEGACY_ADDITIONAL) - set(PHASE2), {
             "policy_authority_authorization_dependency_manifests",
             "policy_authority_operation_mutation_templates",
         })
+        self.assertTrue(set(LEGACY_ADDITIONAL).issubset(ADDITIONAL))
         self.assertTrue(set(ADDITIONAL).isdisjoint({"credentials", "principals", "routes", "oidc_browser_sessions"}))
 
     def test_runtime_read_only_union_keeps_all_three_legacy_sets_and_explicit_tables(self):
@@ -214,7 +292,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             value = named_assignment(self.db_tree, name).value
             self.assertIsInstance(value, ast.Tuple)
             self.assertTrue(all(isinstance(node, ast.Constant) and type(node.value) is str for node in value.elts))
-            self.assertTrue(set(ADDITIONAL).isdisjoint(node.value for node in value.elts))
+            self.assertTrue(set(LEGACY_ADDITIONAL).isdisjoint(node.value for node in value.elts))
 
     def test_phase2_spec_alias_and_operation_manifest_use_the_same_source_inventories(self):
         _, spec_tree = read_source("scripts/authority/phase2_store_spec.py", 1024 * 1024)
@@ -971,7 +1049,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         ddl = v9_schema_literal(ddl_tree)
         start = ddl.index(table + " (")
         request = ddl[start:ddl.index("\n            );", start)]
-        declarations = re.findall(r"^                ([a-z_]+) (TEXT|BIGINT) (.+),$", request, re.M)
+        declarations = re.findall(r"^                ([a-z_][a-z0-9_]*) (TEXT|BIGINT) (.+),$", request, re.M)
         self.assertEqual(tuple(name for name, _, _ in declarations), columns)
         self.assertTrue(all("NOT NULL" in suffix or suffix == "PRIMARY KEY"
                             for _, _, suffix in declarations))
@@ -1066,7 +1144,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         ddl = v9_schema_literal(tree)
         start = ddl.index(table + " (")
         ack = ddl[start:ddl.index("\n            );", start)]
-        declarations = re.findall(r"^                ([a-z_]+) (TEXT|BIGINT) (.+),$", ack, re.M)
+        declarations = re.findall(r"^                ([a-z_][a-z0-9_]*) (TEXT|BIGINT) (.+),$", ack, re.M)
         self.assertEqual(tuple(name for name, _, _ in declarations), columns)
         self.assertTrue(all("NOT NULL" in suffix or suffix == "PRIMARY KEY"
                             for _, _, suffix in declarations))
@@ -1261,14 +1339,18 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             "authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE, authority_contract.JIT_ORIGINAL_PAGE_TABLE}")
 
     def test_counted_eleven_function_signatures_and_security_match_actual_sql_declarations(self):
+        # Preserve the historical test ID; the independently closed current
+        # roster also includes the source-owned challenge ID ordering helper.
+        self.assertEqual(len(COUNTED_SIGNATURES), 12)
         self.assertEqual(dict(authority_contract.POSTGRES_COUNTED_FUNCTION_SIGNATURES), COUNTED_SIGNATURES)
         observed = {}
         for relative in ("counted_hash_sql.py", "counted_projection_sql.py", "counted_path_sql.py", "counted_maintenance_sql.py"):
             source, _ = read_source("serverware/authority_store/" + relative, 256 * 1024)
             declarations = re.findall(
-                r"CREATE OR REPLACE FUNCTION \{namespace\}\.([a-z_]+)\((.*?)\)(.*?)AS \$counted_[a-z]+\$",
+                r"CREATE OR REPLACE FUNCTION \{namespace\}\.([a-z_][a-z0-9_]*)\((.*?)\)(.*?)AS \$counted_[a-z_][a-z0-9_]*\$",
                 source, re.DOTALL)
             self.assertTrue(declarations)
+            self.assertEqual(len(declarations), source.count("CREATE OR REPLACE FUNCTION {namespace}."))
             for name, arguments, header in declarations:
                 self.assertNotIn(name, observed)
                 types = tuple(argument.strip().split()[1] for argument in arguments.split(","))
@@ -1352,10 +1434,15 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
     def test_counted_source_contract_pins_event_scope_without_activating_v3_queries(self):
         self.assertEqual(dict(authority_contract.POSTGRES_COUNTED_MAINTENANCE_CONTRACT), {
             "schema": "serverware.policyAuthorityCountedMaintenanceAdmission/v1",
-            "maximumProfilesPerNormalizedEvent": 3,
+            "maximumProfilesPerNormalizedEvent": 9,
             "workAccounting": "bounded-per-profile-not-whole-operation",
             "plannerCompleteQueryAdmission": False, "sqliteInstalled": False,
         })
+        _, maintenance = read_source("serverware/authority_store/counted_maintenance_sql.py", 256 * 1024)
+        self.assert_shape(named_assignment(maintenance, "MAX_EVENT_PROFILES").value, "9")
+        dispatcher = named_function(maintenance, "counted_maintenance_functions_sql")
+        self.assertTrue(any(isinstance(node, ast.Compare) and ast.dump(node) == ast.dump(
+            ast.parse("len(ids) > MAX_EVENT_PROFILES", mode="eval").body) for node in ast.walk(dispatcher)))
         _, contract = read_source("serverware/authority_contract.py", 2 * 1024 * 1024)
         material = operation_manifest_material(contract)
         fields = {key.value: value for key, value in zip(material.keys, material.values)}

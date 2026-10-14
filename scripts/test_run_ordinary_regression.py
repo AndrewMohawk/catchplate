@@ -2,7 +2,9 @@
 """Stdlib orchestration controls; tiny local children, no product tests/network."""
 import json
 import hashlib
+import io
 import os
+from contextlib import redirect_stderr
 from pathlib import Path
 import sys
 import tempfile
@@ -37,6 +39,9 @@ class RunnerTests(unittest.TestCase):
                 "test_authority_verifier_read_source.py",
                 "test_authority_table_acl_source.py",
                 "test_authority_revocation_proof_bundle.py",
+                "test_authority_index_join.py", "test_authority_indexed_mutation.py",
+                "test_authority_complete_query_batch.py", "test_authority_counted_root_transition.py",
+                "test_authority_complete_read_write.py", "test_authority_revocation_read_write.py",
                 "test_native_jit_review_open_owner.py",
                 "test_authority_native_jit_review_current_chunks.py",
                 "test_authority_native_jit_review_current_read.py",
@@ -86,6 +91,9 @@ class RunnerTests(unittest.TestCase):
             ("ui_contract", "node", (), 60))
         review = next(row for row in runner.SUITES if row.script == "test_native_jit_review_portal.cjs")
         self.assertEqual((review.category, review.runtime, review.arguments, review.seconds),
+            ("ui_contract", "node", (), 60))
+        auth_state = next(row for row in runner.SUITES if row.script == "test_operator_auth_state_ui.cjs")
+        self.assertEqual((auth_state.category, auth_state.runtime, auth_state.arguments, auth_state.seconds),
             ("ui_contract", "node", (), 60))
         self.assertNotIn("test_native_jit_review_signers.py", paths)
         assets = next(row for row in runner.SUITES if row.script == "test_operator_catalog_assets.py")
@@ -140,6 +148,100 @@ class RunnerTests(unittest.TestCase):
         catalog = next(row for row in runner.SUITES if row.script == "test_operator_catalog_browser.cjs")
         self.assertEqual(catalog.arguments, ("--self-test",))
         self.assertNotIn("test_operator_ordinary_modes_browser.cjs", paths)
+
+    def test_fixed_partitions_are_disjoint_complete_ordered_and_bounded(self):
+        self.assertEqual(runner.PARTITIONS, ("all", "python-1", "python-2", "python-3", "node"))
+        self.assertEqual(runner.partition_suites("all"), (runner.SUITES, 900))
+        shards = {name: runner.partition_suites(name) for name in runner.PARTITIONS[1:]}
+        names = [suite.script for selected, _ in shards.values() for suite in selected]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(set(names), {suite.script for suite in runner.SUITES})
+        python = tuple(suite for suite in runner.SUITES if suite.runtime == "python")
+        self.assertEqual(shards["python-1"][0] + shards["python-2"][0] + shards["python-3"][0], python)
+        self.assertEqual(shards["python-1"][0][-1].script, "test_operator_workload_renewal.py")
+        self.assertEqual(shards["python-2"][0][0].script, "test_managed_client.py")
+        self.assertEqual(shards["python-2"][0][-1].script, "test_native_jit_prepare.py")
+        self.assertEqual(shards["python-3"][0][0].script, "test_authority_complete_read_write.py")
+        self.assertEqual(tuple(len(selected) for selected, _ in shards.values()), (12, 39, 41, 16))
+        self.assertEqual((len(runner.SUITES), len(python)), (108, 92))
+        self.assertEqual(shards["node"][0], tuple(suite for suite in runner.SUITES if suite.runtime == "node"))
+        for partition, (selected, budget) in shards.items():
+            self.assertTrue(selected)
+            self.assertEqual(budget, 600)
+            self.assertEqual(runner.partition_suites(partition), (selected, budget))
+
+    def test_invalid_partitions_and_broken_partition_rosters_are_refused(self):
+        for partition in (None, True, 1, [], "", "python", "python-4", "node ", "ALL", "../node"):
+            with self.subTest(partition=partition), self.assertRaises(runner.Refused):
+                runner.partition_suites(partition)
+        first = runner.SUITES[0]
+        boundaries = tuple(runner.Suite("backend", script) for script in runner.PYTHON_PARTITION_BOUNDARIES)
+        for suites, partition in (((), "all"), ((first, first), "node"),
+                ((runner.Suite("backend", "test_invalid.py", "unknown"),), "all"),
+                ((first,), "python-1"), ((first,), "node"),
+                (boundaries, "python-3"), ((*reversed(boundaries), first), "python-1")):
+            with self.subTest(partition=partition, suites=suites), \
+                    patch.object(runner, "SUITES", suites), self.assertRaises(runner.Refused):
+                runner.partition_suites(partition)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "new"
+            args = SimpleNamespace(partition="python-4", output=output)
+            with patch.object(runner, "require_offline_network") as offline, \
+                    patch.object(runner.subprocess, "Popen") as child, self.assertRaises(runner.Refused):
+                runner.run(args)
+            offline.assert_not_called()
+            child.assert_not_called()
+            self.assertFalse(output.exists())
+
+    def test_cli_defaults_to_all_and_rejects_unknown_partition_before_run(self):
+        original_umask = os.umask(0o077)
+        try:
+            with patch.object(sys, "argv", ["runner", "--output", "/unused"]), \
+                    patch.object(runner, "run", return_value=0) as run:
+                self.assertEqual(runner.main(), 0)
+            self.assertEqual(run.call_args.args[0].partition, "all")
+            with patch.object(sys, "argv", ["runner", "--output", "/unused", "--partition", "python-4"]), \
+                    patch.object(runner, "run") as run, redirect_stderr(io.StringIO()), \
+                    self.assertRaises(SystemExit) as error:
+                runner.main()
+            self.assertEqual(error.exception.code, 2)
+            run.assert_not_called()
+        finally:
+            os.umask(original_umask)
+
+    def test_partition_execution_records_identity_and_never_exceeds_its_budget(self):
+        first = runner.SUITES[0]
+        boundary1, boundary2 = tuple(next(suite for suite in runner.SUITES if suite.script == script)
+            for script in runner.PYTHON_PARTITION_BOUNDARIES)
+        second = next(suite for suite in runner.SUITES if suite.script == "test_authority_verifier_read_source.py")
+        nodes = tuple(suite for suite in runner.SUITES if suite.runtime == "node")[:2]
+        cases = {"all": ((first, boundary1), 900), "python-1": ((first, boundary1, boundary2, second), 600),
+            "python-2": ((boundary1, first, boundary2, second), 600),
+            "python-3": ((boundary1, boundary2, first, second), 600), "node": ((first, *nodes), 600)}
+        synthetic = {"status": "passed", "exitCode": 0, "observedUnittestCounts": [1], "observedNodeGroups": 1}
+        for partition, (suites, limit) in cases.items():
+            with self.subTest(partition=partition), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "results"
+                args = SimpleNamespace(python=sys.executable, node=sys.executable,
+                    dependency_root=None, output=output, partition=partition)
+                with patch.object(runner, "SUITES", suites), patch.object(runner, "require_offline_network"), \
+                        patch.object(runner.time, "monotonic", side_effect=[10, 10 + limit - 2, 10 + limit, 10 + limit]), \
+                        patch.object(runner, "run_process", return_value=synthetic) as run, patch("builtins.print"):
+                    selected, _ = runner.partition_suites(partition)
+                    self.assertEqual(runner.run(args), 1)
+                self.assertEqual(run.call_count, 1)
+                self.assertEqual(run.call_args.kwargs["seconds"], 2)
+                result = json.loads((output / "result.json").read_text())
+                self.assertEqual((result["partition"], result["maximumSeconds"], result["totalSuiteCount"]),
+                    (partition, limit, len(suites)))
+                self.assertFalse(result["success"])
+                self.assertEqual([row["script"] for row in result["suites"]], [suite.script for suite in selected])
+                self.assertEqual([row["status"] for row in result["suites"]], ["passed", "not_run_budget"])
+                self.assertIsNone(result["suites"][1]["exitCode"])
+                expected_roster = [{"category": suite.category, "script": suite.script, "runtime": suite.runtime,
+                    "arguments": list(suite.arguments), "seconds": suite.seconds} for suite in suites]
+                self.assertEqual(result["suiteRosterSha256"], hashlib.sha256(json.dumps(expected_roster,
+                    sort_keys=True, separators=(",", ":")).encode("ascii")).hexdigest())
 
     def test_offline_check_rejects_any_nonloopback_interface_or_route(self):
         def check(interfaces, route="Iface\n", ipv6=""):
@@ -320,6 +422,8 @@ class RunnerTests(unittest.TestCase):
                     "serverware/operator_demo_web/workspace_pending_actions.js").read_bytes()).hexdigest()}, "PASS fixture\n"),
             "test_native_jit_review_portal.cjs": ({"ok": True, "synthetic": True,
                 "nativeAdmission": False, "providerRequests": False}, "PASS fixture\n"),
+            "test_operator_auth_state_ui.cjs": ({"ok": True,
+                "scope": "actual workspace, notification and audit controllers; inert DOM and synthetic deferred GETs, not browser or backend acceptance"}, "PASS fixture\n"),
         }
         self.assertEqual({row.script for row in runner.SUITES if row.runtime == "node"},
             set(examples) | {"test_operator_runtime_browser_assets.cjs"})
@@ -338,6 +442,8 @@ class RunnerTests(unittest.TestCase):
                     if type(shape[key]) is bool:
                         self.assertIsNone(runner.node_completion(script, wire({**valid, key: not shape[key]})))
                         self.assertIsNone(runner.node_completion(script, wire({**valid, key: 0})))
+                    else:
+                        self.assertIsNone(runner.node_completion(script, wire({**valid, key: "unreviewed-scope-or-source"})))
                 self.assertIsNone(runner.node_completion(script, b""))
                 self.assertIsNone(runner.node_completion(script, wire(valid) + b"extra\n"))
                 self.assertIsNone(runner.node_completion(script, wire(valid).replace(b'"groups": 1', b'"groups": 1,"groups": 1')))
@@ -378,7 +484,7 @@ class RunnerTests(unittest.TestCase):
     def test_missing_runtime_and_offline_refusal_happen_before_output_or_children(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "new"
-            args = SimpleNamespace(python=sys.executable, node=sys.executable, dependency_root=None, output=output)
+            args = SimpleNamespace(python=sys.executable, node=sys.executable, dependency_root=None, output=output, partition="all")
             with patch.object(runner, "require_offline_network", side_effect=runner.Refused("network_none_required")), \
                     patch.object(runner.subprocess, "Popen") as child, self.assertRaises(runner.Refused):
                 runner.run(args)
@@ -395,7 +501,7 @@ class RunnerTests(unittest.TestCase):
             {"status": "passed", "exitCode": 0, "observedUnittestCounts": [1]}]
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "results"
-            args = SimpleNamespace(python=sys.executable, node=sys.executable, dependency_root=None, output=output)
+            args = SimpleNamespace(python=sys.executable, node=sys.executable, dependency_root=None, output=output, partition="all")
             with patch.object(runner, "require_offline_network"), patch.object(runner, "SUITES", selected), \
                     patch.object(runner, "run_process", side_effect=results) as run, patch("builtins.print"):
                 self.assertEqual(runner.run(args), 1)
@@ -423,7 +529,7 @@ class RunnerTests(unittest.TestCase):
         synthetic = {"status": "passed", "exitCode": 0, "observedUnittestCounts": [1]}
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "results"
-            args = SimpleNamespace(python=sys.executable, node=sys.executable, dependency_root=None, output=output)
+            args = SimpleNamespace(python=sys.executable, node=sys.executable, dependency_root=None, output=output, partition="all")
             with patch.object(runner, "require_offline_network") as offline, \
                     patch.object(runner, "SUITES", selected), \
                     patch.object(runner, "run_process", return_value=synthetic) as run, patch("builtins.print"):
@@ -457,6 +563,25 @@ class RunnerTests(unittest.TestCase):
         isolated = makefile.split("override CODER_ISOLATED_TEST_SCRIPTS :=", 1)[1].split("\n\n", 1)[0]
         self.assertNotIn("scripts/test_managed_client.py", isolated)
         self.assertIn("--with-requirements examples/managed-client/requirements.lock", makefile)
+
+    def test_workflow_partitions_and_signer_job_are_independent(self):
+        value = (runner.ROOT / ".github/workflows/ordinary-regression.yml").read_text()
+        components, signers = value.split("\n  signers:\n", 1)
+        self.assertIn("\n  components:\n", components)
+        self.assertIn("fail-fast: false", components)
+        self.assertIn("partition: [python-1, python-2, python-3, node]", components)
+        self.assertIn('--partition "${{ matrix.partition }}"', components)
+        self.assertIn("timeout --kill-after=10s 660s docker run", components)
+        self.assertIn("name: ordinary-component-results-${{ matrix.partition }}", components)
+        self.assertNotIn("run_native_jit_review_signers.py", components)
+        self.assertNotIn("needs:", signers)
+        self.assertIn("timeout --kill-after=10s 75s docker run", signers)
+        self.assertIn("--network none", signers)
+        self.assertIn("--user 0:0 --read-only --cap-drop ALL", signers)
+        self.assertIn("scripts/run_native_jit_review_signers.py --dependency-root /deps", signers)
+        self.assertIn("name: ordinary-signer-results", signers)
+        self.assertEqual(value.count("if: always()"), 2)
+        self.assertNotIn("continue-on-error", value)
 
 
 if __name__ == "__main__":

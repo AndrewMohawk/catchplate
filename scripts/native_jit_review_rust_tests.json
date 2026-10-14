@@ -1,0 +1,99 @@
+{
+  "transport": {
+    "kind": "library", "prefix": "native_browser_transport_v1::tests::", "names": [
+      "response_headers_preserve_exact_static_wire_bytes",
+      "response_bounds_and_header_refusals_match_static_profile",
+      "response_fence_has_no_rearm_after_an_attempt",
+      "source_order_keeps_actual_transport_and_private_write_guards"
+    ]
+  },
+  "static": {
+    "kind": "library", "prefix": "native_static_credential_browser_v1::tests::", "names": [
+      "fixed_static_routes_remain_purpose_separated",
+      "creation_rotation_pages_and_cookies_keep_distinct_domains",
+      "source_wiring_keeps_static_request_ownership_and_rotation_delegation"
+    ]
+  },
+  "library-seal": {
+    "kind": "library", "prefix": "native_jit_review_v1::tests::", "names": [
+      "cold_configuration_is_closed_distinct_and_not_admission",
+      "cold_policy_bounds_keys_target_and_trust_do_not_alias",
+      "genuine_local_assignment_signature_checks_without_creating_owner",
+      "assignment_source_config_target_interval_and_envelope_are_exact",
+      "actual_python_originals_require_independent_manifest_and_reservation_ttl",
+      "private_owner_and_signing_path_remain_request_bound_and_terminal"
+    ]
+  },
+  "opening": {
+    "kind": "library", "prefix": "native_jit_review_open_v1::tests::", "names": [
+      "pure_attempt_consumes_private_view_once_and_never_rearms_on_authentication",
+      "pure_attempt_owner_cookie_and_both_original_expiry_boundaries_are_required",
+      "local_grant_signature_is_exact_key_domain_purpose_and_original",
+      "local_authority_closed_scope_integer_and_time_controls_are_resigned",
+      "pure_grant_join_binds_challenge_all_four_literal_originals_and_expiry",
+      "local_commit_ack_requires_distinct_signature_and_exact_preparation_binding",
+      "pure_display_digest_projection_preserves_floats_and_large_literal_numbers",
+      "cold_opening_schema_and_current_manifest_are_closed_and_not_sealing",
+      "cold_policy_rejects_bad_bounds_key_aliases_targets_trust_and_origins",
+      "source_only_disclosure_order_spends_before_ack_and_private_output",
+      "local_refusal_preserves_other_attempt_and_shared_liveness",
+      "claimed_refusal_and_uncertain_socket_output_never_rearm",
+      "fatal_shared_custody_fence_cannot_resume_after_local_refusal"
+    ]
+  },
+  "browser": {
+    "kind": "library", "prefix": "native_jit_review_browser_v1::tests::", "names": [
+      "review_routes_are_closed_and_separate_from_static",
+      "review_cookie_has_its_own_bounded_host_only_domain",
+      "review_page_keeps_private_content_on_native_origin"
+    ]
+  },
+  "binary-seal": {
+    "kind": "binary", "prefix": "native_jit_review::tests::", "names": [
+      "request_deadline_is_frozen_conservatively_before_io_and_not_renewed",
+      "ordinary_state_cannot_enter_the_native_custody_owner_path"
+    ]
+  },
+  "preparation": {
+    "kind": "binary", "prefix": "native_release_jit_preparation::tests::", "names": [
+      "python_asgi_originals_match_actual_payload_and_pure_claims_only",
+      "actual_request_scope_and_durable_claim_substitutions_are_refused",
+      "closed_canonical_wire_rejects_aliases_duplicates_nesting_and_oversize",
+      "text_graph_numbers_are_not_decoded_or_recanonicalized_as_parent_values",
+      "original_graph_substitutions_and_parent_child_domain_swaps_are_refused",
+      "current_route_policy_limits_and_shared_quota_are_independent_required_joins",
+      "python_review_and_set_spelling_match_without_normalizing_private_originals",
+      "lifetime_and_reachable_terminal_boundary_do_not_grant_native_authority"
+    ]
+  },
+  "submission": {
+    "kind": "binary", "prefix": "native_release_jit_preparation::submission::tests::", "names": [
+      "literal_originals_and_actual_escaped_aggregate_are_bounded",
+      "exact_pending_response_is_denial_not_a_release",
+      "grant_reservation_replay_identity_and_durable_substitutions_fail",
+      "response_is_closed_duplicate_free_typed_and_store_bound",
+      "pending_expiry_uses_original_document_microseconds_without_renewal",
+      "business_binding_changes_for_each_actual_caller_scope_and_child_id",
+      "signed_headers_are_exact_unique_and_never_secret_bearing",
+      "pending_guard_cannot_dispatch_or_complete_and_disarms_as_denial",
+      "actual_submit_is_once_retains_deadlines_and_never_falls_back"
+    ]
+  },
+  "ordinary-opening": {
+    "kind": "binary", "prefix": "native_jit_review_open::tests::", "names": [
+      "ordinary_gate_has_no_opening_or_sealing_owner",
+      "busy_purpose_refuses_one_connection_but_poison_is_terminal"
+    ]
+  },
+  "startup-ports": {
+    "kind": "binary", "prefix": "native_startup_config::jit_review_open::tests::", "names": [
+      "opening_ports_are_pairwise_distinct_and_bounded"
+    ]
+  },
+  "startup-cli": {
+    "kind": "binary", "prefix": "native_startup_config::cli::tests::", "names": [
+      "opening_cli_requires_response_proof_identity_export",
+      "sealing_cli_remains_a_separate_explicit_mode"
+    ]
+  }
+}

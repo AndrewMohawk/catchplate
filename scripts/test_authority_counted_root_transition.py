@@ -40,10 +40,8 @@ STAGE = "webauthn.trust.stage"
 SCHEMA = "serverware.policyAuthorityCountedRootTransition/v1"
 PROFILE = "serverware.policyAuthorityCountedRootTransitionProfile/v1"
 COUNTED_PROFILE = "serverware.policyAuthorityCountedIndex/v1"
-INDEX_IDS = ("webauthn_credential_id", "webauthn_credential_user_history", "webauthn_credential_live_trust",
-             "webauthn_registration_unused_global", "webauthn_registration_unused_user",
-             "webauthn_session_credential_status", "webauthn_grant_approver_active", "webauthn_control_approval_approved",
-             "webauthn_publication_bundle_digest", "webauthn_publication_status", "webauthn_publication_generation")
+# Shared independent literal descriptors, not the source projector's manifest.
+INDEX_IDS = profile_oracle.INDEX_IDS
 
 
 def canonical(value):

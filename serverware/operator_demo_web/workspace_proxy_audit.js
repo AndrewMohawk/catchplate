@@ -452,7 +452,32 @@ function auditProviderOutcome(record) {
 }
 function createAuditView(workspace) {
   let loaded = false; let cursor = null; let count = 0; let epoch = 0; let selection = '';
-  async function load(append = false) {
+  let verificationEpoch = 0; let authenticationRequired = false; let loading = false; let verifying = false;
+  const authenticationMessage = 'Your session could not be verified. Reload and sign in, refresh the workspace, then explicitly refresh the audit log or verify its chain.';
+  function controls() {
+    const blocked = authenticationRequired && !workspace.state.catalog;
+    for (const id of ['audit-refresh', 'audit-filter', 'audit-query']) element(id).disabled = blocked;
+    element('audit-search-form').querySelector('button').disabled = blocked;
+    element('audit-more').disabled = blocked || loading;
+    element('audit-verify').disabled = blocked || verifying;
+  }
+  function authenticationLost() {
+    ++epoch; ++verificationEpoch; authenticationRequired = true;
+    loaded = false; cursor = null; count = 0; selection = ''; loading = false; verifying = false;
+    element('audit-list').replaceChildren(); element('audit-more').hidden = true;
+    element('audit-status').textContent = authenticationMessage;
+    element('audit-verification').textContent = authenticationMessage;
+    controls();
+  }
+  function mayRead(manual) {
+    if (!authenticationRequired) return true;
+    if (!manual || !workspace.state.catalog) return false;
+    // A manual workspace refresh re-establishes the shared session; it does
+    // not automatically reload private audit history or replay any mutation.
+    authenticationRequired = false; return true;
+  }
+  async function load(append = false, manual = false) {
+    if (!mayRead(manual)) return;
     const version = ++epoch; const filter = JSON.stringify([element('audit-filter').value, element('audit-query').value.trim()]);
     if (filter !== selection) append = false;
     selection = filter;
@@ -461,7 +486,7 @@ function createAuditView(workspace) {
     if (element('audit-filter').value) query.set('eventType', element('audit-filter').value);
     if (element('audit-query').value.trim()) query.set('q', element('audit-query').value.trim());
     if (append && cursor) query.set('cursor', cursor);
-    element('audit-status').textContent = 'Loading stored events...'; element('audit-more').disabled = true;
+    loading = true; element('audit-status').textContent = 'Loading stored events...'; controls();
     try {
       const result = await workspace.api('/api/audit/search?' + query);
       if (version !== epoch) return;
@@ -479,17 +504,23 @@ function createAuditView(workspace) {
       element('audit-more').hidden = !cursor;
       element('audit-status').textContent = `${count} events shown. ` + (result.has_more || result.complete === false ? 'Partial history; load older events to continue.' : 'End of matching history.');
     } catch (error) { if (version === epoch) { loaded = false; element('audit-status').textContent = operatorMessage(error); element('audit-more').hidden = true; } }
-    finally { if (version === epoch) element('audit-more').disabled = false; }
+    finally { if (version === epoch) { loading = false; controls(); } }
   }
-  element('audit-refresh').addEventListener('click', () => load()); element('audit-more').addEventListener('click', () => load(true));
-  element('audit-filter').addEventListener('change', () => load());
-  element('audit-search-form').addEventListener('submit', event => { event.preventDefault(); load(); });
+  element('audit-refresh').addEventListener('click', () => load(false, true)); element('audit-more').addEventListener('click', () => load(true, true));
+  element('audit-filter').addEventListener('change', () => load(false, true));
+  element('audit-search-form').addEventListener('submit', event => { event.preventDefault(); load(false, true); });
   element('audit-verify').addEventListener('click', async () => {
-    element('audit-verify').disabled = true; element('audit-verification').textContent = 'Checking the stored audit chain...';
-    try { const result = await workspace.api('/api/audit/verify'); element('audit-verification').textContent = result.ok === true && result.complete === true ?
-      'The complete local audit chain is consistent.' : result.ok === true ? 'Verification was incomplete.' : 'Audit verification failed.'; }
-    catch (error) { element('audit-verification').textContent = operatorMessage(error); }
-    finally { element('audit-verify').disabled = false; }
+    if (verifying || !mayRead(true)) return;
+    const version = ++verificationEpoch;
+    verifying = true; controls(); element('audit-verification').textContent = 'Checking the stored audit chain...';
+    try {
+      const result = await workspace.api('/api/audit/verify');
+      if (version !== verificationEpoch) return;
+      element('audit-verification').textContent = result.ok === true && result.complete === true ?
+        'The complete local audit chain is consistent.' : result.ok === true ? 'Verification was incomplete.' : 'Audit verification failed.';
+    } catch (error) { if (version === verificationEpoch) element('audit-verification').textContent = operatorMessage(error); }
+    finally { if (version === verificationEpoch) { verifying = false; controls(); } }
   });
+  workspace.onAuthenticationLost(authenticationLost); workspace.subscribe(controls); controls();
   return {open: () => { if (!loaded && workspace.state.catalog) load(); }};
 }

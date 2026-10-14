@@ -116,7 +116,8 @@ class ReadWriteFixture:
         self.after_trees = {item.table: primary_oracle.IndependentTree(self.after_rows[item.table],
             table=item.table, columns=item.key_columns,
             revision=17 + sum(table == item.table for table, _, _, _ in actions)) for item in self.read.contracts}
-        self.expiry_before = {"past": 1_000_000, "future": 2_000_000, "used": 3_000_000}
+        self.expiry_before = {row["id"]: join_oracle.timestamp_us(row["expires_at"])
+                              for row in self.rows["webauthn_challenges"]}
         self.expiry_after = {**self.expiry_before, **({} if expiry_after is None else expiry_after)}
         self.indexes = {}
         for table in sorted({mutation["table"] for mutation in self.mutations}):
@@ -247,10 +248,10 @@ class CompleteReadWriteTests(unittest.TestCase):
     def test_true_seven_head_union_and_both_root_transitions_match_independent_populations(self):
         result = self.verify()
         self.assert_exact(self.fixture, result)
-        self.assertEqual(len(result.before_heads), 8)
-        self.assertEqual(len(result.write.before_heads), 5)
+        self.assertEqual(len(result.before_heads), 9)
+        self.assertEqual(len(result.write.before_heads), 6)
         self.assertEqual(len(result.joined_reads), 6)
-        self.assertEqual(result.metrics.write_context_hashes, 6)
+        self.assertEqual(result.metrics.write_context_hashes, 8)
 
     def test_actual_global_five_joins_and_one_indexed_writer_retain_real_result_identity(self):
         memberships, primary_writes, writes, joins = [], [], [], []
@@ -374,7 +375,8 @@ class CompleteReadWriteTests(unittest.TestCase):
                 self.assertEqual((written[head.index_id].index_revision, written[head.index_id].index_root),
                                  (head.index_revision, head.index_root))
         read_only = set(heads) - set(written)
-        self.assertEqual(read_only, {"webauthn_control_approval_approved", "webauthn_registration_unused_global"})
+        self.assertEqual(read_only, {"webauthn_control_approval_approved", "webauthn_registration_unused_global",
+                                     "webauthn_publication_status"})
         for index_id in read_only:
             self.assertEqual(after[index_id], heads[index_id])
 
@@ -417,8 +419,9 @@ class CompleteReadWriteTests(unittest.TestCase):
             with self.subTest(kind=label):
                 result = self.verify(fixture)
                 self.assert_exact(fixture, result)
-                before = result.write.before_heads[0]
-                new = result.write.after_heads[0]
+                before = next(head for head in result.write.before_heads
+                              if head.index_id == "webauthn_session_credential_status")
+                new = next(head for head in result.write.after_heads if head.index_id == before.index_id)
                 self.assertEqual(new.index_revision, before.index_revision + 1)
                 self.assertEqual(new.index_root.count, before.index_root.count)
                 self.assertEqual(len(fixture.indexes[before.index_id]["targets"]), 1 if label == "equal" else 2)
@@ -429,14 +432,22 @@ class CompleteReadWriteTests(unittest.TestCase):
 
     def test_full_eight_profile_union_includes_both_challenge_profiles_and_excludes_publication(self):
         rows = default_rows()
-        future = next(item for item in rows["webauthn_challenges"] if item["id"] == "future")
-        actions = (*default_actions(rows), ("webauthn_challenges", {"id": "future"}, "UPDATE",
-                                            {**future, "used_at": "consumed"}))
+        # Fresh challenge writes admit only generated IDs and complete typed
+        # rows, including fields required by all seven newer counted profiles.
+        rows["webauthn_challenges"] = [write_oracle.challenge(
+            f"00000000-0000-0000-0000-{number:012d}", **{
+                **{key: value for key, value in row.items() if key != "id"},
+                "used_at": write_oracle.EPOCH if row["used_at"] is not None else None})
+            for number, row in enumerate(rows["webauthn_challenges"], 1)]
+        future = next(item for item in rows["webauthn_challenges"]
+                      if item["expires_at"] == "1970-01-01T00:00:02+00:00")
+        actions = (*default_actions(rows), ("webauthn_challenges", {"id": future["id"]}, "UPDATE",
+                                            {**future, "used_at": write_oracle.EPOCH}))
         fixture = ReadWriteFixture(rows, actions)
         result = self.verify(fixture)
         self.assert_exact(fixture, result)
-        self.assertEqual(len(result.before_heads), 9)
-        self.assertEqual(result.metrics.write_context_hashes, 8)
+        self.assertEqual(len(result.before_heads), 17)
+        self.assertEqual(result.metrics.write_context_hashes, 24)
         self.assertIn("webauthn_registration_unused_user", {head.index_id for head in result.before_heads})
         inputs = fixture.arguments()
         self.assertIn("webauthn_publication_status", {head.index_id for head in result.before_heads})
@@ -449,7 +460,7 @@ class CompleteReadWriteTests(unittest.TestCase):
         publication = range_oracle.IndependentIndex([], join_oracle.expected_profile(publication_id))
         extra = composer.CompleteReadWriteHead(publication_id, 0, publication.root)
         complete_plus_extra = tuple(sorted((*inputs["counted_before_heads"], extra), key=lambda item: item.index_id))
-        self.assertEqual(len(complete_plus_extra), 10)
+        self.assertEqual(len(complete_plus_extra), 18)
         self.assertTrue(set(fixture.heads) < {item.index_id for item in complete_plus_extra})
         with self.assertRaisesRegex(composer.CompleteReadWriteError, "union"):
             self.verify(fixture, counted_before_heads=complete_plus_extra)

@@ -304,7 +304,7 @@ function createNotificationsView(workspace) {
     let response;
     try { response = await fetch(path, {credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(30000), ...options}); }
     catch (_) { throw operatorError('The response was lost or unavailable. Do not assume the change failed; check the retained operation result.'); }
-    if ([401, 403].includes(response.status)) { workspace.state.catalog = null; workspace.emit(); }
+    if ([401, 403].includes(response.status)) workspace.authenticationLost();
     let body = null;
     try {
       if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Not JSON');
@@ -483,6 +483,7 @@ function createNotificationsView(workspace) {
   }
   element('notifications-refresh').addEventListener('click', refresh);
   element('notification-check-operation').addEventListener('click', checkOperation);
+  workspace.onAuthenticationLost(clearSecrets);
   window.addEventListener('pagehide', () => { clearSecrets(); nativeObservation?.stop(); }); workspace.subscribe(controls); operationMessage(); controls();
   return {show(active) { visible = active; if (!active) clearSecrets(); nativeObservation?.update(active); controls(); if (active && !opened) { opened = true; refresh(); } }};
 }

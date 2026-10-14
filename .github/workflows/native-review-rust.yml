@@ -1,0 +1,40 @@
+name: Native review Rust engineering controls
+
+# One explicitly requested hosted attempt. This is not native admission,
+# deployment, a normal release-binary build, or whole-project acceptance.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-review-rust
+  cancel-in-progress: false
+
+jobs:
+  focused-rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check the receipt parsers without compiling Rust
+        run: python3 -I -B scripts/test_run_native_jit_review_rust.py
+      - name: Provision locked public crates, then run offline Rust controls
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: >-
+          python3 -I -B scripts/run_native_jit_review_rust.py
+          --expected-revision "$EXPECTED_REVISION"
+          --output "$RUNNER_TEMP/native-jit-review-rust"
+      - name: Retain bounded engineering evidence, never build caches or credentials
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-review-rust-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-jit-review-rust/results/
+          if-no-files-found: warn
+          retention-days: 7

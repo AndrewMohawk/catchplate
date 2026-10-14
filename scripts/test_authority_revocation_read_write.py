@@ -313,7 +313,7 @@ class RevocationReadWriteTests(unittest.TestCase):
         fixture = fixture_oracle.RevocationObservationFixture()
         result = self.verify(fixture)
         self.assert_observation(fixture, result)
-        self.assertEqual((len(result.query_program), len(result.selected_rows), len(result.before_heads)), (12, 10, 8))
+        self.assertEqual((len(result.query_program), len(result.selected_rows), len(result.before_heads)), (12, 10, 9))
         self.assertEqual(sum(row["present"] for row in result.selected_rows), 9)
         self.assertEqual(record_named(result.query_reads, "approvals").addresses, ())
         audit = record_named(result.query_reads, "audit_0")

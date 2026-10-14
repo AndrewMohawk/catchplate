@@ -367,9 +367,34 @@ guards have been updated against unchanged production counterparts, retaining
 all 116 test IDs. The schema test explicitly distinguishes the installed
 eight-operation marker roster from the declared native receipt and requires
 the unfinished review components to remain non-plannable. This does not install
-the missing receipt bridge. Those four suites are now CI gates. Follow-up
-classification, fixture and runner changes have source review but not yet a
-successful execution result.
+the missing receipt bridge. Those four suites are now CI gates.
+
+The exact `1052d0e8` [follow-up run 38512462817](https://github.com/example/private-deployment)
+confirmed the startup repair: seven classification controls and eight
+capability controls passed. Its full result was **80/101 suites passed, three
+failed, one timed out and 17 did not start**, with 1,166 observed Python test
+executions and no observed skips. The three failing suites are schema source,
+ACL source and revocation proof bundle. The last contains stale shared fixtures
+that omitted the session-token index and newer challenge indexes; a secondary
+`subTest` scoping error hid some original failures. No production authority
+guard has been weakened to accommodate those fixtures.
+
+The 900.018-second aggregate cutoff interrupted notification integration after
+31.431 seconds. This is not evidence of a provider defect. No Node suite ran,
+and the signer job was skipped. The artifact digest, all 101 script hashes,
+both dependency locks and individual receipts were joined to the exact commit.
+Evidence is retained at
+`/srv/catchplate-fast/tmp/serverware-hosted-ci-38512462817.Muvebku7`;
+`quick/result.json` SHA-256 is
+`26163c3a283408c8f0a209434281069a5678894eafc9e82837bd62ee8e6628b0`.
+
+The subsequent test-only repair retains the 35 schema and 32 ACL test IDs,
+and covers 168 tests across seven direct proof/index suites. Ordinary CI now
+registers all six previously indirect fixture suites and the new eight-group
+authentication-state UI suite. Its 108-suite roster is split into disjoint
+12/39/41 Python and 16 Node partitions, with 600 seconds each and an independent
+signer job. Source review is complete; hosted execution of this new roster is
+still pending.
 
 The final local 171-test attempt never started: Docker creation exceeded its
 270-second setup ceiling, and only its owned CLI was terminated. Exact-name
@@ -394,6 +419,22 @@ The local batches remain under `serverware-native-review-*` and
 `serverware-review-signers-direct.00dvooTf` in the operator evidence root;
 the signer result SHA-256 is
 `efa73e7807cba73ab7661e7487fc30c4b9490dde2421deccf9184c602ce59397`.
+
+### Hosted Rust engineering verification
+
+The manual `native-review-rust.yml` workflow provisions only locked public
+crates before running offline against the exact read-only checkout. A fresh
+target directory, one Cargo worker, two CPUs and a hard 6 GiB memory limit
+bound the hosted attempt. An OOM or timeout is a failure, not permission to
+retry automatically. Container ownership and uncertain cleanup remain recorded.
+
+The roster is exactly 29 library tests, 24 decision-gate binary tests and five
+API controls, including three expected privacy-diagnostic refusals. Compiler
+inputs and artifacts must join to the selected Git revision. The eight pure
+receipt-parser unit tests passed locally; compilation and the 58 Rust controls
+are not yet executed. This lane builds test artifacts and the protocol library,
+not the normal proxy executable. It establishes neither native admission nor
+deployment or whole-project acceptance.
 
 The following older checkpoints retain their original source and evidence scope.
 

@@ -11,6 +11,7 @@ Snapshot transport, kernel activation or independent checkpoint currentness.
 from __future__ import annotations
 
 import copy
+import hashlib
 from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
 import sys
@@ -46,10 +47,8 @@ ROLES = ("sessions_pending_webauthn", "sessions_active", "grants", "approvals",
 READ_INDEX_IDS = tuple(sorted(("webauthn_session_credential_status",
     "webauthn_grant_approver_active", "webauthn_control_approval_approved",
     "webauthn_registration_unused_global", "webauthn_publication_status")))
-ALL_INDEX_IDS = ("webauthn_credential_id", "webauthn_credential_user_history", "webauthn_credential_live_trust",
-    "webauthn_registration_unused_global", "webauthn_registration_unused_user",
-    "webauthn_session_credential_status", "webauthn_grant_approver_active", "webauthn_control_approval_approved",
-    "webauthn_publication_bundle_digest", "webauthn_publication_status", "webauthn_publication_generation")
+# Independent literal roster; never use the production registry as the oracle.
+ALL_INDEX_IDS = join_oracle.INDEX_IDS
 
 
 def values(value):
@@ -65,6 +64,7 @@ def forged(value, **changes):
 
 def session(identifier, status, credential="credential-雪"):
     return {"id": identifier, "bound_webauthn_credential_id": credential, "status": status,
+            "token_digest": "sha256:" + hashlib.sha256(("fixture-session:" + identifier).encode("utf-8")).hexdigest(),
             "metadata": {"note": "full row 雪", "flags": [True, None]}}
 
 
@@ -106,8 +106,8 @@ class BatchFixture:
             self.joins[role] = join_oracle.JoinFixture(self.rows.get(table, []), index_id=index_id,
                 selector=declaration_oracle.selector_for(role, record_id=self.intent["record_id"],
                                                         cutoff_us=cutoff_us),
-                expiry_us=({"past": 1_000_000, "future": 2_000_000, "used": 3_000_000}
-                           if table == "webauthn_challenges" else None),
+                expiry_us=({row["id"]: join_oracle.timestamp_us(row["expires_at"])
+                            for row in self.rows.get(table, [])} if table == "webauthn_challenges" else None),
                 primary_revision=17, index_revision=29)
             if self.joins[role].primary.root != self.trees[table].root:
                 raise AssertionError("independent per-query and global primary populations differ")

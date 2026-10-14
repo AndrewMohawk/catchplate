@@ -205,9 +205,18 @@ only that test imports `serverware.operator_workload_renewal`. Other tests use
 real temporary disk journals and fake HTTP to exercise crash/restart, exact
 replay, private permissions, single-writer locking, response refusal, expiry,
 overlap and stock Requests pool handoff. They make no network/provider requests.
-An isolated check separately exercised real renewal HTTP, loaded normal-proxy
-policy, old/new CONNECT sessions and stock Requests 2.31.0 handoff against a
-synthetic provider. It did not use this helper's default HTTPS renewal transport
-or its newer locked Requests graph. Those exact helper/transport checks and a
-real enrolled provider job remain open; do not treat the deployed read-only UI
-check as their acceptance. See the [renewal contract](../../docs/operator-workload-renewal.md).
+The earlier isolated check exercised real renewal HTTP, loaded normal-proxy
+policy, old/new CONNECT sessions and stock Requests 2.31.0 handoff. A separate
+[default-helper check](../../docs/project-completion.md#default-managed-helper-https--isolated-connected-acceptance)
+now also passed with CPython 3.12.14 and all eight locked dependency versions,
+including Requests 2.34.2. It used this shipped helper's actual isolated HTTPS
+child, normal DNS/TLS verification and a real local journal. A saved pending
+operation was recovered exactly after reopening, without
+a second issuance; two stock Requests calls matched durable audit records.
+
+Both checks used isolated synthetic providers. The newer check's setup JSON was
+projected from the real public catalog, not downloaded through a browser; its
+outer test CA was mounted only in its container's default trust location. It did
+not manufacture a lost response or repeat expiry/cancellation tests. An explicitly
+enrolled deployed workload and real provider job still need acceptance. See the
+[renewal contract](../../docs/operator-workload-renewal.md).

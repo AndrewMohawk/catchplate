@@ -2,11 +2,25 @@
 
 This feature is deployed in the ordinary instance at `b5cc5f6f` / normal Rust
 `116dc526`. Existing clients remain manual-only unless explicitly enrolled.
-Isolated stock-Requests/normal-proxy checks and deployed read-only UI checks have
-passed; the helper's default HTTPS transport with its locked dependencies and a
-real enrolled workload job remain separate acceptance work. See the
+Isolated stock-Requests/normal-proxy checks, the helper's default HTTPS transport
+with its locked dependency versions, and deployed read-only UI checks have
+passed. An explicitly enrolled deployed workload and real provider job remain
+separate acceptance work. See the
 [current checkpoint](project-completion.md#current-checkpoint--october-13-workload-renewal-rollout).
 This feature does not confer native or hardware-backed authority.
+
+The default-helper check used a fresh API-created client, actual Ed25519
+enrollment, verified private HTTPS on port 443, CPython 3.12.14 and stock Requests
+2.34.2. The first lease left a pending operation in the helper's private journal.
+Independent observation confirmed its commit and loaded policy; closing/reopening
+the helper then recovered that exact signed operation. The cause of the first
+reply leaving it pending was not recorded. Exactly one token
+issuance and two provider dispatches were joined to durable audit. The test
+replaced neither transport nor clock; its outer trust root was installed only
+inside the isolated test container. It did not contact a real provider, simulate
+a lost response, download setup through the browser, or repeat expiry/cancellation
+acceptance. Exact evidence is recorded in the
+[helper checkpoint](project-completion.md#default-managed-helper-https--isolated-connected-acceptance).
 
 An administrator explicitly enrolls one workload Ed25519 public key with a
 finite 1–90 day grant and a 1–24 hour token lifetime. The workload retains its

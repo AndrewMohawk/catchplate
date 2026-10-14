@@ -45,7 +45,8 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("test_operator_notification_google_events.py", paths)
         for script in ("test_operator_workload_renewal_contract.py", "test_proxy_managed_renewal.py",
                 "test_operator_workload_renewal_store.py", "test_operator_workload_renewal_api.py",
-                "test_operator_workload_renewal.py", "test_managed_client.py"):
+                "test_operator_workload_renewal.py", "test_managed_client.py",
+                "test_operator_managed_helper_connected.py"):
             self.assertIn(script, paths)
         self.assertIn("test_operator_catalog_github_app.py", paths)
         bytecode = next(row for row in runner.SUITES if row.script == "test_prepare_operator_python_bytecode.py")

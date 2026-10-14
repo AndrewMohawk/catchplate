@@ -56,6 +56,7 @@ SUITES = (
     Suite("backend", "test_operator_workload_renewal_api.py", seconds=60),
     Suite("backend", "test_operator_workload_renewal.py"),
     Suite("backend", "test_managed_client.py", seconds=60),
+    Suite("backend", "test_operator_managed_helper_connected.py", seconds=60),
     Suite("backend", "test_operator_catalog_body_routing.py"),
     Suite("backend", "test_operator_catalog_header_replacement.py"),
     Suite("backend", "test_jit_denial_api.py", seconds=60),

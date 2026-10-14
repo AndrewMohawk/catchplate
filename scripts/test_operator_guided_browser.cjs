@@ -16,8 +16,13 @@ const ids = {credential: '11111111-1111-4111-8111-111111111111', application: '2
 const steps = ['credential', 'application', 'permission', 'download', 'proxy_success', 'rule_revoked', 'proxy_denied', 'application_revoked', 'credential_revoked'];
 const routes = ['credentials', 'applications', 'access-rules', 'access-rules/revoke', 'applications/revoke', 'credentials/revoke'].map(p => prefix + '/' + p);
 const clone = value => JSON.parse(JSON.stringify(value));
+// Independent literal: JSON normalization must not change these exact bytes.
+const oracleBody = Buffer.from('\n{\n  "z": [1e+02, 18446744073709551617],\n' +
+  '  "escaped": "\\u0061\\/b",\n' +
+  '  "nested": {"items": [true, null, {"number": 1.2300}]}\n' + '}\r\n', 'ascii');
+const oracleHash = 'sha256:' + crypto.createHash('sha256').update(oracleBody).digest('hex');
 const ready = () => ({kind: 'ready', schema: 'serverware.privateGuidedBrowser/v1', origin,
-  proxyUrl: 'https://serverware-gmail-proxy.example.com', upstreamUrl: 'https://demo-upstream:8443/echo',
+  proxyUrl: 'https://serverware-gmail-proxy.example.com', upstreamUrl: 'https://demo-upstream:8443/ordinary-client',
   names: {credential: runId + '-key', application: runId + '-app', rule: runId + '-rule'},
   providerSecret: 'synthetic-private-fixture-only', tokenTtlSeconds: 3600, placeholder: 'Bearer SERVERWARE_DUMMY',
   caPath: '/client-trust/inner-ca.pem', initialRevision: 1, initialPolicyHash: digest, timeoutSeconds: 180});
@@ -38,8 +43,8 @@ function result() {
     initialPolicyHash: digest, policyHash: digest, providerArrivals: 1, proxyAttempts: 2,
     mutations: routes.map((route, i) => ({route, status: i < 3 ? 201 : 200, revision: i + 2,
       resourceId: ids[['credential', 'application', 'rule', 'rule', 'application', 'credential'][i]], policyHash: digest})),
-    positive: {case: 'positive', status: 200, responseMode: 'unfiltered_json_or_empty_v2', responseBodySha256: digest,
-      responseBodyBytes: 200, requestDigest: digest, operationDigest: digest},
+    positive: {case: 'positive', status: 200, responseMode: 'unfiltered_json_or_empty_v2', responseBodySha256: oracleHash,
+      responseBodyBytes: oracleBody.length, requestDigest: digest, operationDigest: digest},
     negative: {outcome: 'denied', connectStatus: 403, providerArrivals: 0},
     audit: {eventCounts, eventIds: Array.from({length: 14}, (_, i) => 'sha256:' + i.toString(16).padStart(64, '0')),
       attemptIds: [digest], chainVerified: true}, browser: browser()};
@@ -47,6 +52,7 @@ function result() {
 test('ready pins exact isolated origins, one run namespace, and original lifetime', () => {
   assert.deepEqual(readyFrame(ready()), ready());
   for (const change of [v => v.origin = 'https://serverware.example.com', v => v.proxyUrl += ':8443',
+    v => v.upstreamUrl = 'https://demo-upstream:8443/echo', v => v.upstreamUrl += '?case=json_proxy_basic_v1',
     v => v.timeoutSeconds = 181, v => v.tokenTtlSeconds = 7200, v => v.initialRevision = true,
     v => v.names.application += '-other', v => v.names.rule = 'other', v => v.providerSecret = 'x\nprivate',
     v => v.providerSecret = 'x'.repeat(257), v => v.extra = 'private']) {
@@ -156,6 +162,10 @@ test('terminal admits only exact public evidence and preserves no real-provider 
   assert.equal(validateChecker(value, browser(), ids), value);
   for (const change of [v => v.realProviderVerified = true, v => v.finalRevision = 8, v => v.providerArrivals = 2,
     v => v.mutations[0].route = routes[1], v => v.mutations[1].resourceId = ids.credential, v => v.browser.downloadDeleted = false,
+    v => v.positive.responseBodyBytes++, v => v.positive.responseBodyBytes = String(oracleBody.length),
+    v => v.positive.responseBodySha256 = digest, v => v.positive.responseBodySha256 = oracleHash.slice(7),
+    v => { const normalized = Buffer.from(JSON.stringify(JSON.parse(oracleBody))); v.positive.responseBodyBytes = normalized.length;
+      v.positive.responseBodySha256 = 'sha256:' + crypto.createHash('sha256').update(normalized).digest('hex'); },
     v => v.positive.private = 'private-canary', v => v.audit.private = 'private-canary', v => v.audit.eventCounts.other = 1,
     v => v.audit.eventIds[0] = 'private-canary', v => v.audit.attemptIds = [], v => v.audit.chainVerified = false]) {
     const changed = result(); change(changed); assert.throws(() => validateChecker(changed, browser(), ids));

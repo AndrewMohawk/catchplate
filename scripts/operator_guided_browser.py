@@ -10,17 +10,18 @@ import json
 import re
 
 from scripts.check_operator_demo import CheckFailure, require
+from scripts import operator_ordinary_client_fixture as oracle
 
 SCHEMA = "serverware.privateGuidedBrowser/v1"
 JOINED_SCHEMA = "serverware.privateGuidedBrowserJoined/v1"
 ORIGIN = "https://serverware-guided.example.com"
 PROXY = "https://serverware-gmail-proxy.example.com"
-UPSTREAM = "https://demo-upstream:8443/echo"
+UPSTREAM = "https://demo-upstream:8443" + oracle.FIXTURE_PATH
 PREFIX = "/api/operator-demo"
 CATALOG = PREFIX + "/catalog"
 CA_PATH = "/client-trust/inner-ca.pem"
 DUMMY = "Bearer SERVERWARE_DUMMY"
-BODY = b'{"guided_check":true,"nested":{"kept":"synthetic"}}'
+BODY = oracle.REQUEST_BODY
 COLLECTIONS = ("credentials", "applications", "access_rules")
 KINDS = ("credential", "application", "access_rule")
 ROUTES = ("/credentials", "/applications", "/access-rules")
@@ -68,7 +69,7 @@ def rule_values(name, application, credential):
         "upstream_url": UPSTREAM, "methods": ["POST"], "request_fields": [], "response_fields": [],
         "request_body_mode": "preserve_json_v1", "response_mode": "unfiltered_json_or_empty_v2",
         "credential_input": "replace_exact", "placeholder": DUMMY,
-        "query_keys": ["expectedAuthorizationSha256"], "allowed_headers": ["accept", "accept-encoding", "user-agent"]}
+        "query_keys": list(oracle.QUERY_KEYS), "allowed_headers": ["accept", "accept-encoding", "user-agent"]}
 
 
 class Protocol:

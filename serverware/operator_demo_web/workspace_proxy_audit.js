@@ -459,7 +459,7 @@ function createAuditView(workspace) {
     for (const id of ['audit-refresh', 'audit-filter', 'audit-query']) element(id).disabled = blocked;
     element('audit-search-form').querySelector('button').disabled = blocked;
     element('audit-more').disabled = blocked || loading;
-    element('audit-verify').disabled = blocked || verifying;
+    element('audit-verify').disabled = blocked || loading || verifying;
   }
   function authenticationLost() {
     ++epoch; ++verificationEpoch; authenticationRequired = true;
@@ -478,6 +478,10 @@ function createAuditView(workspace) {
   }
   async function load(append = false, manual = false) {
     if (!mayRead(manual)) return;
+    // Verification belongs to the history view that requested it. A new
+    // refresh, search or page invalidates both its label and pending callbacks.
+    ++verificationEpoch; verifying = false;
+    element('audit-verification').textContent = 'Verify the stored audit chain again for this history view.';
     const version = ++epoch; const filter = JSON.stringify([element('audit-filter').value, element('audit-query').value.trim()]);
     if (filter !== selection) append = false;
     selection = filter;
@@ -510,7 +514,7 @@ function createAuditView(workspace) {
   element('audit-filter').addEventListener('change', () => load(false, true));
   element('audit-search-form').addEventListener('submit', event => { event.preventDefault(); load(false, true); });
   element('audit-verify').addEventListener('click', async () => {
-    if (verifying || !mayRead(true)) return;
+    if (loading || verifying || !mayRead(true)) return;
     const version = ++verificationEpoch;
     verifying = true; controls(); element('audit-verification').textContent = 'Checking the stored audit chain...';
     try {

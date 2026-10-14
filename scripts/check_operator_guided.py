@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fresh isolated actual UI → catalog → normal Rust → synthetic echo → UI revoke.
+"""Fresh isolated actual UI → catalog → normal Rust → exact-body oracle → UI revoke.
 
 The browser's admitted HTTP bytes go to the real backend. No direct catalog
 mutations, seeded resources, fake health, shell evaluation, or provider calls.
@@ -30,10 +30,12 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts import operator_guided_browser as wire
+from scripts import operator_ordinary_client_fixture as oracle
 from scripts.check_operator_catalog import OperatorCatalogCheck, TOKEN, claim_fixture, features
 from scripts.check_operator_demo import AUTHORITY, CheckFailure, SHA256, require, token_file
-from scripts.check_operator_live_smoke import response_evidence
-from scripts.check_operator_ordinary_client import OrdinaryClientCheck, START, RELEASE, BLOCK, CONNECT, LEASE, RELOAD
+from scripts.check_operator_ordinary_client import (
+    OrdinaryClientCheck, START, RELEASE, BLOCK, CONNECT, LEASE, RELOAD, check_response, V2_RESPONSE_MODE,
+)
 from scripts.run_ordinary_regression import child_exit_status, stop_group
 from scripts.run_operator_x_examples_fixture import failure_site
 
@@ -237,14 +239,14 @@ class GuidedCheck(OperatorCatalogCheck):
 
     def count(self):
         status, value = self.json_request(self.upstream, "/_test/request-count?" +
-            urlencode({"method": "POST", "path": "/echo"}), context=self.upstream_ca)
+            urlencode({"method": "POST", "path": oracle.FIXTURE_PATH}), context=self.upstream_ca)
         require(status == 200 and type(value.get("count")) is int
-            and value["count"] == self.upstream_count("POST"), "guided provider count differs")
+            and value["count"] == self.upstream_count("POST", oracle.FIXTURE_PATH), "guided provider count differs")
         for method in ("GET", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"):
             other_status, other = self.json_request(self.upstream, "/_test/request-count?" +
-                urlencode({"method": method, "path": "/echo"}), context=self.upstream_ca)
+                urlencode({"method": method, "path": oracle.FIXTURE_PATH}), context=self.upstream_ca)
             require(other_status == 200 and type(other.get("count")) is int and other["count"] == 0
-                and self.upstream_count(method) == 0, "guided unexpected upstream method")
+                and self.upstream_count(method, oracle.FIXTURE_PATH) == 0, "guided unexpected upstream method")
         return value["count"]
 
     def retain_mutation(self, before, frame, status, body):
@@ -297,7 +299,9 @@ class GuidedCheck(OperatorCatalogCheck):
         token = config["proxy_password"]
         require(re.fullmatch(r"[A-Za-z0-9_-]{43}", token) is not None, "guided app token shape refused")
         self.basic_secret = base64.b64encode((config["proxy_username"] + ":" + token).encode()).decode()
-        target = config["upstream_url"] + "?" + urlencode({"expectedAuthorizationSha256": sha(("Bearer " + self.credential).encode())})
+        oracle_target = oracle.build_target(oracle.PROXY_BASIC_CASE,
+            hashlib.sha256(("Bearer " + self.credential).encode("ascii")).hexdigest())
+        target = config["upstream_url"] + oracle_target[len(oracle.FIXTURE_PATH):]
         arguments = [str(self.args.curl_binary), "-q", "--config", "-", "--silent", "--show-error",
             "--proxy-basic", "--proxy", config["proxy_url"], "--noproxy", "", "--proxy-cacert", str(self.args.proxy_ca_file),
             "--cacert", config["ca_file"], "--proto", "=https", "--proto-redir", "=https", "--http1.1",
@@ -329,9 +333,11 @@ class GuidedCheck(OperatorCatalogCheck):
             require(colon and name and len(line) <= 4096, "guided response header refused")
             headers.append((name.decode("ascii"), value.decode("ascii").strip()))
         mapped = {name.lower(): value for name, value in headers}
-        require(len(mapped) == len(headers) and not set(mapped) & {"transfer-encoding", "trailer"}
+        require(len(mapped) == len(headers) and not set(mapped) & {"transfer-encoding", "trailer", "content-encoding"}
                 and mapped.get("content-length") == str(len(body)), "guided response boundary differs")
-        return response_evidence("positive", status, headers, body, self.policy_hash)
+        observation = check_response("json", status, headers, body, content, self.policy_hash,
+            response_mode=V2_RESPONSE_MODE)
+        return {**{key: value for key, value in observation.items() if key != "capturedWireBytes"}, "case": "positive"}
 
     def settled(self):
         while not self.audit_drained():
@@ -503,7 +509,8 @@ def validate_success_result(value):
         "responseBodyBytes", "requestDigest", "operationDigest"} and positive["case"] == "positive"
         and type(positive["status"]) is int and positive["status"] == 200
         and positive["responseMode"] == "unfiltered_json_or_empty_v2"
-        and type(positive["responseBodyBytes"]) is int and 0 < positive["responseBodyBytes"] <= 65536
+        and type(positive["responseBodyBytes"]) is int and positive["responseBodyBytes"] == oracle.REQUEST_BODY_LENGTH
+        and positive["responseBodySha256"] == "sha256:" + oracle.REQUEST_BODY_SHA256
         and all(type(positive[key]) is str and SHA256.fullmatch(positive[key]) for key in
             ("responseBodySha256", "requestDigest", "operationDigest")), "guided terminal response refused")
     require(wire.encoded(value["negative"]) == wire.encoded({"outcome": "denied", "connectStatus": 403, "providerArrivals": 0}),

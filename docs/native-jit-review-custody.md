@@ -413,10 +413,25 @@ disjoint partition roster joined to the exact commit. Evidence is at
 `/srv/catchplate-fast/tmp/serverware-hosted-ci-partitions.yyUOpQK8`;
 `verification.json` SHA-256 is
 `41258f38a23ca0f7c144b6586b1a65765ff5df6af6e5c14a8a929ac2d7eab2a9`.
-The next correction retains exact source inventories and charges their actual
+The correction retained exact source inventories and charges their actual
 hash work under the unchanged global budget. Only the proof-bundle test's
-wall-time ceiling changes from 60 to 180 seconds; the partition cap stays 600.
-These corrections are not yet execution-verified.
+wall-time ceiling changed from 60 to 180 seconds; the partition cap stays 600.
+These corrections subsequently passed the exact `7429c436` run below.
+
+The exact `61ca1084` ordinary run first stopped in the runner's own precheck:
+its common deadline assertion still expected 60 seconds for every suite. No
+ordinary component suite started. Correcting that test-only expectation then
+passed [run 38523146291](https://github.com/example/private-deployment)
+at `7429c436`: **108/108 suites, 1,331 Python test executions, 273 Node groups and 22
+separate signer tests**, with no failures, timeouts, budget omissions or skips.
+The proof-bundle suite completed in 97.243 seconds within its 180-second limit;
+all four partitions stayed below 600 seconds. All five archive digests, 108
+suite receipts/source hashes, both locks and signer sources were independently
+joined to Git. Evidence is under
+`/srv/catchplate-fast/tmp/serverware-hosted-ci-38523146291.qWBU2ISR`;
+`verification.json` SHA-256 is
+`8ea2f0085aa8048d4320482c395b5f436ecb8c905058019e34640a04f7f6bc6c`.
+Neither this result nor the preceding failed precheck changes the live app.
 
 The final local 171-test attempt never started: Docker creation exceeded its
 270-second setup ceiling, and only its owned CLI was terminated. Exact-name
@@ -472,7 +487,24 @@ receipts were independently joined. Evidence is at
 `/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/hosted-native-review-38516995639.XUsZjcyb`;
 `result.json` SHA-256 is
 `3c3bc835d1aa43825e7c4b52e5a9d2986157a71b16992e3324a5057b51246829`.
-The source correction still needs compilation and tests in a new attempt.
+The corrected exact `61ca1084`
+[run 38522522170](https://github.com/example/private-deployment)
+then passed real library, library-test and binary-test compilation in 351.473,
+41.432 and 228.576 seconds. All **29 library tests, 24 binary tests and five API
+controls** passed, with zero skips; the eight parser groups also passed.
+All five owned containers have terminal and removal receipts, with no OOM,
+pending child or uncertain cleanup.
+
+Independent review joined the archive digest, pinned runner/toolchain/lock and
+all 598 unique source-map files to the exact Git commit. Artifact closures join
+through the executed runner and actual Cargo/test transcripts: raw ELFs and
+`.d` files were not uploaded, so this is not an independent rehash of those
+artifact bytes. Evidence is under
+`/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/hosted-native-review-38522522170.Re8v7UVQ`;
+`result.json` SHA-256 is
+`daa78116d2dd4c8ba0ae27b19b8ea121542118dbfea02e74f95d48980496d3c2`.
+The earlier failed attempt is retained. This completes the focused engineering
+checks, not native admission, deployed private review or end-to-end custody.
 
 The following older checkpoints retain their original source and evidence scope.
 

@@ -65,6 +65,10 @@ does not change any of these permissions.
 3. Match the recorded identity and outcome to the request you actually ran. Use **Load older events** if needed.
 4. For integrity checking, choose **Verify audit log**.
 
+A verification result is a point-in-time check. After refreshing, changing the
+search or filter, or loading older events, verify again before treating the
+current view as checked. Wait for the history request to finish first.
+
 A blocked response can follow an attempted provider request; it does not always mean the request was denied before dispatch. If a write may have reached the provider, do not automatically retry it. See [uncertain outcomes](https://github.com/AndrewMohawk/serverware/wiki/Troubleshooting).
 
 Local chain verification checks the stored chain, not an independent external witness or hardware attestation. Notifications contain selected safe summaries/references, not raw request/response bodies or a complete independently verified audit archive. Keep the original audit store as authoritative. [Audit UI](https://github.com/AndrewMohawk/serverware/blob/main/serverware/operator_demo_web/workspace_proxy_audit.js), [notification projections](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-notifications.md#what-messages-mean).

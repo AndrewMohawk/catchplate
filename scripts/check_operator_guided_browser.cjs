@@ -16,6 +16,10 @@ const CHROME = '/home/catchplate/.cache/ms-playwright/chromium_headless_shell-12
 const CHROME_SHA = '27e55cc30e487493b89b663085d6deeb0707be201a568657c922fac9076c317c';
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
+// Fixed public byte oracle, joined to operator_ordinary_client_fixture.py by
+// the inert regression suite; a well-formed arbitrary digest is not evidence.
+const ORACLE_BODY_BYTES = 126;
+const ORACLE_BODY_SHA256 = 'sha256:0e8924971815df1897718e8de313ed2652a80ee5113059bfea46a4db3be3d542';
 const ROUTES = ['credentials', 'applications', 'access-rules', 'access-rules/revoke', 'applications/revoke', 'credentials/revoke'].map(p => PREFIX + '/' + p);
 const STEPS = ['credential', 'application', 'permission', 'download', 'proxy_success', 'rule_revoked',
   'proxy_denied', 'application_revoked', 'credential_revoked'];
@@ -44,7 +48,7 @@ function readyFrame(value) {
   need(exact(value, ['kind', 'schema', 'origin', 'proxyUrl', 'upstreamUrl', 'names', 'providerSecret',
     'tokenTtlSeconds', 'placeholder', 'caPath', 'initialRevision', 'initialPolicyHash', 'timeoutSeconds']));
   need(value.kind === 'ready' && value.schema === SCHEMA && value.origin === ORIGIN &&
-    value.proxyUrl === 'https://serverware-gmail-proxy.example.com' && value.upstreamUrl === 'https://demo-upstream:8443/echo' &&
+    value.proxyUrl === 'https://serverware-gmail-proxy.example.com' && value.upstreamUrl === 'https://demo-upstream:8443/ordinary-client' &&
     value.tokenTtlSeconds === 3600 && value.placeholder === 'Bearer SERVERWARE_DUMMY' &&
     value.caPath === '/client-trust/inner-ca.pem' && value.initialRevision === 1 && DIGEST.test(value.initialPolicyHash) && value.timeoutSeconds === 180);
   need(exact(value.names, ['credential', 'application', 'rule']));
@@ -144,7 +148,8 @@ function validateChecker(value, browser, ids) {
   const positive = value.positive, audit = value.audit;
   need(exact(positive, ['case', 'status', 'responseMode', 'responseBodySha256', 'responseBodyBytes', 'requestDigest', 'operationDigest']) &&
     positive.case === 'positive' && positive.status === 200 && positive.responseMode === 'unfiltered_json_or_empty_v2' &&
-    integer(positive.responseBodyBytes, 1, 65536) && ['responseBodySha256', 'requestDigest', 'operationDigest'].every(key => DIGEST.test(positive[key])));
+    positive.responseBodyBytes === ORACLE_BODY_BYTES && positive.responseBodySha256 === ORACLE_BODY_SHA256 &&
+    ['requestDigest', 'operationDigest'].every(key => DIGEST.test(positive[key])));
   const events = Object.fromEntries(['credential', 'application', 'access_rule'].flatMap(kind =>
     ['created', 'revoked'].map(action => ['operator_catalog.' + kind + '.' + action, 1])));
   Object.assign(events, {'data_plane.credential.release_started': 1, 'data_plane.response.released': 1,
@@ -269,12 +274,12 @@ async function main() {
     expectedPost = ROUTES[1]; await page.locator('#connect-application-next').click(); await step('access'); out.steps.push(stage);
     need(lastCatalog.applications.find(app => app.id === ids.application)?.proxy_authentication === 'basic_and_bearer_v1');
     stage = 'permission'; await page.locator('#connect-rule-choice').selectOption('new'); need(await page.locator('#connect-operation').inputValue() === 'exact');
-    await page.locator('#connect-origin').selectOption('https://demo-upstream:8443'); await page.locator('#connect-path').fill('/echo');
+    await page.locator('#connect-origin').selectOption('https://demo-upstream:8443'); await page.locator('#connect-path').fill('/ordinary-client');
     await page.locator('input[name="connect-method"][value="GET"]').uncheck(); await page.locator('input[name="connect-method"][value="POST"]').check();
     await page.locator('#connect-credential-input').selectOption('replace_exact'); await page.locator('#connect-placeholder').fill(setup.placeholder);
     await page.locator('#connect-restrictions > summary').click(); await page.locator('#connect-rule-name').fill(setup.names.rule);
     await page.locator('#connect-request-body-mode').selectOption('preserve_json_v1'); await page.locator('#connect-response-mode').selectOption('unfiltered_json_or_empty_v2');
-    await page.locator('#connect-request-extras > summary').click(); await page.locator('#connect-query-keys').fill('expectedAuthorizationSha256');
+    await page.locator('#connect-request-extras > summary').click(); await page.locator('#connect-query-keys').fill('case\nexpectedAuthorizationSha256\nexpectedBodySha256');
     await page.locator('#connect-allowed-headers').fill('accept\naccept-encoding\nuser-agent'); await page.locator('#connect-review').click(); await step('review');
     need((await page.locator('#connect-review-details').innerText()).includes(setup.upstreamUrl));
     expectedPost = ROUTES[2]; await page.locator('#connect-grant').click(); await step('setup'); await awaitLoaded('#connect-status-refresh'); out.steps.push(stage);

@@ -139,6 +139,15 @@ async function blockedAuditReads(f) {
     ['audit-search-form', 'submit'], ['audit-verify', 'click']]) await f.fire(id, type);
   await flush(); assert.equal(f.calls.length, before, 'programmatic handlers also refuse reads while authentication is held');
 }
+const unverifiedHistory = 'Verify the stored audit chain again for this history view.';
+const historyChanges = [
+  {name: 'refresh', event: ['audit-refresh', 'click'], path: SEARCH},
+  {name: 'filter', event: ['audit-filter', 'change'], path: SEARCH + '&eventType=operator_catalog.application.created',
+    select: f => { f.node('audit-filter').value = 'operator_catalog.application.created'; }},
+  {name: 'search', event: ['audit-search-form', 'submit'], path: SEARCH + '&q=chosen-client',
+    select: f => { f.node('audit-query').value = 'chosen-client'; }},
+  {name: 'paging', event: ['audit-more', 'click'], path: SEARCH + '&cursor=synthetic-cursor'},
+];
 const tests = [
   ...[401, 403].map(code => ['notification ' + code + ' invalidates old catalog success and queued activation polling', async () => {
     // Before the fix, notification's direct null/emit did not advance the core
@@ -230,6 +239,65 @@ const tests = [
       f.expect(path + '&cursor=synthetic-cursor', history('older-current-page')); await f.fire('audit-more');
       assert.equal(f.node('audit-list').children.length, 2); assert(f.node('audit-more').hidden);
       f.verify([CATALOG, SEARCH, NOTIFICATIONS, CATALOG, path, path + '&cursor=synthetic-cursor']);
+    }
+  }],
+  ['refresh, filter, search and paging invalidate completed verification, including a failed history read', async () => {
+    for (const change of historyChanges) for (const rejected of [false, true]) {
+      const f = fixture(); await f.catalog(); await f.auditRows(history('previous-page', true));
+      f.expect(VERIFY, {ok: true, complete: true}); await f.fire('audit-verify');
+      assert.equal(f.node('audit-verification').textContent, 'The complete local audit chain is consistent.');
+      change.select?.(f);
+      const next = f.expect(change.path, history('current-page'), 200, {deferred: true});
+      f.fire(...change.event); await flush();
+      assert.equal(f.node('audit-verification').textContent, unverifiedHistory, change.name);
+      assert(f.node('audit-verify').disabled, change.name + ' blocks verification while history is loading');
+      const before = f.calls.length; await f.fire('audit-verify');
+      assert.equal(f.calls.length, before, 'programmatic verification cannot race a pending history read');
+      if (rejected) next.fail(); else next.reply(); await flush();
+      assert.equal(f.node('audit-verification').textContent, unverifiedHistory);
+      assert(!f.node('audit-verify').disabled, 'history completion permits an explicit new verification');
+      if (rejected) assert.match(f.node('audit-status').textContent, /response was lost or unavailable/i);
+      else assert.equal(f.node('audit-list').children.length, change.name === 'paging' ? 2 : 1);
+      f.expect(VERIFY, {ok: true, complete: false}); await f.fire('audit-verify');
+      assert.equal(f.node('audit-verification').textContent, 'Verification was incomplete.');
+      f.verify([CATALOG, SEARCH, VERIFY, change.path, VERIFY]);
+    }
+  }],
+  ['pending verification success, error and finally stay invalidated during every history transition', async () => {
+    for (const change of historyChanges) for (const rejected of [false, true]) {
+      const f = fixture(); await f.catalog(); await f.auditRows(history('previous-page', true));
+      const old = f.expect(VERIFY, {ok: true, complete: true}, 200, {deferred: true}); const first = f.fire('audit-verify');
+      change.select?.(f);
+      const next = f.expect(change.path, history('current-page'), 200, {deferred: true});
+      f.fire(...change.event); await flush();
+      const loading = f.node('audit-status').textContent;
+      assert.equal(f.node('audit-verification').textContent, unverifiedHistory);
+      if (rejected) old.fail(); else old.reply(); await first; await flush();
+      assert.equal(f.node('audit-verification').textContent, unverifiedHistory, change.name);
+      assert.equal(f.node('audit-status').textContent, loading);
+      assert(f.node('audit-verify').disabled, 'stale verification finally cannot enable the current history view');
+      const before = f.calls.length; await f.fire('audit-verify'); assert.equal(f.calls.length, before);
+      next.reply(); await flush();
+      assert.equal(f.node('audit-verification').textContent, unverifiedHistory); assert(!f.node('audit-verify').disabled);
+      f.verify([CATALOG, SEARCH, VERIFY, change.path]);
+    }
+  }],
+  ['verification from old history cannot replace or re-enable a new pending or completed verification', async () => {
+    for (const change of historyChanges) for (const rejected of [false, true]) for (const completed of [false, true]) {
+      const f = fixture(); await f.catalog(); await f.auditRows(history('previous-page', true));
+      const old = f.expect(VERIFY, {ok: true, complete: true}, 200, {deferred: true}); const first = f.fire('audit-verify');
+      change.select?.(f); f.expect(change.path, history('current-page')); f.fire(...change.event); await flush();
+      const fresh = f.expect(VERIFY, {ok: true, complete: false}, 200, {deferred: true}); const second = f.fire('audit-verify');
+      if (completed) { fresh.reply(); await second; }
+      const label = f.node('audit-verification').textContent;
+      assert.equal(label, completed ? 'Verification was incomplete.' : 'Checking the stored audit chain...');
+      assert.equal(f.node('audit-verify').disabled, !completed);
+      if (rejected) old.fail(); else old.reply(); await first; await flush();
+      assert.equal(f.node('audit-verification').textContent, label, change.name);
+      assert.equal(f.node('audit-verify').disabled, !completed, 'stale finally cannot alter current verification controls');
+      if (!completed) { fresh.reply(); await second; }
+      assert.equal(f.node('audit-verification').textContent, 'Verification was incomplete.');
+      assert(!f.node('audit-verify').disabled); f.verify([CATALOG, SEARCH, VERIFY, change.path, VERIFY]);
     }
   }],
   ['non-authentication notification failure keeps audit readiness; external auth loss clears a draft URL', async () => {

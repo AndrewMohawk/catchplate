@@ -3,16 +3,19 @@ from __future__ import annotations
 
 import base64
 from copy import deepcopy
+import hashlib
 import json
 from pathlib import Path
 import subprocess
 import sys
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 import unittest
 from unittest.mock import patch
 
 from scripts import check_operator_guided as checker
 from scripts import operator_guided_browser as wire
+from scripts import operator_ordinary_client_fixture as oracle
 from scripts.check_operator_demo import CheckFailure
 
 IDS = {key: f"00000000-0000-4000-8000-{n:012d}" for n, key in enumerate(("credential", "application", "rule"), 1)}
@@ -22,6 +25,11 @@ RUN = "operator-check-" + "1" * 32
 DIGESTS = ["sha256:" + str(n) * 64 for n in range(8)]
 INITIAL = {"revision": 1, "policy": {"policy_hash": DIGESTS[1], "sequence": 1}}
 SCOPE = ("agent:operator-demo:" + IDS["application"], "operator." + IDS["rule"], DIGESTS[2])
+# Independent byte vector, deliberately not JSON-normalized.
+EXPECTED_BODY = (b'\n{\n  "z": [1e+02, 18446744073709551617],\n'
+    b'  "escaped": "\\u0061\\/b",\n'
+    b'  "nested": {"items": [true, null, {"number": 1.2300}]}\n}\r\n')
+BODY_DIGEST = "sha256:" + hashlib.sha256(EXPECTED_BODY).hexdigest()
 
 
 def frame(identifier, method="GET", path="/", value=None):
@@ -40,7 +48,7 @@ def browser():
 def configuration():
     # Independent literal matching the actual public download producer.
     return {"application_id": IDS["application"], "access_rule_id": IDS["rule"],
-        "proxy_url": "https://serverware-gmail-proxy.example.com", "upstream_url": "https://demo-upstream:8443/echo",
+        "proxy_url": "https://serverware-gmail-proxy.example.com", "upstream_url": "https://demo-upstream:8443/ordinary-client",
         "methods": ["POST"], "response_mode": "unfiltered_json_or_empty_v2", "credential_input": "replace_exact",
         "request_headers": {"Authorization": "Bearer SERVERWARE_DUMMY"}, "ca_file": "/client-trust/inner-ca.pem",
         "token_expires_at_epoch_ms": 2000000000000,
@@ -51,7 +59,7 @@ def configuration():
 
 def positive():
     return {"case": "positive", "status": 200, "responseMode": "unfiltered_json_or_empty_v2",
-        "responseBodySha256": DIGESTS[4], "responseBodyBytes": 301,
+        "responseBodySha256": BODY_DIGEST, "responseBodyBytes": len(EXPECTED_BODY),
         "requestDigest": DIGESTS[5], "operationDigest": DIGESTS[6]}
 
 
@@ -62,7 +70,7 @@ def audit_rows():
         "attempt_id": DIGESTS[7], "flow_id": DIGESTS[7]}
     return [{"id": IDS["credential"], "event_type": checker.START, "event": {**common, "outcome": "release_started"}},
         {"id": IDS["application"], "event_type": checker.RELEASE, "event": {**common, "outcome": "released",
-            "upstream_status": 200, "response_body_sha256": DIGESTS[4], "response_body_bytes": 301,
+            "upstream_status": 200, "response_body_sha256": BODY_DIGEST, "response_body_bytes": len(EXPECTED_BODY),
             "response_validation": {"ok": True, "mode": "bufferedJsonOrEmpty204V2", "body_bytes_preserved": True}}}]
 
 
@@ -106,10 +114,13 @@ class GuidedProtocolTests(unittest.TestCase):
         self.assertEqual(ready["origin"], "https://serverware-guided.example.com")
         self.assertEqual(wire.rule_values("Rule", IDS["application"], IDS["credential"]), {
             "name": "Rule", "application_id": IDS["application"], "credential_id": IDS["credential"],
-            "upstream_url": "https://demo-upstream:8443/echo", "methods": ["POST"], "request_fields": [],
+            "upstream_url": "https://demo-upstream:8443/ordinary-client", "methods": ["POST"], "request_fields": [],
             "response_fields": [], "request_body_mode": "preserve_json_v1", "response_mode": "unfiltered_json_or_empty_v2",
             "credential_input": "replace_exact", "placeholder": "Bearer SERVERWARE_DUMMY",
-            "query_keys": ["expectedAuthorizationSha256"], "allowed_headers": ["accept", "accept-encoding", "user-agent"]})
+            "query_keys": ["case", "expectedAuthorizationSha256", "expectedBodySha256"],
+            "allowed_headers": ["accept", "accept-encoding", "user-agent"]})
+        self.assertEqual(wire.BODY, EXPECTED_BODY)
+        self.assertEqual(oracle.REQUEST_BODY, EXPECTED_BODY)
 
     def test_permission_admits_only_the_reviewed_curl_header_roster(self):
         for headers in (["accept", "accept-encoding", "user-agent"], ["accept", "user-agent"],
@@ -126,6 +137,102 @@ class GuidedProtocolTests(unittest.TestCase):
             else:
                 with self.assertRaises(CheckFailure):
                     protocol.admit(request, current)
+
+    def dispatch(self, body=EXPECTED_BODY, *, denied=False, counts=None, extra_headers=()):
+        # Exercise the actual dispatch/parser; substitute only DNS, curl I/O and
+        # observed counters. No constructor, file, socket or process is invoked.
+        check = object.__new__(checker.GuidedCheck)
+        check.config, check.credential, check.run_id = configuration(), SECRET, RUN
+        check.proxy = SimpleNamespace(host="serverware-gmail-proxy.example.com", address="127.0.0.1")
+        check.args = SimpleNamespace(curl_binary=Path("/usr/bin/curl"), proxy_ca_file=Path("/client-trust/outer-ca.pem"))
+        check.body_file, check.policy_hash = Path("/unused-synthetic-body.json"), DIGESTS[2]
+        check.deadline = checker.time.monotonic() + 30
+        check.clean = lambda value: self.assertNotIn(SECRET.encode(), value)
+        check.count = unittest.mock.Mock(side_effect=counts or ([1, 1] if denied else [0, 1]))
+        headers = [("Content-Type", "application/json"), ("Content-Length", str(len(body))),
+            ("X-Serverware-Policy-Hash", DIGESTS[2]), ("X-Serverware-Request-Digest", DIGESTS[5]),
+            ("X-Serverware-Operation-Digest", DIGESTS[6]), ("X-Serverware-Response-Body-Sha256", checker.sha(body)),
+            *extra_headers]
+        raw = b"HTTP/1.1 200 OK\r\n" + b"\r\n".join((key + ": " + value).encode() for key, value in headers) + b"\r\n\r\n" + body
+        response = (56, b"\nserverware-guided-connect:403\nserverware-guided-status:000\n", b"") if denied else (
+            0, raw + b"\nserverware-guided-connect:200\nserverware-guided-status:200\n", b"")
+        with patch.object(checker.socket, "getaddrinfo", return_value=[(None, None, None, None, ("127.0.0.1", 443))]), \
+                patch.object(checker, "run_curl", return_value=response) as curl:
+            value = check.dispatch(denied=denied)
+        self.assertEqual(curl.call_count, 1)
+        return value, curl.call_args.args
+
+    def test_dispatch_joins_downloaded_basic_configuration_to_exact_body_oracle(self):
+        value, (arguments, private_input, seconds) = self.dispatch()
+        self.assertEqual(value, positive())
+        self.assertEqual(arguments[-1], "https://demo-upstream:8443/ordinary-client?case=json_proxy_basic_v1"
+            + "&expectedAuthorizationSha256=" + hashlib.sha256(("Bearer " + SECRET).encode()).hexdigest()
+            + "&expectedBodySha256=" + hashlib.sha256(EXPECTED_BODY).hexdigest())
+        self.assertEqual(private_input, ('proxy-user = "' + IDS["application"] + ":" + TOKEN + '"\n').encode())
+        for option, expected in (("--proxy", configuration()["proxy_url"]), ("--proxy-cacert", "/client-trust/outer-ca.pem"),
+                ("--cacert", configuration()["ca_file"]), ("--retry", "0"), ("--data-binary", "@/unused-synthetic-body.json")):
+            self.assertEqual(arguments[arguments.index(option) + 1], expected)
+        self.assertIn("--proxy-basic", arguments)
+        self.assertLessEqual(seconds, 12)
+        self.assertNotIn("capturedWireBytes", value)
+
+    def test_dispatch_refuses_reserialized_altered_or_encoded_oracle_response(self):
+        for body in (EXPECTED_BODY.rstrip(), wire.encoded(wire.document(EXPECTED_BODY)),
+                EXPECTED_BODY.replace(b"1.2300", b"1.2400")):
+            with self.subTest(body=body), self.assertRaises(CheckFailure):
+                self.dispatch(body)
+        for header in (("Content-Encoding", "identity"), ("Transfer-Encoding", "chunked"),
+                ("Trailer", "X-Synthetic"), ("Server", "serverware-synthetic-upstream"),
+                ("X-Serverware-Response-Body-Sha256", DIGESTS[0])):
+            with self.subTest(header=header), self.assertRaises(CheckFailure):
+                self.dispatch(extra_headers=(header,))
+
+    def test_revoked_dispatch_requires_connect_denial_and_no_additional_arrival(self):
+        self.assertEqual(self.dispatch(denied=True)[0], {"outcome": "denied", "connectStatus": 403, "providerArrivals": 0})
+        with self.assertRaises(CheckFailure):
+            self.dispatch(denied=True, counts=[1, 2])
+        with self.assertRaises(CheckFailure):
+            self.dispatch(counts=[0, 2])
+
+    def test_counter_reads_bind_global_and_run_scoped_ordinary_client_path(self):
+        check = object.__new__(checker.GuidedCheck)
+        check.upstream, check.upstream_ca, check.run_id = object(), object(), RUN
+        calls = []
+        def observed(endpoint, target, *, context):
+            self.assertIs(endpoint, check.upstream); self.assertIs(context, check.upstream_ca)
+            parsed = urlsplit(target); self.assertEqual(parsed.path, "/_test/request-count")
+            query = parse_qs(parsed.query); self.assertEqual(query["path"], ["/ordinary-client"])
+            self.assertIn(set(query), ({"method", "path"}, {"method", "path", "run_id"}))
+            if "run_id" in query:
+                self.assertEqual(query["run_id"], [RUN])
+            calls.append(query)
+            return 200, {"count": int(query["method"] == ["POST"])}
+        check.json_request = observed
+        self.assertEqual(check.count(), 1)
+        self.assertEqual(len(calls), 14)
+        self.assertEqual([item["method"] for item in calls], [[method] for method in
+            ("POST", "GET", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS") for _ in range(2)])
+        self.assertEqual(sum("run_id" in item for item in calls), 7)
+
+    def test_oracle_requires_exact_received_bytes_and_fixed_query_commitments(self):
+        digest = hashlib.sha256(("Bearer " + SECRET).encode()).hexdigest()
+        target = oracle.build_target(oracle.PROXY_BASIC_CASE, digest)
+        headers = [(b"host", b"demo-upstream:8443"), (b"authorization", ("Bearer " + SECRET).encode()),
+            (b"content-type", b"application/json"), (b"content-length", str(len(EXPECTED_BODY)).encode()),
+            (b"accept", b"application/json"), (b"user-agent", ("serverware-test-run/" + RUN).encode())]
+        query = target.split("?", 1)[1].encode()
+        admitted = oracle.admit_request("POST", b"/ordinary-client", query, headers)
+        self.assertEqual(oracle.verify_body(admitted, EXPECTED_BODY).body, EXPECTED_BODY)
+        for wrong in (query.replace(digest.encode(), b"0" * 64), query + b"&extra=1",
+                query.replace(b"expectedBodySha256=", b"bodySha256=")):
+            with self.assertRaises(oracle.FixtureRejected):
+                oracle.admit_request("POST", b"/ordinary-client", wrong, headers)
+        with self.assertRaises(oracle.FixtureRejected):
+            oracle.build_target(oracle.PROXY_BASIC_CASE, "sha256:" + digest)
+        for wrong in (EXPECTED_BODY[:-1], wire.encoded(wire.document(EXPECTED_BODY)),
+                EXPECTED_BODY.replace(b"1.2300", b"1.2400")):
+            with self.assertRaises(oracle.FixtureRejected):
+                oracle.verify_body(admitted, wrong)
 
     def test_ready_preflight_uses_actual_catalog_validation_not_retired_status(self):
         catalog = {**deepcopy(INITIAL), "schema": "serverware.operatorCatalog/v1",
@@ -311,6 +418,10 @@ class GuidedProtocolTests(unittest.TestCase):
             with self.subTest(section=section), self.assertRaises(CheckFailure): checker.validate_success_result(changed)
         for key, change in (("providerArrivals", True), ("proxyAttempts", 3), ("realProviderVerified", True), ("finalRevision", 8)):
             with self.assertRaises(CheckFailure): checker.validate_success_result({**value, key: change})
+        for key, change in (("responseBodyBytes", len(EXPECTED_BODY) + 1), ("responseBodyBytes", True),
+                ("responseBodySha256", DIGESTS[0])):
+            changed = deepcopy(value); changed["positive"][key] = change
+            with self.assertRaises(CheckFailure): checker.validate_success_result(changed)
         with self.assertRaises(CheckFailure): checker.validate_joined_result({**joined, "browserClosed": False})
 
     def test_lean_actual_checker_import_and_help_require_no_site_packages_or_network(self):

@@ -82,6 +82,23 @@ Keep **Proxy setup** and its CA download first-class, alongside **Credentials**,
 configuration belongs in administrator settings. Approvals need their own
 pending-action workflow when implemented; do not offer an inert approval option.
 
+Retained connection checks must not look like configured provider accounts.
+Overview counts and next-step guidance exclude resources used only with the
+exact local diagnostic endpoint. Credentials, Clients and Permissions retain
+them in collapsed **Connection-check resources** sections; revoked records have
+their own history section. Grouping never changes authorization or deletes data.
+Names alone never classify a resource, and a credential/client shared with any
+non-diagnostic permission remains in the ordinary list. Unassigned and ambiguous
+resources also remain ordinary.
+
+Guided setup excludes those saved diagnostic credentials and clients by default.
+An explicit **Include saved connection-check resources** option restores them.
+Choosing **Use with a client** on a diagnostic credential is already explicit
+intent and includes those choices. Previously selected resources remain selected;
+refreshing or changing a display filter must not silently choose another key or
+client. Manual setup asks for an explicit approved destination instead of
+preselecting the local diagnostic upstream.
+
 The [proxy destination workflow](operator-proxy-destinations.md) keeps operator
 configuration separate from application permissions: review a proposed list,
 prepare it, then activate it through an exact controlled cold restart without

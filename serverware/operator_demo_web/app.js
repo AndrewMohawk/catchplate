@@ -164,13 +164,16 @@ else {
       'Active: the proxy has loaded the current saved policy.' : 'Pending: the proxy has not confirmed the saved policy.';
     element('overview-policy').textContent = label; element('activation-status').textContent = label;
     element('proxy-url').textContent = catalog?.proxy_url || 'HTTPS proxy endpoint unavailable.';
+    const diagnostics = operatorDiagnosticResources(catalog);
     for (const [name, collection] of [['credentials', 'credentials'], ['applications', 'applications'], ['rules', 'access_rules']])
-      element('overview-' + name + '-count').textContent = catalog ? String(catalog[collection].filter(item => item.status === 'active').length) : 'Unavailable';
+      element('overview-' + name + '-count').textContent = catalog ? String(catalog[collection].filter(item =>
+        item.status === 'active' && !diagnostics[collection].has(item.id)).length) : 'Unavailable';
     if (catalog) {
-      const validApps = catalog.applications.filter(item => item.status === 'active' && item.token_status === 'valid' && item.token_expires_at_epoch_ms > Date.now());
-      const step = !catalog.credentials.some(item => item.status === 'active') ? ['Add your first credential', '#credentials'] :
-        !validApps.length ? catalog.applications.length ? ['Review expired client access', '#applications'] : ['Set up access with a saved credential', '#connect'] :
-        !catalog.access_rules.some(item => item.status === 'active' && validApps.some(app => app.id === item.application_id)) ? ['Choose permissions for your client', '#connect'] :
+      const ordinaryApps = catalog.applications.filter(item => item.status === 'active' && !diagnostics.applications.has(item.id));
+      const validApps = ordinaryApps.filter(item => item.token_status === 'valid' && item.token_expires_at_epoch_ms > Date.now());
+      const step = !catalog.credentials.some(item => item.status === 'active' && !diagnostics.credentials.has(item.id)) ? ['Add your first credential', '#credentials'] :
+        !validApps.length ? ordinaryApps.length ? ['Review expired client access', '#applications'] : ['Set up access with a saved credential', '#connect'] :
+        !catalog.access_rules.some(item => item.status === 'active' && !diagnostics.access_rules.has(item.id) && validApps.some(app => app.id === item.application_id)) ? ['Choose permissions for your client', '#connect'] :
         !workspace.loaded() ? ['Check pending proxy activation', '#proxy'] : ['Configure your client and send a scoped test request', '#proxy'];
       element('overview-next-action').textContent = step[0]; element('overview-next-action').href = step[1];
     }

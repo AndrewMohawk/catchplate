@@ -48,6 +48,7 @@ function createConnectView(workspace, applications, proxy) {
   let review = null; let checkpoint = null; let open = false;
   let connectionMethod = null; let savedChoice = ''; let beforeGoogle = null;
   let saveOnly = false; let savedCredential = '';
+  let includeDiagnostics = false;
   element('connect-x-post-quota').value = 'none';
   const catalog = () => workspace.state.catalog;
   const newGithubApp = () => connectionMethod === 'github' && element('connect-github-type').value === 'github_app_v1';
@@ -252,12 +253,17 @@ function createConnectView(workspace, applications, proxy) {
   }
   function renderInputs() {
     const value = catalog(); if (!value) return;
+    const diagnostics = operatorDiagnosticResources(value);
     if (['key', 'github', 'npm', 'x', 'alchemy'].includes(connectionMethod)) choices('connect-credential-choice', [{id: 'new', name: 'New provider key'}], 'new');
     if (connectionMethod === 'saved') choices('connect-credential-choice', [{id: '', name: actionLabels.credential},
-      ...operatorConnectResourceChoices(value.credentials.filter(item => item.status === 'active' && !isAwsCredential(item)), [actionLabels.credential])], savedChoice);
-    choices('connect-application-choice', [...operatorConnectResourceChoices(value.applications.filter(item => item.status === 'active'), [actionLabels.application]), {id: 'new', name: actionLabels.application}], 'new');
+      ...operatorConnectResourceChoices(value.credentials.filter(item => item.status === 'active' && !isAwsCredential(item) &&
+        (includeDiagnostics || item.id === selectedCredential || item.id === savedChoice || !diagnostics.credentials.has(item.id))), [actionLabels.credential])], savedChoice);
+    choices('connect-application-choice', [...operatorConnectResourceChoices(value.applications.filter(item => item.status === 'active' &&
+      (includeDiagnostics || item.id === selectedApplication || !diagnostics.applications.has(item.id))), [actionLabels.application]), {id: 'new', name: actionLabels.application}], 'new');
     choices('connect-rule-choice', [{id: 'new', name: actionLabels.rule}, ...operatorConnectResourceChoices(matchingRules(), [actionLabels.rule])], 'new');
-    choices('connect-origin', value.allowed_upstreams.map(origin => ({id: origin, name: origin})), value.allowed_upstreams[0]);
+    choices('connect-origin', [{id: '', name: 'Choose an approved destination'},
+      ...value.allowed_upstreams.map(origin => ({id: origin,
+        name: origin === 'https://demo-upstream:8443' ? 'Local connection check (diagnostic)' : origin}))], '');
     choices('connect-credential-input', availableCredentialInputModes(value).map(id => ({id, name: operatorCredentialInputModes[id]})), 'insert');
     const responseChoices = responseFormChoices(value, element('connect-response-mode').value);
     choices('connect-response-mode', responseChoices, responseChoices[0]?.id);
@@ -481,6 +487,10 @@ function createConnectView(workspace, applications, proxy) {
   }
   function render() {
     renderInputs(); confirmCheckpoint(); renderForms(); renderReview(); renderGoogleAccount();
+    const diagnostics = operatorDiagnosticResources(catalog());
+    element('connect-diagnostics-option').hidden = saveOnly || !diagnostics.access_rules.size;
+    element('connect-include-diagnostics').checked = includeDiagnostics;
+    element('connect-include-diagnostics').disabled = !writable() || Boolean(checkpoint) || step !== 0 || connectionMethod === 'google';
     const saved = saveOnly && Boolean(savedCredential);
     const savedItem = catalog()?.credentials.find(item => item.id === savedCredential && item.status === 'active');
     element('connect-title').textContent = saveOnly ? 'Add credential' : 'Set up access';
@@ -535,7 +545,8 @@ function createConnectView(workspace, applications, proxy) {
       catalog().capabilities.github.destination_allowed && catalog().allowed_upstreams.includes(operatorGithub.origin) ?
         'GitHub: save a personal access token and grant repository-scoped issue permissions. GitHub App connections are not advertised by this deployment.' :
         'A GitHub token can be saved, but access cannot be granted until the operator approves api.github.com in deployment settings.';
-    element('connect-use-saved').disabled = !writable() || Boolean(checkpoint) || !catalog()?.credentials.some(item => item.status === 'active' && !isAwsCredential(item));
+    element('connect-use-saved').disabled = !writable() || Boolean(checkpoint) || !catalog()?.credentials.some(item =>
+      item.status === 'active' && !isAwsCredential(item) && (includeDiagnostics || !diagnostics.credentials.has(item.id)));
     element('connect-use-saved').hidden = saveOnly;
     for (const id of ['connect-actions', 'connect-leave-help', 'connect-compatibility']) element(id).hidden = googleOpen;
     if (saveOnly) element('connect-compatibility').hidden = true;
@@ -763,6 +774,11 @@ function createConnectView(workspace, applications, proxy) {
   });
   for (const id of ['connect-credential-auth-type', 'connect-application-choice', 'connect-rule-choice', 'connect-operation', 'connect-gmail-client', 'connect-credential-input', 'connect-response-mode', 'connect-request-body-mode', 'connect-npm-publish-hours', 'connect-alchemy-chain'])
     element(id).addEventListener('change', render);
+  element('connect-include-diagnostics').addEventListener('change', () => {
+    if (!writable() || checkpoint || step !== 0 || connectionMethod === 'google') { render(); return; }
+    includeDiagnostics = element('connect-include-diagnostics').checked;
+    review = null; render();
+  });
   element('connect-credential-choice').addEventListener('change', () => {
     if (connectionMethod === 'saved') savedChoice = element('connect-credential-choice').value;
     render();
@@ -797,6 +813,7 @@ function createConnectView(workspace, applications, proxy) {
   element('connect-status-refresh').addEventListener('click', () => workspace.refresh({manual: true}));
   function resetDraft() {
     selectedCredential = ''; selectedApplication = ''; selectedRule = ''; review = null; checkpoint = null; savedCredential = '';
+    includeDiagnostics = false;
     connectionMethod = null; savedChoice = ''; beforeGoogle = null;
     for (const id of ['connect-credential-form', 'connect-application-form', 'connect-access-form']) element(id).reset();
     for (const id of ['connect-credential-choice', 'connect-application-choice', 'connect-rule-choice']) element(id).value = 'new';
@@ -817,6 +834,7 @@ function createConnectView(workspace, applications, proxy) {
     const item = catalog()?.credentials.find(value => value.id === id);
     if (!operatorCredentialCanSetUpAccess(item, catalog()) || !writable() || checkpoint) return false;
     resetDraft(); saveOnly = false; selectedCredential = id; connectionMethod = 'saved'; savedChoice = id;
+    includeDiagnostics = operatorDiagnosticResources(catalog()).credentials.has(id);
     element('connect-credential-choice').value = ''; renderInputs(); element('connect-credential-choice').value = id;
     message('Saved credential selected. Choose a client; no token or permission was created.');
     location.hash = 'connect'; goto(1); return true;

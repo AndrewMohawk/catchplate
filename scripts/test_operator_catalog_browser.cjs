@@ -464,6 +464,60 @@ const tests = [
     assert.equal(state.credentials[0].status, 'revoked'); assert.equal(state.applications[0].status, 'active');
     assert.deepEqual(state.posts.map(item => item.name), ['access-rules/revoke', 'credentials/revoke']);
   })],
+  ['connection checks and revoked history stay manageable without filling ordinary setup', browser => {
+    const oldCredential = '55555555-5555-4555-8555-555555555555';
+    const oldApplication = '66666666-6666-4666-8666-666666666666';
+    const oldRule = '77777777-7777-4777-8777-777777777777';
+    return fixture(browser, {
+      allowedUpstreams: [UPSTREAM, 'https://demo-upstream:8443'],
+      credentials: [credential(), credential({id: oldCredential, status: 'revoked'})],
+      applications: [application(), application({id: oldApplication, status: 'revoked', token_status: 'revoked'})],
+      rules: [rule({upstream_url: 'https://demo-upstream:8443/echo'}), rule({id: oldRule,
+        credential_id: oldCredential, application_id: oldApplication, status: 'revoked'})],
+    }, async (page, state) => {
+      await ready(page); await view(page, 'overview');
+      for (const name of ['credentials', 'applications', 'rules'])
+        assert.equal(await page.locator('#overview-' + name + '-count').innerText(), '0');
+      assert.equal(await page.locator('#overview-next-action').innerText(), 'Add your first credential');
+      const original = JSON.stringify([state.credentials, state.applications, state.rules]);
+      for (const [name, list, refresh, id] of [
+        ['credentials', 'credentials-list', 'credentials-refresh', IDS.credential],
+        ['applications', 'applications-list', 'applications-refresh', IDS.application],
+        ['access-rules', 'access-rules-list', 'rules-refresh', IDS.rule],
+      ]) {
+        await view(page, name);
+        const diagnostic = page.locator('#' + list + ' [data-resource-group="diagnostic"]');
+        const revoked = page.locator('#' + list + ' [data-resource-group="revoked"]');
+        const resource = diagnostic.locator('[data-resource-id="' + id + '"]');
+        assert(await resource.isHidden()); assert.equal(await revoked.getAttribute('open'), null);
+        await diagnostic.locator(':scope > summary').click(); assert(await resource.isVisible());
+        await page.locator('#' + refresh).click(); await ready(page);
+        assert(await resource.isVisible(), 'explicit disclosure survives refresh');
+      }
+      assert.equal(JSON.stringify([state.credentials, state.applications, state.rules]), original);
+      state.credentials.push(credential({id: IDS.other, name: 'My actual provider key'}));
+      await page.locator('#rules-refresh').click(); await ready(page); await view(page, 'overview');
+      assert.equal(await page.locator('#overview-credentials-count').innerText(), '1');
+      assert.equal(await page.locator('#overview-next-action').innerText(), 'Set up access with a saved credential');
+      await page.locator('#overview-connect-service').click();
+      assert.equal(await page.locator('#connect-origin').inputValue(), '', 'a diagnostic destination is never preselected');
+      await page.locator('#connect-use-saved').click();
+      const options = () => page.locator('#connect-credential-choice option').evaluateAll(items => items.map(item => item.value));
+      assert((await options()).includes(IDS.other)); assert(!(await options()).includes(IDS.credential));
+      await page.locator('#connect-include-diagnostics').check(); assert((await options()).includes(IDS.credential));
+      await page.locator('#connect-include-diagnostics').uncheck(); assert(!(await options()).includes(IDS.credential));
+      await view(page, 'credentials');
+      await page.locator('#credentials-list [data-resource-id="' + IDS.credential + '"] [data-action="use-credential"]').click();
+      assert(await page.locator('#connect-include-diagnostics').isChecked());
+      assert(await page.locator('#connect-application-step').isVisible());
+      assert.equal(await page.locator('#connect-application-choice option[value="' + IDS.application + '"]').count(), 1);
+      state.rules.push(rule({id: '88888888-8888-4888-8888-888888888888'}));
+      await page.locator('#connect-status-refresh').click(); await ready(page); await view(page, 'credentials');
+      assert(await page.locator('#credentials-list > [data-resource-id="' + IDS.credential + '"]').isVisible(),
+        'a key shared with a non-diagnostic permission remains ordinary');
+      assert.deepEqual(state.posts, [], 'grouping, filtering and disclosure never change backend state');
+    });
+  }],
 ];
 
 async function main() {

@@ -187,6 +187,27 @@ function operatorSyntheticPermissions(catalog) {
     !Object.hasOwn(rule, 'operation_bundle') && rule.methods.length > 0 &&
     rule.methods.every(method => ['GET', 'POST'].includes(method))) || [];
 }
+function operatorDiagnosticResources(catalog) {
+  const result = {credentials: new Set(), applications: new Set(), access_rules: new Set()};
+  const credentials = catalog?.credentials || [], applications = catalog?.applications || [], rules = catalog?.access_rules || [];
+  const unique = (items, id) => typeof id === 'string' && id.length > 0 && items.filter(item => item.id === id).length === 1;
+  const fixture = rule => rule.upstream_url === 'https://demo-upstream:8443/echo' && unique(rules, rule.id);
+  for (const rule of rules) if (fixture(rule)) result.access_rules.add(rule.id);
+  const exclusivelyFixture = (field, id) => {
+    const linked = rules.filter(rule => rule[field] === id);
+    return linked.length > 0 && linked.every(rule => fixture(rule) &&
+      unique(credentials, rule.credential_id) && unique(applications, rule.application_id));
+  };
+  // All links count, including revoked history. Names never establish provenance.
+  for (const credential of credentials) if (unique(credentials, credential.id) &&
+      ['bearer', 'header'].includes(credential.auth_type) && !Object.hasOwn(credential, 'provider_id') &&
+      !Object.hasOwn(credential, 'connection_type') &&
+      (credential.legacy_upstream_origin == null || credential.legacy_upstream_origin === 'https://demo-upstream:8443') &&
+      exclusivelyFixture('credential_id', credential.id)) result.credentials.add(credential.id);
+  for (const application of applications) if (unique(applications, application.id) &&
+      exclusivelyFixture('application_id', application.id)) result.applications.add(application.id);
+  return result;
+}
 const element = id => document.getElementById(id);
 function textNode(tag, text, className) {
   const result = document.createElement(tag);
@@ -213,6 +234,30 @@ function resourceCard(item, badge, values) {
   card.append(heading, list); return card;
 }
 function renderCards(id, cards, empty) { element(id).replaceChildren(...(cards.length ? cards : [textNode('p', empty, 'muted')])); }
+function renderResourceGroups(containerId, entries, emptyText) {
+  const container = element(containerId);
+  const previous = new Map([...container.querySelectorAll('details')].map(node =>
+    [node.dataset.resourceGroup || (Object.hasOwn(node.dataset, 'expiredAppAccess') ? 'expired' : ''), node.open]));
+  const cards = entries.filter(entry => entry.group === 'current').map(entry => entry.card);
+  if (!cards.length) cards.push(textNode('p', emptyText, 'muted'));
+  const groups = {
+    expired: ['Connections with expired app access', 'Every linked application has an expired token or is revoked. These saved records remain intact; grouping does not validate or revoke provider keys. Review application access and permissions before using them.'],
+    diagnostic: ['Connection-check resources', 'These records target only the local fixture at https://demo-upstream:8443/echo. They are retained for troubleshooting. Collapsing this section does not disable active permissions. Expand to inspect or manage them.'],
+    revoked: ['Revoked history', 'These records are retained for review. Check each record’s enforcement status; grouping does not change saved state or proxy enforcement.']
+  };
+  for (const [group, [label, explanation]] of Object.entries(groups)) {
+    const selected = entries.filter(entry => entry.group === group).map(entry => entry.card);
+    if (!selected.length) continue;
+    const details = textNode('details', undefined, 'card'); details.dataset.resourceGroup = group; details.open = Boolean(previous.get(group));
+    details.append(textNode('summary', label + ' (' + selected.length + ')'), textNode('p', explanation, 'small muted'));
+    if (group === 'expired') {
+      details.dataset.expiredAppAccess = '';
+      const review = textNode('a', 'Review clients and tokens'); review.href = '#applications'; details.append(review);
+    }
+    const list = textNode('div', undefined, 'stack'); list.append(...selected); details.append(list); cards.push(details);
+  }
+  container.replaceChildren(...cards);
+}
 function projectGoogleAccount(item) {
   const text = (value, maximum) => typeof value === 'string' && value.length > 0 && value.length <= maximum && !/[\u0000-\u001f\u007f]/.test(value);
   const scopes = ['email', 'https://www.googleapis.com/auth/gmail.readonly', 'openid'];

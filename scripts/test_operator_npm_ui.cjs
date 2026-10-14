@@ -255,6 +255,45 @@ async function credentialSaveFixture(method, options = {}) {
 }
 
 const tests = [
+  ['diagnostic grouping is exact and conservative and preserves manageable retained cards', () => {
+    const current = context(), fixture = 'https://demo-upstream:8443/echo';
+    const raw = {credentials: [credential({id: 'fixture'}), credential({id: 'mixed'}), npmCredential({id: 'provider'}),
+      credential({id: 'unassigned'}), credential({id: 'legacy', legacy_upstream_origin: 'https://real.example.test'}),
+      credential({id: 'ambiguous'})], applications: [application({id: 'fixture-app'}), application({id: 'mixed-app'}), application({id: 'unassigned-app'})],
+      access_rules: [rule({id: 'fixture-rule', credential_id: 'fixture', application_id: 'fixture-app', upstream_url: fixture}),
+        rule({id: 'fixture-history', credential_id: 'fixture', application_id: 'fixture-app', upstream_url: fixture, status: 'revoked'}),
+        rule({id: 'mixed-fixture', credential_id: 'mixed', application_id: 'mixed-app', upstream_url: fixture}),
+        rule({id: 'mixed-history', credential_id: 'mixed', application_id: 'mixed-app', upstream_url: fixture + '?other=1', status: 'revoked'}),
+        rule({id: 'provider-fixture', credential_id: 'provider', application_id: 'fixture-app', upstream_url: fixture}),
+        rule({id: 'legacy-fixture', credential_id: 'legacy', application_id: 'fixture-app', upstream_url: fixture}),
+        rule({id: 'ambiguous-fixture', credential_id: 'ambiguous', application_id: 'missing-app', upstream_url: fixture})]};
+    const before = JSON.stringify(raw);
+    const classify = value => clone(current.run('Object.fromEntries(Object.entries(operatorDiagnosticResources(input)).map(([key, ids]) => [key, [...ids].sort()]))', value));
+    const grouped = classify(raw);
+    assert.deepEqual(grouped.credentials, ['fixture']); assert.deepEqual(grouped.applications, ['fixture-app']);
+    assert(!grouped.access_rules.includes('mixed-history')); assert(grouped.access_rules.includes('fixture-history'));
+    const renamed = clone(raw); renamed.credentials.forEach(item => { item.name = 'Unrelated production-looking name'; });
+    assert.deepEqual(classify(renamed), grouped); assert.equal(JSON.stringify(raw), before);
+    const entries = ['current', 'expired', 'diagnostic', 'revoked'].map(group => {
+      const card = new Node('article'); card.dataset.resourceId = group;
+      const button = new Node('button'); button.addEventListener('click', () => { button.clicked = true; }); card.append(button);
+      return {card, group};
+    });
+    current.value.entries = entries;
+    const render = () => current.run('renderResourceGroups("credentials-list", entries, "No current credentials in the main list.")');
+    render(); const list = current.dom.getElementById('credentials-list');
+    assert.equal(list.children[0], entries[0].card);
+    const groups = () => list.children.filter(node => node.tag === 'details');
+    assert.deepEqual(groups().map(node => node.dataset.resourceGroup), ['expired', 'diagnostic', 'revoked']);
+    assert(groups().every(node => node.open === false)); assert(Object.hasOwn(groups()[0].dataset, 'expiredAppAccess'));
+    assert(groups()[1].children.some(node => node.textContent.includes('does not disable active permissions')));
+    groups()[1].open = true; render(); assert.equal(groups()[1].open, true);
+    assert.equal(groups()[1].children.at(-1).children[0], entries[2].card);
+    entries[2].card.children[0].events.click(); assert(entries[2].card.children[0].clicked);
+    current.value.entries = entries.slice(1); render();
+    assert.equal(list.children[0].textContent, 'No current credentials in the main list.');
+    assert.equal(groups().length, 3); assert.equal(groups()[1].open, true);
+  }],
   ['inert select options reflect parsed and replaced option descendants only', () => {
     const dom = inertDom(); const select = dom.getElementById('connect-github-type');
     assert.deepEqual(select.options.map(option => option.value), ['github_token_v1', 'github_app_v1']);

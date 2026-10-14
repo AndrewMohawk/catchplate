@@ -351,8 +351,7 @@ function createCredentialsView(workspace, actions = {}) {
     githubAppReplacement.render();
     element('credential-fields').disabled = element('credential-storage-type').value !== 'manual' || !workspace.ready('credentials');
     if (!catalog) return;
-    const currentCards = []; const expiredCards = [];
-    const expiredOpen = element('credentials-list').querySelector('[data-expired-app-access]')?.open;
+    const entries = [], diagnostic = operatorDiagnosticResources(catalog);
     for (const credential of catalog.credentials) {
       const google = credential.auth_type === 'google_oauth';
       const xAccount = isXOAuthCredential(credential);
@@ -456,16 +455,10 @@ function createCredentialsView(workspace, actions = {}) {
         }); card.append(button);
         if (credential.active_rule_count > 0) card.append(textNode('p', 'Revoke the referencing access rules first. Shared application identities are retained.', 'small muted'));
       }
-      (operatorCredentialHasExpiredAppAccess(credential, catalog) ? expiredCards : currentCards).push(card);
+      entries.push({card, group: credential.status === 'revoked' ? 'revoked' : diagnostic.credentials.has(credential.id) ? 'diagnostic' :
+        operatorCredentialHasExpiredAppAccess(credential, catalog) ? 'expired' : 'current'});
     }
-    if (expiredCards.length) {
-      const retained = textNode('details', undefined, 'card'); retained.dataset.expiredAppAccess = ''; retained.open = Boolean(expiredOpen);
-      retained.append(textNode('summary', 'Connections with expired app access (' + expiredCards.length + ')'), textNode('p',
-        'Every linked application has an expired token or is revoked. These saved records remain intact; grouping does not validate or revoke provider keys. Review application access and permissions before using them.', 'small muted'));
-      const review = textNode('a', 'Review clients and tokens'); review.href = '#applications';
-      const list = textNode('div', undefined, 'stack'); list.append(...expiredCards); retained.append(review, list); currentCards.push(retained);
-    }
-    renderCards('credentials-list', currentCards, 'No saved credentials. Add a provider account or key above, then separately choose which clients may use it.');
+    renderResourceGroups('credentials-list', entries, 'No current credentials in the main list. Add a provider account or key above, or expand a retained group below to manage existing records.');
   }
   workspace.subscribe(render); return {render};
 }
@@ -589,7 +582,8 @@ function createAccessRulesView(workspace) {
     renderRequestBody();
     chooseOptions('rule-upstream-origin', catalog.allowed_upstreams.map(origin => ({id: origin, name: origin})), 'No approved destination configured');
     renderSummary();
-    renderCards('access-rules-list', catalog.access_rules.map(rule => {
+    const diagnostic = operatorDiagnosticResources(catalog);
+    renderResourceGroups('access-rules-list', catalog.access_rules.map(rule => {
       const application = catalog.applications.find(item => item.id === rule.application_id);
       const credential = catalog.credentials.find(item => item.id === rule.credential_id);
       const enforced = workspace.loaded() && rule.enforcement === (rule.status === 'revoked' ? 'revoked' : 'active');
@@ -604,8 +598,8 @@ function createAccessRulesView(workspace) {
           workspace.mutate('access-rules/revoke', {id: rule.id}, 'rule-action-status');
         }); card.append(button);
       }
-      return card;
-    }), 'No access rules. Saved credentials and applications alone grant no access.');
+      return {card, group: rule.status === 'revoked' ? 'revoked' : diagnostic.access_rules.has(rule.id) ? 'diagnostic' : 'current'};
+    }), 'No current permissions in the main list. Saved credentials and clients alone grant no access. Expand retained groups below to review existing permissions.');
   }
   workspace.subscribe(render); return {render};
 }

@@ -55,6 +55,8 @@ If a save or provider write times out, use [uncertain-result recovery](https://g
 
 ## Optional synthetic check
 
+Resources used only for the local connection check appear in collapsed **Connection-check resources** sections on the Credentials, Clients and Permissions pages. They do not count toward ordinary setup progress. To reuse one deliberately, expand its section and choose **Use with a client**, or enable **Include saved connection-check resources** in setup. Revoked records remain in a separate history section; nothing is deleted or disabled by this grouping.
+
 **Overview → Diagnostics → Inspect synthetic connection check** shows explicitly selected saved fixture permissions. It does not create resources, renew tokens or send a request. Only use made-up provider keys for this fixture; it is not Google, GitHub or npm acceptance. Follow the existing [diagnostic walkthrough](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-demo.md#optional-diagnostic-connection-check) if you want this separate test.
 
 Sources: [operator walkthrough](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-demo.md), [GitHub contract](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-github-client-compatibility.md), [client lifecycle implementation](https://github.com/AndrewMohawk/serverware/blob/main/serverware/operator_demo_web/workspace_applications.js).

@@ -157,7 +157,8 @@ function createApplicationsView(workspace) {
       'New apps use standard proxy login: public application ID as username, application token as password. Bearer also remains supported. Never use the provider key.' :
       'New apps use Bearer proxy authentication. Standard username/password login is not advertised by this deployment.';
     if (!catalog) return;
-    renderCards('applications-list', catalog.applications.map(application => {
+    const diagnostic = operatorDiagnosticResources(catalog);
+    renderResourceGroups('applications-list', catalog.applications.map(application => {
       const revoked = application.status === 'revoked';
       const badge = revoked ? workspace.loaded() && application.access_status === 'revoked' ? 'Revoked · enforced' : 'Revoked · enforcement pending' :
         application.token_status === 'expired' || Date.now() >= application.token_expires_at_epoch_ms ? 'Token expired' :
@@ -210,8 +211,8 @@ function createApplicationsView(workspace) {
           manage.addEventListener('click', () => renewalView.select(application.id)); card.append(manage);
         }
       }
-      return card;
-    }), 'No clients. Create a client identity and save its one-time token, then add an access rule.');
+      return {card, group: revoked ? 'revoked' : diagnostic.applications.has(application.id) ? 'diagnostic' : 'current'};
+    }), 'No current clients in the main list. Create a client and save its one-time token, or expand a retained group below to manage existing clients.');
   }
   window.addEventListener('pagehide', () => { clear(); channel?.close(); channel = null; });
   window.addEventListener('pageshow', event => { if (event.persisted) { connectChannel(); workspace.refresh(); } });

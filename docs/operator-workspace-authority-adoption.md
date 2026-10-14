@@ -170,9 +170,13 @@ insufficient.
 
 Only the signed grant and opaque originals cross the exact-origin/exact-window
 browser handoff. A separately admitted native opening owner verifies the native
-cookie and actual TLS/broker ownership, opens and renders on the native origin,
-and returns public opening evidence for the independently checked receipt
-transaction. Keep portal cookies and WebAuthn ceremonies on their configured
+cookie and actual TLS/broker ownership, then prepares an immutable private view
+without disclosing it. Its signed preparation proof enters the independently
+checked receipt transaction. Only the actual commit owner's signed acknowledgment,
+bound to the original challenge, reviewer, session and prepared view, permits
+one-use disclosure over native TLS. Failure or uncertain output cannot rearm the
+attempt. See the [opening integration contract](native-jit-review-custody.md#opening-integration-contract).
+Keep portal cookies and WebAuthn ceremonies on their configured
 origin/RP. The dedicated coordinator needs a narrow COOP popup exception; the
 whole workspace must not gain it. Do not assume two browser fetches reuse a TLS
 connection or replace native TLS with host termination. Native rendering also

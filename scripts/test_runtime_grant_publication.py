@@ -4,8 +4,9 @@
 Approval records and HTTP acknowledgements are synthetic. These tests exercise
 no approval writer, threshold calculation, gate server, or native authority.
 Publication admission, request construction, and acknowledgement validation are
-the real functions with transport and metrics replaced. Two source-selected
-route-body tests use synthetic authority/authentication dependencies; they are
+the real functions with transport and metrics replaced. Three source-selected
+route-body tests use the actual native decision guard with synthetic metadata
+and authority/authentication dependencies; they are
 not HTTP authentication or threshold-writer acceptance.
 """
 from __future__ import annotations
@@ -38,22 +39,24 @@ def no_external_io(event, _arguments):
 
 
 def actual_approve_body(namespace):
-    """Compile the unchanged route body, not its FastAPI dependency wiring."""
+    """Compile the unchanged route and guard, not FastAPI dependency wiring."""
     source = ROOT / "serverware/app.py"
+    names = {"approve", "_assert_legacy_approval_decision_allowed"}
     nodes = [node for node in ast.parse(source.read_text()).body
-             if isinstance(node, ast.FunctionDef) and node.name == "approve"]
-    if len(nodes) != 1:
-        raise AssertionError("expected one actual approval route")
-    node = nodes[0]
+             if isinstance(node, ast.FunctionDef) and node.name in names]
+    if len(nodes) != len(names) or {node.name for node in nodes} != names:
+        raise AssertionError("expected the actual approval route and decision guard")
+    node = next(node for node in nodes if node.name == "approve")
     if [argument.arg for argument in node.args.args] != [
             "approval_id", "ttl_seconds", "payload", "identity"]:
         raise AssertionError("approval route argument contract changed")
-    node.decorator_list = []
-    node.args.defaults = []
-    for argument in node.args.args:
-        argument.annotation = None
-    node.returns = None
-    exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), "exec"), namespace)
+    for node in nodes:
+        node.decorator_list = []
+        node.args.defaults = []
+        for argument in node.args.args:
+            argument.annotation = None
+        node.returns = None
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), "exec"), namespace)
     return namespace["approve"]
 
 
@@ -124,9 +127,12 @@ class RuntimeGrantPublicationTests(unittest.TestCase):
             effect.assert_not_called()
         self.assertEqual(_external_effects, [])
 
-    def route_case(self, updated):
+    def route_case(self, updated, *, native_blocked=False):
         from fastapi import HTTPException
-        retained = {**approval(), "status": "pending"}
+        # This is the decision metadata's derived refusal-only bit, not a
+        # synthetic native opening proof or an authority admission result.
+        retained = {**approval(), "status": "pending", "_legacy_decision_blocked": native_blocked,
+            "url": "sha256:" + "4" * 64}
         receipt = {"id": "synthetic-review-receipt"}
         writer_arguments = {"item_id": retained["id"], "actor_id": "synthetic-reviewer"}
         store = SimpleNamespace(
@@ -148,10 +154,27 @@ class RuntimeGrantPublicationTests(unittest.TestCase):
             assertion={"id": "synthetic-assertion-credential"},
             authority_challenge_id="synthetic-authority-challenge", note=None)
         before = copy.deepcopy(updated)
+        if native_blocked:
+            retained_before = copy.deepcopy(retained)
+            with self.assertRaises(HTTPException) as caught:
+                function(retained["id"], 30, payload,
+                    SimpleNamespace(user_id="synthetic-reviewer"))
+            self.assertEqual(caught.exception.status_code, 409)
+            self.assertEqual(caught.exception.detail,
+                "Native decisions require protected continuation authority")
+            store.get_approval_request_metadata.assert_called_once_with(retained["id"], for_decision=True)
+            for callback in (store.get_active_approval_review_receipt, store.approve_request,
+                    store.record_audit_event, store.approval_public_summary, publisher,
+                    namespace["_approval_is_expired"], namespace["_approval_jit_policy"],
+                    namespace["_assert_approver_allowed"], namespace["_jit_approve_authority_arguments"]):
+                callback.assert_not_called()
+            self.assertEqual(retained, retained_before)
+            self.assertEqual(updated, before)
+            return None, store, publisher
         result = function(retained["id"], 30, payload,
             SimpleNamespace(user_id="synthetic-reviewer"))
         self.assertEqual(updated, before)
-        store.get_approval_request_metadata.assert_called_once_with(retained["id"])
+        store.get_approval_request_metadata.assert_called_once_with(retained["id"], for_decision=True)
         store.get_active_approval_review_receipt.assert_called_once_with(receipt["id"],
             approval_request_id=retained["id"], reviewer_id="synthetic-reviewer")
         store.approve_request.assert_called_once_with(**writer_arguments,
@@ -272,6 +295,11 @@ class RuntimeGrantPublicationTests(unittest.TestCase):
         self.assertEqual(result, {**self.runtime.db.approval_public_summary(value),
             "data_plane_grant_publish": {"enabled": False, "ok": False, "error": None}})
         self.assertNotIn("synthetic-private-review-canary", json.dumps(result))
+
+    def test_actual_route_native_refusal_precedes_approval_publication_and_audit(self):
+        self.route_case(approval(), native_blocked=True)
+        self.transport.assert_not_called()
+        self.metric.assert_not_called()
 
     def test_actual_route_approved_publishes_once_and_projects_safe_delivery(self):
         value = {**approval(), "canonical_request": {"private": "synthetic-private-review-canary"}}

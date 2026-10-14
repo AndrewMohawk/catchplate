@@ -358,10 +358,24 @@ OOM/timeout cause was not independently retained.
 These tests do not exercise PostgreSQL acquisition or establish cold policy
 admission, signing, commit, completion ACK or disclosure. Those remain the next
 integration boundary. In particular, existing activation and registration
-policies cannot silently become native-review policy owners. A separate
-compatibility gap also remains: generic configuration capture in the existing
-native-review kernel and new owner rejects otherwise-valid fractional timeout
-values; do not rewrite a signed configuration to work around it.
+policies cannot silently become native-review policy owners.
+
+The fractional-timeout capture gap was repaired on October 14. The owner and
+kernel now reuse the existing configuration-only finite-number capture; exact
+signed values and canonical spellings are preserved. Request, reviewer-policy,
+row and result grammars remain unchanged. The combined size/depth bounds and
+cumulative byte/node budgets still apply. Do not rewrite signed configuration
+values to work around compatibility errors.
+
+All 17 framing/capture tests passed in 2.158 seconds, followed by nine signed
+original-replay and capture-boundary groups in 111.350 seconds. These cover real
+fractional authorize/receipt replay, caller-mutation isolation, altered signed
+configuration refusal, nonfinite values, exact/one-over aggregate limits and
+unchanged strict branches. Both runs used the existing pinned app image with
+networking disabled, read-only source and bounded resources; their containers
+and runner units were absent after completion. No build, live rollout or
+protected service activation occurred. These results close configuration
+compatibility, not the remaining commit/completion/disclosure integration.
 
 ### Opening component checkpoint and startup repair
 

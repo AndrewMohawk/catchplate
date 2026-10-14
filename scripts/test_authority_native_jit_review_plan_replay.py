@@ -84,6 +84,23 @@ def role_descriptor(key, name):
         "measurementDigest": sha(("synthetic native-review " + name).encode("ascii"))}
 
 
+def fractional_opening(pki):
+    """Create new signed originals for the exact fractional configuration."""
+    opening = opening_fixture.Fixture(pki, retained_fixture.Fixture(pki))
+    opening.configuration["roles"]["planner"].update(
+        requestTimeoutSeconds=1.25, databaseConnectTimeoutSeconds=0.75)
+    opening.configuration_digest = crypto.framed(opening.configuration["schema"], canonical(opening.configuration))
+    opening.assignment["controlPlaneConfigurationDigest"] = opening.configuration_digest
+    opening.assignment_original = opening.sign_assignment()
+    opening.config.update(controlPlaneConfigurationDigest=opening.configuration_digest,
+        assignmentOriginal=opening.assignment_original)
+    opening.challenge.update(controlPlaneConfigurationDigest=opening.configuration_digest,
+        openingAssignmentSha256=sha(opening.assignment_original.encode("ascii")),
+        ownerScopeDigest=sha(canonical(opening.config)))
+    opening.refresh()
+    return opening
+
+
 def full_vector(trees):
     """Complete source inventory, with independently reconstructed tree roots.
 
@@ -273,8 +290,8 @@ class NativeReviewPlanOriginalReplayTests(unittest.TestCase):
     def tearDown(self):
         self.assertEqual(_violations, [], "external-effect refusal is not a passing negative control")
 
-    def receipt_fixture(self):
-        case = OriginalFixture(self.pki)
+    def receipt_fixture(self, *, fractional=False):
+        case = OriginalFixture(self.pki, opening=fractional_opening(self.pki) if fractional else None)
         authorized = case.replay()
         grant = json.loads(authorized.result_original)
         grant.pop("canDecide")
@@ -291,15 +308,22 @@ class NativeReviewPlanOriginalReplayTests(unittest.TestCase):
         return OriginalFixture(self.pki, operation=wire.RECEIPT, opening=case.opening,
             authorization_original=authorization, preparation_original=prepared)
 
-    def test_actual_authorize_replays_signed_roots_native_evidence_and_all_nine_rows(self):
-        case = OriginalFixture(self.pki)
+    def test_actual_authorize_replays_fractional_configuration_and_all_nine_signed_rows(self):
+        case = OriginalFixture(self.pki, opening=fractional_opening(self.pki))
         selected = case.plan_owner()
+        original = canonical(case.opening.configuration)
+        self.assertEqual(selected._configuration_original, original)
+        # A later caller mutation cannot change the held signed configuration.
+        case.opening.configuration["roles"]["planner"]["requestTimeoutSeconds"] = 2.5
         result = case.replay(selected)
         value = json.loads(result.result_original)
         self.assertEqual(value["schema"], kernel.AUTHORIZE_RESULT)
         self.assertEqual(value["requestDigest"], case.request["requestDigest"])
         self.assertEqual(value["scope"]["reviewerId"], "oidc:alpha")
         self.assertEqual(value["scope"]["approvalRequestId"], case.opening.retained.approval["id"])
+        self.assertEqual(value["scope"]["controlPlaneConfigurationDigest"],
+            crypto.framed(case.opening.configuration["schema"], original))
+        self.assertEqual(json.loads(selected._configuration_original)["roles"]["planner"]["requestTimeoutSeconds"], 1.25)
         self.assertIs(value["canDecide"], False)
         self.assertEqual(json.loads(result.mutations_original), [])
         self.assertEqual(len(json.loads(result.read_manifest_original)["rowChunkCounts"]), 9)
@@ -311,8 +335,8 @@ class NativeReviewPlanOriginalReplayTests(unittest.TestCase):
         with self.assertRaises(owner.NativeJitReviewPlanOwnerError):
             case.replay(selected)
 
-    def test_actual_receipt_replay_derives_exactly_four_unsigned_uncommitted_effects(self):
-        case = self.receipt_fixture()
+    def test_actual_fractional_receipt_replay_derives_exactly_four_unsigned_uncommitted_effects(self):
+        case = self.receipt_fixture(fractional=True)
         result = case.replay()
         value, mutations = json.loads(result.result_original), json.loads(result.mutations_original)
         self.assertEqual(value["schema"], kernel.RECEIPT_RESULT)
@@ -325,6 +349,99 @@ class NativeReviewPlanOriginalReplayTests(unittest.TestCase):
         self.assertNotIn("signatureBase64Url", value)
         self.assertEqual(value["authorizationSha256"], sha(case.authorization.encode("ascii")))
         self.assertEqual(value["preparationSha256"], sha(case.preparation.encode("ascii")))
+
+    def test_fractional_configuration_change_without_new_signed_assignment_refuses(self):
+        case = OriginalFixture(self.pki, opening=fractional_opening(self.pki))
+        case.opening.configuration["roles"]["planner"]["requestTimeoutSeconds"] = 1.5
+        with self.assertRaises(owner.NativeJitReviewPlanOwnerError):
+            case.replay()
+
+    def test_kernel_configuration_and_strict_branch_failures_precede_original_replay(self):
+        opening = fractional_opening(self.pki)
+        challenge = opening.command["challengeOriginal"]
+        request = request_source._derive_request(wire.AUTHORIZE, {
+            "approval_request_id": opening.retained.approval["id"], "session_id": "session-one",
+            "challenge_sha256": sha(challenge.encode("ascii"))})
+        for branch, value in (("configuration_payload", {"timeout": float("nan")}),
+                ("configuration_payload", {"timeout": float("inf")}),
+                ("configuration_payload", {"timeout": float("-inf")}),
+                ("configuration_payload", {"value": "x" * reads.vector.authority.MAX_REQUEST_BYTES}),
+                ("request", {"value": 1.25}), ("authn_policy", {"value": 1.25}),
+                ("trust_policy", {"value": 1.25}), (None, None)):
+            parent = meter()
+            budget = reads.NativeJitReviewReadBudget(wire.AUTHORIZE, parent_work=parent,
+                live_window=LIVE, deadline_ns=LIVE[4])
+            arguments = dict(operation=wire.AUTHORIZE, request=request, read_originals={},
+                session_token_original=TOKEN, challenge_original=challenge,
+                configuration_payload=opening.configuration, configuration_root_key=opening.root.public_key(),
+                current_root_public_key=opening.root.public_key(), current_root_enrollment_original=b"{}",
+                authn_policy={}, trust_policy={}, live_window=LIVE, read_budget=budget, work=parent)
+            if branch is not None:
+                arguments[branch] = value
+            with self.subTest(branch=branch), fixture_clocks(), patch.object(reads, "admit_original_reads_on_work",
+                    side_effect=AssertionError("capture reached original replay")) as replay:
+                if branch is None:
+                    # The valid fractional control must cross this boundary;
+                    # expiry or another earlier refusal cannot pass negatives.
+                    with self.assertRaisesRegex(AssertionError, "capture reached original replay"):
+                        kernel.evaluate_on_work(**arguments)
+                    self.assertEqual(replay.call_count, 1)
+                    self.assertFalse(budget._failed)
+                else:
+                    with self.assertRaises(ValueError):
+                        kernel.evaluate_on_work(**arguments)
+                    self.assertEqual(replay.call_count, 0)
+                    self.assertTrue(budget._failed)
+
+    def test_kernel_combined_configuration_size_and_depth_boundaries(self):
+        opening = fractional_opening(self.pki)
+        challenge = opening.command["challengeOriginal"]
+        request = request_source._derive_request(wire.AUTHORIZE, {
+            "approval_request_id": opening.retained.approval["id"], "session_id": "session-one",
+            "challenge_sha256": sha(challenge.encode("ascii"))})
+        maximum = reads.vector.authority.MAX_REQUEST_BYTES
+        strict = {"request": request, "authn": {}, "trust": {}}
+        empty = {"timeout": 1.25, "padding": ""}
+        overhead = len(canonical({**strict, "configuration": empty}))
+        cases = []
+        for extra in (0, 1):
+            configuration = {**empty, "padding": "x" * (maximum - overhead + extra)}
+            self.assertEqual(len(canonical({**strict, "configuration": configuration})), maximum + extra)
+            cases.append(("combined-bytes", maximum + extra, configuration, extra == 0))
+        for depth in (31, 32):
+            configuration = {"timeout": 1.25}
+            for _ in range(depth - 1):
+                configuration = {"nested": configuration}
+            # Both standalone configurations fit depth 32. The kernel's
+            # enclosing graph adds one level: combined depth 32 fits, 33 fails.
+            cases.append(("combined-depth", depth + 1, configuration, depth == 31))
+        for boundary, value, configuration, accepted in cases:
+            with self.subTest(boundary=boundary, value=value):
+                # These deliberately synthetic policies test capture only.
+                # Each branch passes its real standalone decoder; no signed
+                # configuration admission or successful original replay is claimed.
+                original = canonical(configuration)
+                self.assertEqual(canonical(owner._configuration(original, meter())), original)
+                strict_original = canonical(strict)
+                self.assertEqual(canonical(owner._json(strict_original, maximum, meter())), strict_original)
+                parent = meter()
+                budget = reads.NativeJitReviewReadBudget(wire.AUTHORIZE, parent_work=parent,
+                    live_window=LIVE, deadline_ns=LIVE[4])
+                arguments = dict(operation=wire.AUTHORIZE, request=request, read_originals={},
+                    session_token_original=TOKEN, challenge_original=challenge,
+                    configuration_payload=configuration, configuration_root_key=opening.root.public_key(),
+                    current_root_public_key=opening.root.public_key(), current_root_enrollment_original=b"{}",
+                    authn_policy={}, trust_policy={}, live_window=LIVE, read_budget=budget, work=parent)
+                with patch.object(reads, "admit_original_reads_on_work",
+                        side_effect=AssertionError("combined capture reached original replay")) as replay:
+                    if accepted:
+                        with self.assertRaisesRegex(AssertionError, "combined capture reached original replay"):
+                            kernel.evaluate_on_work(**arguments)
+                    else:
+                        with self.assertRaises(ValueError):
+                            kernel.evaluate_on_work(**arguments)
+                    self.assertEqual(replay.call_count, 1 if accepted else 0)
+                    self.assertEqual(budget._failed, not accepted)
 
     def test_wrong_token_and_root_pin_refuse_real_prepared_originals(self):
         case = OriginalFixture(self.pki)

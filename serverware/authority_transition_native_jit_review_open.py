@@ -21,6 +21,7 @@ from serverware import authority_native_jit_review_open_custody as custody
 from serverware import authority_native_jit_retention_contract as storage
 from serverware import authority_oidc_session_activation as session_support
 from serverware import authority_request_commitment as commitment
+from serverware import authority_revocation_configuration as configuration_capture
 from serverware import authority_transition_core as core
 from serverware import authority_transition_oidc_session_activation as activation
 from serverware import authority_transition_quota as quota
@@ -278,10 +279,20 @@ def evaluate_on_work(*, operation, request, read_originals, session_token_origin
         if operation == wire.RECEIPT:
             wire.validate_authorization_original(authorization_original)
             wire.validate_preparation_original(preparation_original)
-        graph = {"request": request, "configuration": configuration_payload,
-            "authn": authn_policy, "trust": trust_policy}
+        # Requests and reviewer policies retain the strict, integer-only work
+        # grammar. Only the separately admitted configuration permits finite
+        # fractional timeouts; never rewrite its signed values or commitment.
+        graph = {"request": request, "authn": authn_policy, "trust": trust_policy}
         stage.prepare_encoding(graph)
         captured = wire.grammar.document(core.canonical_bytes(graph).decode("ascii"), authority.MAX_REQUEST_BYTES)
+        ledger = configuration_capture.capability.capture._SharedLedger(stage)
+        captured["configuration"] = configuration_capture._ConfigurationCapture(
+            ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(configuration_payload)
+        # Keep the original aggregate graph byte/depth bounds after detaching
+        # both branches. The configuration encoder does not relax other inputs.
+        original = configuration_capture._configuration_wire(captured, ledger)
+        stage.charge(input_bytes=3 * len(original))
+        captured = wire.grammar.document(original.decode("ascii"), authority.MAX_REQUEST_BYTES)
         request, configuration_payload = captured["request"], captured["configuration"]
         authn_policy, trust_policy = captured["authn"], captured["trust"]
     # The raw token is sent only to actual same-call replay and possession

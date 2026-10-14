@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 from pathlib import Path
 import sys
 import time
@@ -212,6 +213,85 @@ class PlanOwnerRefusals(unittest.TestCase):
         object.__setattr__(selected._reader, "_enrollment", b'{"rebound":true}')
         with self.assertRaises(owner.NativeJitReviewPlanOwnerError):
             selected.produce({}, session_token_original=TOKEN, challenge_original="{}")
+
+    def test_fractional_configuration_preserves_exact_canonical_values_and_detaches(self):
+        policy = {"roles": {"planner": {"requestTimeoutSeconds": 1.25,
+            "databaseConnectTimeoutSeconds": 0.75}}, "unused": [1.0, -0.0, 1e-20]}
+        original = canonical(policy)
+        selected = self.configured(configuration_payload=policy)
+        self.assertEqual(selected._configuration_original, original)
+        policy["roles"]["planner"]["requestTimeoutSeconds"] = 2.5
+        decoded = owner._configuration(selected._configuration_original, meter())
+        self.assertEqual(canonical(decoded), original)
+        self.assertIs(type(decoded["unused"][0]), float)
+        self.assertEqual(math.copysign(1, decoded["unused"][1]), -1)
+        self.assertEqual(decoded["roles"]["planner"]["requestTimeoutSeconds"], 1.25)
+
+    def test_nonfinite_configuration_and_noncanonical_originals_refuse(self):
+        for number in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(number=repr(number)), self.assertRaises(ValueError):
+                self.configured(configuration_payload={"timeout": number})
+        for raw in (b'{"timeout":NaN}', b'{"timeout":Infinity}', b'{"timeout":-Infinity}',
+                b'{"timeout":1e309}', b'{"timeout":1.25,"timeout":2.5}', b'{"timeout":1.250}'):
+            with self.subTest(original=raw), self.assertRaises(ValueError):
+                owner._configuration(raw, meter())
+
+    def test_fractional_permission_is_not_shared_with_requests_policies_results_or_rows(self):
+        for field in ("authn_policy", "trust_policy"):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                self.configured(configuration_payload={"timeout": 1.25}, **{field: {"value": 1.25}})
+        for value in ({"arguments": {"value": 1.25}}, {"result": 1.25}, [{"row": {"value": 1.25}}]):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                owner._json_original(value, reads.vector.authority.MAX_REQUEST_BYTES, meter())
+        with self.assertRaises(ValueError):
+            owner._json(b'{"value":1.25}', 1024, meter())
+
+    def test_configuration_byte_depth_type_and_aggregate_bounds_remain_closed(self):
+        maximum = reads.vector.authority.MAX_REQUEST_BYTES
+        # The constructor also holds two exact empty policies (two bytes each).
+        policy = {"value": "x" * (maximum - len(canonical({"value": ""})) - 4)}
+        self.assertEqual(len(self.configured(configuration_payload=policy)._configuration_original), maximum - 4)
+        policy["value"] += "x"
+        with self.assertRaises(ValueError):
+            self.configured(configuration_payload=policy)
+        policy["value"] += "xxxx"
+        with self.assertRaises(ValueError):
+            self.configured(configuration_payload=policy)
+        with self.assertRaises(ValueError):
+            owner._configuration(canonical(policy), meter())
+        deep = {"value": 1.25}
+        for _ in range(129):
+            deep = {"nested": deep}
+        cyclic = {}; cyclic["nested"] = cyclic
+        class ForeignFloat(float):
+            pass
+        for policy in (deep, cyclic, {"value": ForeignFloat(1.25)}):
+            with self.subTest(kind=type(policy).__name__), self.assertRaises(ValueError):
+                self.configured(configuration_payload=policy)
+
+    def test_configuration_encoding_and_decoding_charge_exact_bytes_and_nodes(self):
+        value = {"timeout": 1.25, "nested": [-0.0, 1.0, 1e-20]}
+        raw = canonical(value)
+        # Independent closed fixture: root + two keys + scalar + list + 3 scalars.
+        nodes = 8
+        config = owner.configuration_capture
+        actions = ((lambda work: config._configuration_wire(value, config.capability.capture._SharedLedger(work)),
+                    2 * len(raw), 2 * nodes),
+                   (lambda work: owner._configuration(raw, work), 4 * len(raw), nodes))
+        for action, expected_bytes, expected_nodes in actions:
+            for byte_delta, node_delta, accepted in ((0, 0, True), (-1, 0, False), (0, -1, False)):
+                with self.subTest(bytes=expected_bytes, byte_delta=byte_delta, node_delta=node_delta):
+                    work = _ValidationWork(QueryReadValidationLimits(max_input_bytes=7 + expected_bytes + byte_delta,
+                        max_json_nodes=11 + expected_nodes + node_delta))
+                    work.charge(input_bytes=7, json_nodes=11)
+                    if accepted:
+                        actual = action(work)
+                        self.assertEqual(actual if type(actual) is bytes else canonical(actual), raw)
+                        self.assertEqual((work.hash_work, work.input_bytes, work.json_nodes),
+                            (0, 7 + expected_bytes, 11 + expected_nodes))
+                    else:
+                        with self.assertRaises(ValueError):
+                            action(work)
 
     def test_parent_counter_rewind_and_null_replay_poison_the_owner(self):
         selected = self.configured()

@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import authority_native_jit_review_current_read as reads
 from serverware import authority_native_jit_review_plan_stream as stream
+from serverware import authority_revocation_configuration as configuration_capture
 from serverware import authority_transition_native_jit_review_open as kernel
 from serverware.authority_query_read_work import _ValidationWork
 
@@ -58,6 +59,16 @@ def _json(raw, maximum, work):
     return value
 
 
+def _configuration(raw, work):
+    """Decode only configuration with its existing finite-number grammar."""
+    maximum = reads.vector.authority.MAX_REQUEST_BYTES
+    _require(type(raw) is bytes and 2 <= len(raw) <= maximum and raw.isascii())
+    work.charge(input_bytes=3 * len(raw))
+    value = wire.grammar.document(raw.decode("ascii"), maximum)
+    return configuration_capture._ConfigurationCapture(
+        configuration_capture.capability.capture._SharedLedger(work), maximum_bytes=maximum).visit(value)
+
+
 @dataclass(frozen=True, slots=True, repr=False, eq=False)
 class PreparedNativeJitReviewPlan:
     """Output-only literal material, deliberately unsigned and uncommitted."""
@@ -90,7 +101,8 @@ class NativeJitReviewPlanOwner:
         _require(pins[0] in wire.OPERATIONS and pins[-1] == os.getpid())
         reads.connection_owner._validate_configuration(pins[1])
         # Detach every mutable caller policy before any read/native/key callback.
-        configuration = _json_original(configuration_payload, reads.vector.authority.MAX_REQUEST_BYTES, work)
+        configuration = configuration_capture._configuration_wire(configuration_payload,
+            configuration_capture.capability.capture._SharedLedger(work))
         authn = _json_original(authn_policy, reads.vector.authority.MAX_REQUEST_BYTES, work)
         trust = _json_original(trust_policy, reads.vector.authority.MAX_REQUEST_BYTES, work)
         _require(len(configuration) + len(authn) + len(trust) <= reads.vector.authority.MAX_REQUEST_BYTES)
@@ -183,7 +195,7 @@ class NativeJitReviewPlanOwner:
                 operation=operation, request_digest=request["requestDigest"],
                 live_window=self._window, deadline_ns=self._deadline, work=work)
             self._check()
-            configuration = _json(self._configuration_original, reads.vector.authority.MAX_REQUEST_BYTES, work)
+            configuration = _configuration(self._configuration_original, work)
             authn = _json(self._authn_original, reads.vector.authority.MAX_REQUEST_BYTES, work)
             trust = _json(self._trust_original, reads.vector.authority.MAX_REQUEST_BYTES, work)
             budget = reads.NativeJitReviewReadBudget(operation, parent_work=work,

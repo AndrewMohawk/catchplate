@@ -1,9 +1,16 @@
 name: Native review Rust engineering controls
 
-# One explicitly requested hosted attempt. This is not native admission,
-# deployment, a normal release-binary build, or whole-project acceptance.
+# Engineering controls remain the default. Normal mode is a separate explicit
+# artifact build, not runtime acceptance, native admission or deployment.
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Existing 58 engineering controls, or a normal release ELF artifact
+        required: true
+        default: engineering
+        type: choice
+        options: [engineering, normal]
 
 permissions:
   contents: read
@@ -14,6 +21,7 @@ concurrency:
 
 jobs:
   focused-rust:
+    if: ${{ inputs.mode != 'normal' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     steps:
@@ -38,3 +46,51 @@ jobs:
           path: ${{ runner.temp }}/native-jit-review-rust/results/
           if-no-files-found: warn
           retention-days: 7
+
+  normal-proxy:
+    if: ${{ inputs.mode == 'normal' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check normal provenance parsers without compiling Rust
+        run: python3 -I -B scripts/test_run_native_jit_review_rust.py
+      - name: Provision locked crates and build one genuine normal ELF offline
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: >-
+          python3 -I -B scripts/run_native_jit_review_rust.py
+          --mode normal --expected-revision "$EXPECTED_REVISION"
+          --output "$RUNNER_TEMP/normal-proxy-rust"
+      - name: Verify the closed public artifact before upload
+        id: artifact
+        shell: bash
+        run: |
+          python3 -I -B - <<'PY'
+          import importlib.util, json, os, stat, subprocess
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('normal_runner', 'scripts/run_native_jit_review_rust.py')
+          runner = importlib.util.module_from_spec(spec); spec.loader.exec_module(runner)
+          root = Path(os.environ['RUNNER_TEMP']) / 'normal-proxy-rust/artifact'
+          assert {p.name for p in root.iterdir()} == {'normal.json', 'serverware-decision-gate'}
+          receipt = json.loads(runner.read(root / 'normal.json'))
+          tree = subprocess.check_output(['git', 'ls-tree', '-rz', '--full-tree', os.environ['GITHUB_SHA']], timeout=30)
+          identity = runner.normal_input_identity(Path.cwd(), runner.normal_git_files(tree))
+          runner.verify_normal_receipt(receipt, runner.read(root / 'serverware-decision-gate', 512 * 1024**2), identity)
+          assert stat.S_IMODE((root / 'serverware-decision-gate').stat().st_mode) == 0o555
+          assert receipt['sourceRevision'] == os.environ['GITHUB_SHA']
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='ascii') as output:
+              output.write('name=serverware-normal-proxy-' + receipt['buildInputIdentity'] + '\n')
+          PY
+      - name: Upload only the normal executable and public provenance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: |
+            ${{ runner.temp }}/normal-proxy-rust/artifact/serverware-decision-gate
+            ${{ runner.temp }}/normal-proxy-rust/artifact/normal.json
+          if-no-files-found: error
+          retention-days: 30

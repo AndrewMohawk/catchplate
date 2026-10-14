@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""One hosted engineering attempt: public provisioning, then offline Rust controls.
+"""One hosted attempt: engineering controls, or an explicit normal ELF build.
 
-No native admission, real credentials, deployment, normal proxy binary, cache
-restoration, or automatic retry. Source remains the read-only exact checkout.
+The default remains the 58 engineering controls. Normal mode exports only a
+normal ELF and public provenance; neither mode establishes native admission,
+runtime acceptance or deployment. No cache restoration or automatic retry.
 """
 import argparse
 import hashlib
@@ -29,6 +30,14 @@ LOG_LIMIT = 8 * 1024**2
 RESERVE = 2 * 1024**3
 LABEL = 'com.serverware.hosted-native-review'
 CONFIG = '[source.crates-io]\nreplace-with = "vendored-sources"\n[source.vendored-sources]\ndirectory = "/vendor"\n'
+BUILD_ENV = {'CARGO_HOME': '/cargo-home', 'CARGO_TARGET_DIR': '/target', 'CARGO_BUILD_JOBS': '1',
+             'CARGO_NET_RETRY': '0', 'SOURCE_DATE_EPOCH': '0', 'RUSTFLAGS': '-C link-arg=-Wl,--build-id=none'}
+NORMAL_COMMAND = ('cargo', 'build', '--release', '--frozen', '--offline', '--bin',
+                  'serverware-decision-gate', '--message-format=json')
+NORMAL_FILES = ('scripts/discard_headers_parity.v1.json', 'policies/credential-limits.examples.json')
+NORMAL_SCHEMA = 'serverware.hostedNormalRust/v1'
+NORMAL_WORKFLOW = '.github/workflows/native-review-rust.yml'
+NORMAL_RUNNER = 'scripts/run_native_jit_review_rust.py'
 APIS = (
     ('old-pass', 'native_browser_transport_api_tests/pass.rs', None, None),
     ('old-private', 'native_browser_transport_api_tests/private_transport.rs', 'E0603', 1),
@@ -116,6 +125,179 @@ def compiler_inputs(raw):
     return names
 
 
+def normal_configuration():
+    return {'image': IMAGE, 'imageId': IMAGE_ID, 'platform': 'linux/amd64',
+            'command': list(NORMAL_COMMAND), 'workdir': '/repository/' + CRATE,
+            'environment': {**BUILD_ENV, 'CARGO_NET_OFFLINE': 'true'}, 'cargoConfig': CONFIG}
+
+
+def identity_digest(identity):
+    return hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def normal_git_files(raw):
+    result = {}
+    for record in raw.split(b'\0'):
+        if record:
+            header, raw_name = record.split(b'\t', 1)
+            mode, kind, oid = header.decode('ascii').split(); name = raw_name.decode('utf-8')
+            require(kind in ('blob', 'commit') and name not in result
+                    and not name.startswith('/') and posixpath.normpath(name) == name
+                    and '..' not in name.split('/'), 'invalid Git input tree')
+            result[name] = (mode, oid)  # Retain submodules; selected nonregular modes refuse below.
+    return result
+
+
+def normal_input_identity(repository, git_files):
+    """Conservative compiler closure; no app commit, JS or top-level docs key.
+
+    The caller supplies a clean exact Git tree, not a claimed verification flag.
+    Every selected byte is independently joined to that tree here. Newly added
+    crate/schema inputs alter the roster even before a compiler has seen them.
+    """
+    for parent in ('', 'data-plane/', CRATE):
+        forbidden = ('.cargo', 'rust-toolchain', 'rust-toolchain.toml')
+        if parent != CRATE:
+            forbidden += ('Cargo.toml',)
+        for leaf in forbidden:
+            path = repository / (parent + leaf)
+            require(not path.exists() and not path.is_symlink(), 'unreviewed compiler configuration')
+    require(not (repository / CRATE / 'build.rs').exists()
+            and not (repository / CRATE / 'build.rs').is_symlink(), 'first-party build script refused')
+    manifest = tomllib.loads(read(repository / CRATE / 'Cargo.toml', 1024**2).decode())
+    require(not {'build', 'workspace'} & manifest['package'].keys()
+            and not {'workspace', 'build-dependencies'} & manifest.keys()
+            and not any('build-dependencies' in item for item in manifest.get('target', {}).values()),
+            'unreviewed workspace/build dependencies')
+    names = sorted(name for name in git_files if name.startswith((CRATE, 'schemas/')) or name in NORMAL_FILES)
+    require(1 <= len(names) <= 4096 and set(NORMAL_FILES) <= set(names)
+            and {CRATE + 'Cargo.toml', CRATE + 'Cargo.lock', CRATE + 'src/main.rs',
+                 CRATE + 'src/custody_protocol.rs'} <= set(names), 'normal input roster incomplete')
+    rows, total = {}, 0
+    for name in names:
+        mode, oid = git_files[name]
+        require(mode in ('100644', '100755') and re.fullmatch('[0-9a-f]{40}', oid), 'nonregular Git input')
+        path = repository / name
+        require(path.resolve() == path and not path.is_symlink(), 'indirect compiler input')
+        body = read(path, 32 * 1024**2); total += len(body)
+        require(total <= 256 * 1024**2 and hashlib.sha1(b'blob ' + str(len(body)).encode() + b'\0' + body).hexdigest() == oid,
+                'compiler input differs from Git or bound')
+        rows[name] = {'mode': mode, 'gitBlob': oid, 'sha256': hashlib.sha256(body).hexdigest()}
+    version = manifest['package']['version']
+    require(type(version) is str and re.fullmatch(r'[0-9A-Za-z.+-]{1,128}', version), 'package version differs')
+    return {'schema': 'serverware.normalRustBuildInputs/v1', 'configuration': normal_configuration(),
+            'packageVersion': version, 'files': rows}
+
+
+def normal_cargo_rows(raw):
+    rows = [json.loads(line) for line in raw.splitlines()]
+    require([row['success'] for row in rows if row.get('reason') == 'build-finished'] == [True], 'normal build incomplete')
+    selected = {}
+    for kind, name, source in (('binary', 'serverware-decision-gate', 'main.rs'),
+                               ('library', 'serverware_decision_gate', 'custody_protocol.rs')):
+        matches = [row for row in rows if row.get('reason') == 'compiler-artifact'
+                   and row.get('target', {}).get('name') == name]
+        require(len(matches) == 1, 'normal target is missing or ambiguous')
+        row = matches[0]
+        require(row['target']['kind'] == (['bin'] if kind == 'binary' else ['lib'])
+                and row['target']['src_path'] == '/repository/' + CRATE + 'src/' + source
+                and row['profile']['test'] is False and row['profile']['opt_level'] == '3'
+                and row['fresh'] is False and row['features'] == [], 'normal Cargo profile/target differs')
+        selected[kind] = row
+    require(selected['binary']['executable'] == '/target/release/serverware-decision-gate'
+            and selected['binary']['filenames'] == ['/target/release/serverware-decision-gate']
+            and selected['library']['executable'] is None, 'normal executable path differs')
+    return selected
+
+
+def normal_dep_info(raw, targets, version):
+    """Closed rustc Make-style subset for this fixed ASCII, no-build-script crate."""
+    require(raw.endswith(b'\n') and b'\\' not in raw and b'\r' not in raw, 'unsupported dep-info escaping')
+    files, phony, environment, seen = None, set(), {}, set()
+    def source_path(value):
+        require(re.fullmatch(r'[A-Za-z0-9_./+-]+', value), 'unsupported compiler input spelling')
+        absolute = posixpath.normpath(value if value.startswith('/') else '/repository/' + CRATE + value)
+        require(absolute.startswith('/repository/'), 'compiler input escapes checkout')
+        return absolute.removeprefix('/repository/')
+    for line in raw.decode('ascii').splitlines():
+        if not line:
+            continue
+        if line.startswith('# env-dep:'):
+            key, separator, value = line[len('# env-dep:'):].partition('=')
+            require(separator and key == 'CARGO_PKG_VERSION' and value == version and key not in environment,
+                    'unsupported compiler environment dependency')
+            environment[key] = value
+            continue
+        target, separator, dependencies = line.partition(':')
+        require(separator and target not in seen and not line.startswith('#'), 'unrecognized dep-info record')
+        seen.add(target)
+        if dependencies.strip():
+            require(target in targets, 'dep-info target differs')
+            names = {source_path(item) for item in dependencies.split()}
+            require(1 <= len(names) <= 4096 and (files is None or files == names), 'dep-info rules disagree')
+            files = names
+        else:
+            phony.add(source_path(target))
+    require(files is not None and phony <= files, 'dep-info closure incomplete')
+    return files, environment
+
+
+def verify_normal_receipt(receipt, binary_bytes, current_identity):
+    """Pure artifact/current-input joins; GitHub provenance is the consumer's job."""
+    require(type(receipt) is dict and set(receipt) == {'schema', 'ok', 'sourceRevision', 'buildInputIdentity', 'buildInputs',
+        'cargoLockSha256', 'github', 'runnerSourceSha256', 'toolchain', 'binary', 'compilerInputs', 'cleanup',
+        'normalBinary', 'tested', 'deployed', 'nativeAdmission', 'cacheRestored', 'automaticRetry'}, 'normal receipt shape')
+    require(receipt['schema'] == NORMAL_SCHEMA and receipt['ok'] is True and receipt['normalBinary'] is True
+            and all(receipt[key] is False for key in ('tested', 'deployed', 'nativeAdmission', 'cacheRestored', 'automaticRetry')),
+            'normal receipt scope differs')
+    require(type(current_identity) is dict and set(current_identity) == {'schema', 'configuration', 'packageVersion', 'files'}
+            and re.fullmatch('[0-9a-f]{40}', receipt['sourceRevision'])
+            and re.fullmatch('[0-9a-f]{64}', receipt['runnerSourceSha256'])
+            and receipt['buildInputs'] == current_identity
+            and current_identity['schema'] == 'serverware.normalRustBuildInputs/v1'
+            and current_identity['configuration'] == normal_configuration()
+            and receipt['buildInputIdentity'] == identity_digest(current_identity), 'normal build identity differs')
+    files = current_identity['files']
+    require(receipt['cargoLockSha256'] == files[CRATE + 'Cargo.lock']['sha256'], 'normal lock differs')
+    github = receipt['github']
+    require(type(github) is dict and set(github) == {'repository', 'runId', 'runAttempt', 'workflowPath', 'job'}
+            and re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', github['repository'])
+            and all(type(github[key]) is int and 0 < github[key] < 2**63 for key in ('runId', 'runAttempt'))
+            and github['workflowPath'] == NORMAL_WORKFLOW and github['job'] == 'normal-proxy', 'normal GitHub provenance shape')
+    require(type(binary_bytes) is bytes and 64 <= len(binary_bytes) <= 512 * 1024**2
+            and binary_bytes[:7] == b'\x7fELF\x02\x01\x01' and binary_bytes[18:20] == b'\x3e\x00'
+            and binary_bytes[16:18] in (b'\x02\x00', b'\x03\x00'), 'normal ELF format differs')
+    require(receipt['binary'] == {'name': 'serverware-decision-gate', 'sha256': hashlib.sha256(binary_bytes).hexdigest(),
+                                 'bytes': len(binary_bytes), 'mode': '0555'}, 'normal ELF identity differs')
+    toolchain = receipt['toolchain']
+    require(type(toolchain) is dict and set(toolchain) == {'rustcVersionVerbose', 'cargoVersion'}
+            and all(type(value) is str and len(value) <= 4096 for value in toolchain.values())
+            and toolchain['rustcVersionVerbose'].startswith('rustc 1.88.0 ')
+            and '\nhost: x86_64-unknown-linux-gnu\n' in toolchain['rustcVersionVerbose']
+            and toolchain['cargoVersion'].startswith('cargo 1.88.0 '), 'normal toolchain differs')
+    require(type(receipt['compilerInputs']) is dict and set(receipt['compilerInputs']) == {'binary', 'library'},
+            'normal compiler closure missing')
+    for kind, source in (('binary', 'main.rs'), ('library', 'custody_protocol.rs')):
+        item = receipt['compilerInputs'][kind]
+        require(type(item) is dict and set(item) == {'artifactPath', 'artifactSha256', 'depInfoPath', 'depInfoSha256', 'files', 'environment'}
+                and re.fullmatch('[0-9a-f]{64}', item['artifactSha256'])
+                and re.fullmatch('[0-9a-f]{64}', item['depInfoSha256'])
+                and re.fullmatch(r'/target/release/deps/serverware_decision_gate-[0-9a-f]{16}\.d', item['depInfoPath'])
+                and type(item['files']) is dict and CRATE + 'src/' + source in item['files']
+                and all(name in files and row == files[name] for name, row in item['files'].items())
+                and type(item['environment']) is dict and set(item['environment']) <= {'CARGO_PKG_VERSION'}
+                and all(value == current_identity['packageVersion'] for value in item['environment'].values()),
+                'normal compiler input provenance differs')
+        require((item['artifactPath'] == '/target/release/serverware-decision-gate'
+                 and item['artifactSha256'] == receipt['binary']['sha256']) if kind == 'binary' else
+                item['artifactPath'] == item['depInfoPath'].removesuffix('.d').replace('/serverware_', '/libserverware_') + '.rlib',
+                'normal compiler artifact differs')
+    require(type(receipt['cleanup']) is dict and set(receipt['cleanup']) == {'allOwnedContainersRemoved', 'phases'}
+            and receipt['cleanup']['allOwnedContainersRemoved'] is True
+            and receipt['cleanup']['phases'] == ['provision', 'normal'],
+            'normal workers did not reach clean terminal state')
+
+
 class HostedRun:
     def __init__(self, repository, output, revision):
         self.repo, self.root, self.revision = repository, output, revision
@@ -176,9 +358,8 @@ class HostedRun:
             '--mount', f'type=bind,src={self.repo},dst=/repository,readonly',
             '--mount', f'type=bind,src={self.root}/vendor,dst=/vendor' + (',readonly' if offline else ''),
             '--mount', f'type=bind,src={self.root}/target,dst=/target' + (',readonly' if readonly_target else ''),
-            '--mount', f'type=bind,src={self.results},dst=/results', '--workdir', '/repository/' + CRATE,
-            '--env', 'CARGO_HOME=/cargo-home', '--env', 'CARGO_TARGET_DIR=/target', '--env', 'CARGO_BUILD_JOBS=1',
-            '--env', 'CARGO_NET_RETRY=0', '--env', 'SOURCE_DATE_EPOCH=0', '--env', 'RUSTFLAGS=-C link-arg=-Wl,--build-id=none']
+            '--mount', f'type=bind,src={self.results},dst=/results', '--workdir', '/repository/' + CRATE]
+        args += [part for key, value in BUILD_ENV.items() for part in ('--env', key + '=' + value)]
         if offline:
             args += ['--network', 'none', '--env', 'CARGO_NET_OFFLINE=true', '--tmpfs',
                 f'/cargo-home:rw,noexec,nosuid,nodev,size=16m,uid={os.getuid()},gid={os.getgid()}',
@@ -298,19 +479,129 @@ class HostedRun:
         require(not dirty and sha(self.repo / CRATE / 'Cargo.lock') == self.receipt['cargoLockSha256'], 'checkout changed')
         self.receipt.update({'ok': True, 'passed': {'library': 29, 'binary': 24, 'api': 5}, 'skipped': 0})
 
+    def run_normal(self):
+        """One normal build, never an alias for a test artifact or cached target."""
+        self.receipt['scope'] = 'normal release ELF build; no runtime acceptance'
+        _, head = self.command('revision', ['git', '-C', str(self.repo), 'rev-parse', 'HEAD'], 15)
+        require(head.decode().strip() == self.revision, 'checkout revision differs')
+        _, dirty = self.command('source-before', ['git', '-C', str(self.repo), 'status', '--porcelain=v1', '--untracked-files=all'], 30)
+        require(not dirty, 'checkout must be clean')
+        _, tree = self.command('git-inputs', ['git', '-C', str(self.repo), 'ls-tree', '-rz', '--full-tree', self.revision], 30)
+        git_files = normal_git_files(tree)
+        identity = normal_input_identity(self.repo, git_files)
+        manifest = tomllib.loads(read(self.repo / CRATE / 'Cargo.toml', 1024**2).decode())
+        lock = read(self.repo / CRATE / 'Cargo.lock'); packages = tomllib.loads(lock.decode())['package']
+        require(all((item.get('source') == 'registry+https://github.com/rust-lang/crates.io-index'
+                     and re.fullmatch('[0-9a-f]{64}', item.get('checksum', '')))
+                    or ('source' not in item and item['name'] == 'serverware-decision-gate') for item in packages),
+                'nonpublic/unpinned dependency')
+        repository = os.environ.get('GITHUB_REPOSITORY', '')
+        require(os.environ.get('GITHUB_SHA') == self.revision and os.environ.get('GITHUB_JOB') == 'normal-proxy'
+                and os.environ.get('GITHUB_WORKFLOW_REF', '').startswith(repository + '/' + NORMAL_WORKFLOW + '@refs/')
+                and re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository)
+                and all(re.fullmatch('[1-9][0-9]{0,18}', os.environ.get(key, ''))
+                        for key in ('GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT')), 'normal hosted provenance unavailable')
+        self.command('pull', ['docker', 'pull', '--platform', 'linux/amd64', IMAGE], 180)
+        _, image = self.command('image', ['docker', 'image', 'inspect', '--format', '{{.Id}}', IMAGE], 15)
+        require(image.decode().strip() == IMAGE_ID, 'Rust image identity differs')
+        self.container('provision', ['cargo', 'vendor', '--locked', '--versioned-dirs', '/vendor'], 300, offline=False)
+        space = os.statvfs(self.root)
+        require(space.f_bavail * space.f_frsize >= 8 * 1024**3, 'need 8 GiB free after provisioning')
+        self.container('normal', ['/bin/sh', '-c', 'set -eu\n'
+            'rustc --version --verbose > /results/normal-rustc.txt\n'
+            'cargo --version > /results/normal-cargo.txt\nexec ' + shlex.join(NORMAL_COMMAND)], 900)
+        rows = normal_cargo_rows(read(self.results / 'normal.stdout.log'))
+        binary_path = self.root / 'target/release/serverware-decision-gate'
+        binary_bytes = read(binary_path, 512 * 1024**2)
+        require(binary_path.stat().st_mode & 0o111, 'normal ELF is not executable')
+        # Cargo's root .d can omit rustc env-dep records. Join the actual compiler
+        # unit through its ELF hardlink/identical bytes, then parse its complete .d.
+        units = [path for path in (self.root / 'target/release/deps').glob('serverware_decision_gate-*')
+                 if re.fullmatch(r'serverware_decision_gate-[0-9a-f]{16}', path.name)]
+        require(1 <= len(units) <= 4, 'normal compiler unit count differs')
+        aliases = [path for path in units if not path.is_symlink()
+                   and (path.samefile(binary_path) or read(path, 512 * 1024**2) == binary_bytes)]
+        require(len(aliases) == 1, 'normal compiler-unit ELF join missing')
+        library = [path for path in rows['library']['filenames']
+                   if re.fullmatch(r'/target/release/(?:libserverware_decision_gate|deps/libserverware_decision_gate-[0-9a-f]{16})\.rlib', path)]
+        require(len(library) == 1, 'linked library artifact missing')
+        library_path = self.root / library[0].removeprefix('/')
+        library_bytes = read(library_path, 512 * 1024**2)
+        library_units = [path for path in (self.root / 'target/release/deps').glob('libserverware_decision_gate-*.rlib')
+                         if re.fullmatch(r'libserverware_decision_gate-[0-9a-f]{16}\.rlib', path.name)]
+        require(1 <= len(library_units) <= 4, 'linked library compiler unit count differs')
+        library_aliases = [path for path in library_units if not path.is_symlink()
+                           and (path.samefile(library_path) or read(path, 512 * 1024**2) == library_bytes)]
+        require(len(library_aliases) == 1, 'linked library compiler-unit join missing')
+        units = {'binary': '/' + aliases[0].relative_to(self.root).as_posix(),
+                 'library': '/' + library_aliases[0].relative_to(self.root).as_posix()}
+        compiler = {}
+        for kind, artifact_path in units.items():
+            stem = artifact_path if kind == 'binary' else artifact_path.removesuffix('.rlib').replace('/libserverware_', '/serverware_')
+            dep_path = stem + '.d'
+            targets = {dep_path, artifact_path}
+            if kind == 'library':
+                targets.add(artifact_path.removesuffix('.rlib') + '.rmeta')
+            raw = read(self.root / dep_path.removeprefix('/'))
+            names, environment = normal_dep_info(raw, targets, manifest['package']['version'])
+            require(names <= identity['files'].keys(), 'compiler consumed an undeclared input')
+            artifact_bytes = binary_bytes if kind == 'binary' else read(self.root / artifact_path.removeprefix('/'), 512 * 1024**2)
+            require(kind == 'binary' or artifact_bytes.startswith(b'!<arch>\n'), 'linked library is not an rlib archive')
+            compiler[kind] = {'artifactPath': rows['binary']['executable'] if kind == 'binary' else artifact_path,
+                'artifactSha256': hashlib.sha256(artifact_bytes).hexdigest(),
+                'depInfoPath': dep_path, 'depInfoSha256': hashlib.sha256(raw).hexdigest(),
+                'files': {name: identity['files'][name] for name in sorted(names)}, 'environment': environment}
+        require(not self.receipt.get('pendingChildren') and len(self.receipt['containers']) == 2
+                and [row['phase'] for row in self.receipt['containers']] == ['provision', 'normal']
+                and all(row['removed'] is True and row['cleanupUncertain'] is False and row['exitCode'] == 0
+                        and row['oomKilled'] is False and row['runningBeforeCleanup'] is False
+                        for row in self.receipt['containers']), 'normal cleanup incomplete')
+        for row in self.receipt['containers']:
+            _, remaining = self.command(row['phase'] + '-remaining', ['docker', 'ps', '-aq', '--no-trunc', '--filter',
+                'label=' + LABEL + '=' + row['token']], 15, watch_disk=False)
+            require(not remaining.strip(), 'normal owned container remains')
+        _, dirty = self.command('source-after', ['git', '-C', str(self.repo), 'status', '--porcelain=v1', '--untracked-files=all'], 30)
+        require(not dirty and normal_input_identity(self.repo, git_files) == identity
+                and read(self.root / 'cargo-config.toml') == CONFIG.encode(), 'normal source/config changed')
+        receipt = {'schema': NORMAL_SCHEMA, 'ok': True, 'sourceRevision': self.revision,
+            'buildInputIdentity': identity_digest(identity), 'buildInputs': identity,
+            'cargoLockSha256': hashlib.sha256(lock).hexdigest(),
+            'github': {'repository': repository, 'runId': int(os.environ['GITHUB_RUN_ID']),
+                'runAttempt': int(os.environ['GITHUB_RUN_ATTEMPT']), 'workflowPath': NORMAL_WORKFLOW, 'job': 'normal-proxy'},
+            'runnerSourceSha256': sha(self.repo / NORMAL_RUNNER),
+            'toolchain': {'rustcVersionVerbose': read(self.results / 'normal-rustc.txt', 4096).decode('ascii'),
+                          'cargoVersion': read(self.results / 'normal-cargo.txt', 4096).decode('ascii')},
+            'binary': {'name': 'serverware-decision-gate', 'sha256': hashlib.sha256(binary_bytes).hexdigest(),
+                       'bytes': len(binary_bytes), 'mode': '0555'}, 'compilerInputs': compiler,
+            'cleanup': {'allOwnedContainersRemoved': True, 'phases': ['provision', 'normal']},
+            'normalBinary': True, 'tested': False, 'deployed': False, 'nativeAdmission': False,
+            'cacheRestored': False, 'automaticRetry': False}
+        verify_normal_receipt(receipt, binary_bytes, identity)
+        export = self.root / 'artifact'; export.mkdir(mode=0o700)
+        with (export / 'serverware-decision-gate').open('xb') as stream:
+            stream.write(binary_bytes); stream.flush(); os.fsync(stream.fileno()); os.fchmod(stream.fileno(), 0o555)
+        save(export / 'normal.json', receipt)
+        self.receipt.update({'ok': True, 'normalProxyBinaryBuilt': True,
+                             'buildInputIdentity': receipt['buildInputIdentity'], 'publicArtifact': 'artifact'})
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--expected-revision', required=True)
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--mode', choices=('engineering', 'normal'), default='engineering')
     args = parser.parse_args()
     require(os.environ.get('GITHUB_ACTIONS') == 'true' and re.fullmatch('[0-9a-f]{40}', args.expected_revision), 'hosted exact revision required')
     root = args.output
     require(root.is_absolute() and root.parent.resolve() == Path(os.environ['RUNNER_TEMP']).resolve()
-            and root.name == 'native-jit-review-rust' and not root.exists(), 'fresh job-local output required')
+            and root.name == ('native-jit-review-rust' if args.mode == 'engineering' else 'normal-proxy-rust')
+            and not root.exists(), 'fresh job-local output required')
     root.mkdir(mode=0o700); run = HostedRun(Path(__file__).resolve().parents[1], root, args.expected_revision)
     try:
-        run.run()
+        if args.mode == 'normal':
+            run.run_normal()
+        else:
+            run.run()
     except BaseException as error:
         run.receipt.update({'ok': False, 'errorType': type(error).__name__, 'error': str(error)[:512]})
         raise

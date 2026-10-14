@@ -64,23 +64,23 @@ FIELDS = INHERITED_FIELDS | {"attempt_id", "flow_id", "operation_context", "shar
     "policy_aware_profile", "expected_approver_policy_sha256"}
 CANARIES = ("private-release-url-721", "private-release-document-853", "private-release-display-964")
 # Independent fixed vectors, not values obtained from the derivation under test.
-# Current operation_contract_document() source revision 350: authority_contract.py SHA-256
-# e5da318d418aa7c928e76c30b51ba37e88a8e7342a8e78246c8e7e0953462aa4;
+# Current operation_contract_document() source revision 351: authority_contract.py SHA-256
+# 68e5ed3dab2b52ca7ed696ea73fe0e8d0cbcda20741690c25759c9bb740fcd6b;
 # native retention contract c5ea365c4e7b84f519099b17876ea86b3d36eda897911dc795575bc6ec38ca38.
 # The literal identities were independently reframed; original argument and
 # approver-policy digests remain unchanged. Historical migration pins are not
 # the current contract and must not be rewritten to make this fixture pass.
-NATIVE_MANIFEST = "sha256:ed6d471a03516c96aa4968b89e4d220f9d5aaa0dfc4c1f848acfcc58343de4f0"
+NATIVE_MANIFEST = "sha256:bb0f9a53066e10042f83a1576d2c44b1dcf497eee457bb8d3146d86f4d526256"
 NATIVE_POLICY_DIGEST = "sha256:ca91d87c21f8706949a6b06c3d7c3dcdd6120dac6b2f5caa788e25b9155fc454"
 NATIVE_PARENT_ORIGINAL = "sha256:befb9c29e1e9d770ed834444468a9d785723b0db9aee84bca19ff831422a67ff"
 NATIVE_CHILD_ORIGINAL = "sha256:cdbdeb4e8c8ef15eea1e394d500bdbf211357fb3271f53bb9bc4cd887f9a92b3"
 NATIVE_IDENTITIES = {
     "release.reserve": (
-        "sha256:9376cb3f80adc06fe9a92d23852c2f1ce50694abb5bb148119e9f04ac831abe4",
-        "sha256:900d4f76742ac0450304828f7611b4db960f97ade0baa470b0d4874a4bb47550"),
+        "sha256:c3929748e4bab5b7c01bf1ea7e44f2ae64ae1703fc29aae7d1b1aec7455b7e8b",
+        "sha256:9cef7a706cf26851a949f4cb20344e483df99f7ef05addfa50d8064af88a71a0"),
     "jit.request": (
-        "sha256:028341bf1e3b12ae63d78ac4c07b769ffe388fe18dc3467c31f68a7802407804",
-        "sha256:05a067fd6201b0c0a00f5882f26e74269bb877a3c2d1fe24cbff333e67e9eadf"),
+        "sha256:0f93c4c5a52875808284d48b5e0a961c009edb5ed4fc5bcd9775fa6c1d46a035",
+        "sha256:e3ca5ca01bdb38a277912db1b11ea21b88c78357c6776dd6be37ed5cb9850b71"),
 }
 
 

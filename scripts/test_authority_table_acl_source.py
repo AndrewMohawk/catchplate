@@ -92,6 +92,7 @@ ADDITIONAL = tuple(sorted((
     "policy_authority_sealed_values",
     "policy_authority_secondary_index_heads",
     "policy_authority_successor_execution_custody",
+    "policy_authority_successor_execution_frames",
     "policy_authority_tombstones",
     "policy_authority_work_pages",
     "policy_canary_delivery_heads",
@@ -195,25 +196,26 @@ def keyword(call, name):
 
 
 def v9_schema_literal(tree):
-    """Read the one literal behind two exact source-owned substitutions.
+    """Read the one literal behind three exact source-owned substitutions.
 
     Neither the function nor its replacements are executed. These ACL checks
-    inspect table slices without the two unrelated bound substitutions.
+    inspect table slices without the three unrelated bound substitutions.
     """
     function = named_function(tree, "authority_v9_schema_source")
     if len(function.body) != 1 or not isinstance(function.body[0], ast.Return):
         raise AssertionError("v9 schema source is not one return")
     value = function.body[0].value
     substitutions = (
-        ("__MAX_PLAN_WORK_UNITS__", "MAX_PLAN_WORK_UNITS"),
-        ("__MAX_PLAN_SELECTED_BYTES__", "MAX_PLAN_SELECTED_BYTES"),
+        ("__SUCCESSOR_MAX_FRAME_ORDINAL__",
+            "str(authority_contract.SUCCESSOR_EXECUTION_FRAME_CONTRACT['maximumFrames'] - 1)"),
+        ("__MAX_PLAN_WORK_UNITS__", "str(authority_contract.MAX_PLAN_WORK_UNITS)"),
+        ("__MAX_PLAN_SELECTED_BYTES__", "str(authority_contract.MAX_PLAN_SELECTED_BYTES)"),
     )
-    for token, attribute in substitutions:
+    for token, expression in substitutions:
         if (not isinstance(value, ast.Call) or not isinstance(value.func, ast.Attribute)
                 or value.func.attr != "replace" or value.keywords or len(value.args) != 2
                 or not isinstance(value.args[0], ast.Constant) or value.args[0].value != token
-                or ast.dump(value.args[1]) != ast.dump(ast.parse(
-                    "str(authority_contract." + attribute + ")", mode="eval").body)):
+                or ast.dump(value.args[1]) != ast.dump(ast.parse(expression, mode="eval").body)):
             raise AssertionError("v9 schema source substitution is not exact")
         value = value.func.value
     if not isinstance(value, ast.Constant) or type(value.value) is not str:
@@ -253,8 +255,8 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         self.assertIs(type(authority_contract.V9_ADDITIONAL_PROTECTED_TABLES), tuple)
         self.assertEqual(authority_contract.PHASE2_STORE_TABLES, PHASE2)
         self.assertEqual(authority_contract.V9_ADDITIONAL_PROTECTED_TABLES, ADDITIONAL)
-        self.assertEqual(len(ADDITIONAL), 69)
-        self.assertEqual(len(set(ADDITIONAL)), 69)
+        self.assertEqual(len(ADDITIONAL), 70)
+        self.assertEqual(len(set(ADDITIONAL)), 70)
         self.assertEqual(len(LEGACY_ADDITIONAL), 12)
         self.assertEqual(len(set(LEGACY_ADDITIONAL)), 12)
         self.assertEqual(set(LEGACY_ADDITIONAL) - set(PHASE2), {
@@ -417,7 +419,8 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         inaccessible = "_POLICY_AUTHORITY_RUNTIME_INACCESSIBLE_TABLES"
         self.assert_shape(named_assignment(self.db_tree, inaccessible).value,
             "frozenset({authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE, "
-            "authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE})")
+            "authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE, "
+            "authority_contract.SUCCESSOR_EXECUTION_FRAME_TABLE})")
         revoke = [node for node in ast.walk(self.seal) if isinstance(node, ast.IfExp)
             and isinstance(node.body, ast.Constant) and node.body.value == "REVOKE ALL ON "]
         self.assertEqual(len(revoke), 1)
@@ -1336,7 +1339,8 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             "set(authority_contract.POSTGRES_COUNTED_STORE_TABLES)")
         self.assert_shape(union.right,
             "{authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE, "
-            "authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE, authority_contract.JIT_ORIGINAL_PAGE_TABLE}")
+            "authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE, "
+            "authority_contract.SUCCESSOR_EXECUTION_FRAME_TABLE, authority_contract.JIT_ORIGINAL_PAGE_TABLE}")
 
     def test_counted_eleven_function_signatures_and_security_match_actual_sql_declarations(self):
         # Preserve the historical test ID; the independently closed current

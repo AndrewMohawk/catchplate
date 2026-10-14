@@ -514,32 +514,40 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         self.assertLess(self.complete.index(START), self.complete.index(END))
 
     def test_v9_source_has_only_two_named_source_owned_substitutions(self):
+        # Preserve this test ID; the closed source now has a third bounded
+        # substitution for the successor frame ordinal.
         _, tree = read_source("serverware/authority_store/v9_schema_source.py")
         body = function(tree, "authority_v9_schema_source").body
         self.assertEqual(len(body), 1)
         self.assertIsInstance(body[0], ast.Return)
         value = body[0].value
-        for token, attribute in (
-            ("__MAX_PLAN_WORK_UNITS__", "MAX_PLAN_WORK_UNITS"),
-            ("__MAX_PLAN_SELECTED_BYTES__", "MAX_PLAN_SELECTED_BYTES"),
-        ):
+        substitutions = (
+            ("__SUCCESSOR_MAX_FRAME_ORDINAL__",
+                "str(authority_contract.SUCCESSOR_EXECUTION_FRAME_CONTRACT['maximumFrames'] - 1)"),
+            ("__MAX_PLAN_WORK_UNITS__", "str(authority_contract.MAX_PLAN_WORK_UNITS)"),
+            ("__MAX_PLAN_SELECTED_BYTES__", "str(authority_contract.MAX_PLAN_SELECTED_BYTES)"),
+        )
+        for token, expression in substitutions:
             self.assertIsInstance(value, ast.Call)
             self.assertIsInstance(value.func, ast.Attribute)
             self.assertEqual(value.func.attr, "replace")
             self.assertEqual(value.keywords, [])
             self.assertEqual(len(value.args), 2)
             self.assert_shape(value.args[0], repr(token))
-            self.assert_shape(value.args[1], "str(authority_contract." + attribute + ")")
+            self.assert_shape(value.args[1], expression)
             value = value.func.value
         self.assertIsInstance(value, ast.Constant)
         self.assertIs(type(value.value), str)
-        for token in ("__MAX_PLAN_WORK_UNITS__", "__MAX_PLAN_SELECTED_BYTES__"):
+        for token, _ in substitutions:
             self.assertEqual(value.value.count(token), 1)
             self.assertNotIn(token, self.extension)
         self.assertIn("CHECK (work_units BETWEEN 1 AND "
                       + str(authority_contract.MAX_PLAN_WORK_UNITS) + ")", self.extension)
         self.assertIn("BETWEEN 2 AND " + str(authority_contract.MAX_PLAN_SELECTED_BYTES),
                       self.extension)
+        self.assertIn("CHECK (frame_ordinal BETWEEN 0 AND "
+                      + str(authority_contract.SUCCESSOR_EXECUTION_FRAME_CONTRACT["maximumFrames"] - 1)
+                      + ")", self.extension)
 
     def test_current_and_legacy_variants_require_the_exact_explicit_selection(self):
         _, legacy = completed_v9_schema_programs(self.complete)

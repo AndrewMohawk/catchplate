@@ -21,6 +21,8 @@ DIGEST = "sha256:" + "a" * 64
 SESSION = "12345678-1234-4234-8234-123456789abc"
 TOKEN = b"Synthetic_public_test_token_".ljust(64, b"A")
 RESPONSE = ('{ "authorization":1 }', '{"parent":2}', '{"child":3}', '{"pair":4}', '{"evidence":5}')
+PREPARATION = '{ "preparation":1 }'
+ACK = '{ "synthetic opaque ACK":1 }'
 
 
 def bound():
@@ -63,6 +65,12 @@ class NativeReviewTransportTests(unittest.TestCase):
             challenge_original='{ "challenge":1 }', session_id=SESSION, session_token_original=TOKEN,
             deadline_ns=bound(), expected_peer_uid=os.getuid(), expected_peer_gid=os.getgid()) | changes))
 
+    def exchange_receipt(self, path, **changes):
+        return transport.exchange_receipt(path, **(dict(configuration_digest=DIGEST, deadline_epoch_ns=123456789,
+            challenge_original='{ "challenge":1 }', session_id=SESSION, session_token_original=TOKEN,
+            authorization_original=RESPONSE[0], preparation_original=PREPARATION,
+            deadline_ns=bound(), expected_peer_uid=os.getuid(), expected_peer_gid=os.getgid()) | changes))
+
     def test_actual_unix_roundtrip_preserves_originals_and_inherited_deadline(self):
         deadline = bound()
         observed_bounds = []
@@ -86,13 +94,12 @@ class NativeReviewTransportTests(unittest.TestCase):
         self.assertEqual(transport._TOKEN_CHARACTERS, reads._TOKEN_CHARACTERS)
 
     def test_wrong_peer_transmits_nothing_and_does_not_retry(self):
-        def client(path):
-            with self.assertRaises(transport.AuthorityTransportError):
-                transport.exchange(path, configuration_digest=DIGEST, deadline_epoch_ns=123456789,
-                    challenge_original="{}", session_id=SESSION, session_token_original=TOKEN,
-                    deadline_ns=bound(), expected_peer_uid=os.getuid() + 1, expected_peer_gid=os.getgid())
-        _, observed = self.serve(lambda connection: connection.recv(1), client)
-        self.assertEqual(observed, [b""])
+        for exchange in (self.exchange, self.exchange_receipt):
+            def client(path):
+                with self.assertRaises(transport.AuthorityTransportError):
+                    exchange(path, expected_peer_uid=os.getuid() + 1)
+            _, observed = self.serve(lambda connection: connection.recv(1), client)
+            self.assertEqual(observed, [b""])
 
     def test_request_lengths_are_rejected_before_body_reads_and_exact_eof_is_required(self):
         for sizes in ((0, 36, 64), (transport.wire.MAX_NATIVE_ORIGINAL + 1, 36, 64),
@@ -149,6 +156,80 @@ class NativeReviewTransportTests(unittest.TestCase):
                 with self.assertRaises(transport.AuthorityTransportError):
                     transport.exchange("/never-connected.sock", **(values | changes))
                 create.assert_not_called()
+
+    def test_receipt_roundtrip_has_distinct_purpose_and_one_inherited_deadline(self):
+        deadline, observed_bounds = bound(), []
+        call = transport.io._call_until
+        def record(connection, selected, operation):
+            observed_bounds.append(selected)
+            return call(connection, selected, operation)
+        def handler(connection):
+            prefix = transport.io._recv_prefix(connection, deadline_ns=deadline)
+            request = transport.recv_receipt_request(connection, prefix=prefix, deadline_ns=deadline)
+            transport.send_receipt_response(connection, ACK, deadline_ns=deadline)
+            return request
+        with patch.object(transport.io, "_call_until", side_effect=record):
+            result, observed = self.serve(handler, lambda path: self.exchange_receipt(path, deadline_ns=deadline))
+        self.assertEqual(result, ACK)
+        self.assertEqual(observed, [(DIGEST, 123456789, '{ "challenge":1 }', SESSION, TOKEN, RESPONSE[0], PREPARATION)])
+        self.assertEqual(set(observed_bounds), {deadline})
+        self.assertEqual(transport.REQUEST_MAGICS, (transport.REQUEST_MAGIC, transport.RECEIPT_REQUEST_MAGIC))
+        self.assertEqual(len({transport.REQUEST_MAGIC, transport.RESPONSE_MAGIC,
+            transport.RECEIPT_REQUEST_MAGIC, transport.RECEIPT_RESPONSE_MAGIC}), 4)
+        for receive, wrong in ((transport.recv_request, transport.RECEIPT_REQUEST_MAGIC),
+                (transport.recv_receipt_request, transport.REQUEST_MAGIC)):
+            with self.assertRaises(transport.AuthorityTransportError):
+                receive(None, prefix=wrong, deadline_ns=deadline)
+
+    def test_receipt_lengths_original_grammar_and_eof_remain_closed(self):
+        for index, size in ((0, transport.wire.MAX_NATIVE_ORIGINAL + 1), (1, 35), (2, 63),
+                (3, 1), (3, transport.wire.MAX_AUTHORITY_ORIGINAL + 1),
+                (4, 1), (4, transport.wire.MAX_AUTHORITY_ORIGINAL + 1)):
+            sizes = [2, 36, 64, 2, 2]
+            sizes[index] = size
+            left, right = socket.socketpair()
+            try:
+                right.sendall(header(sizes))
+                with patch.object(transport.io, "_recv_exact_until", wraps=transport.io._recv_exact_until) as receive:
+                    with self.assertRaises(transport.AuthorityTransportError):
+                        transport.recv_receipt_request(left, prefix=transport.RECEIPT_REQUEST_MAGIC, deadline_ns=bound())
+                self.assertEqual([item.args[1] for item in receive.call_args_list], [71, 8, 40])
+            finally:
+                left.close()
+                right.close()
+        left, right = socket.socketpair()
+        try:
+            right.sendall(header((2, 36, 64, 2, 2)) + b"{}" + SESSION.encode() + TOKEN + b"{}{}extra")
+            right.shutdown(socket.SHUT_WR)
+            with self.assertRaises(transport.AuthorityTransportError):
+                transport.recv_receipt_request(left, prefix=transport.RECEIPT_REQUEST_MAGIC, deadline_ns=bound())
+        finally:
+            left.close()
+            right.close()
+        for name in ("authorization_original", "preparation_original"):
+            for value in (b"{}", "éé", "x" * (transport.wire.MAX_AUTHORITY_ORIGINAL + 1)):
+                with patch.object(transport.socket, "socket") as create:
+                    with self.assertRaises(transport.AuthorityTransportError):
+                        self.exchange_receipt("/never-connected.sock", **{name: value})
+                    create.assert_not_called()
+
+    def test_receipt_ack_bounds_ascii_eof_and_cross_purpose_refusal(self):
+        for encoded in (transport.RECEIPT_RESPONSE_MAGIC + (transport.wire.MAX_AUTHORITY_ORIGINAL + 1).to_bytes(8, "big"),
+                transport.RECEIPT_RESPONSE_MAGIC + (2).to_bytes(8, "big") + b"\xffx",
+                transport.RECEIPT_RESPONSE_MAGIC + (2).to_bytes(8, "big") + b"{}extra",
+                transport.RESPONSE_MAGIC):
+            def handler(connection):
+                deadline = bound()
+                transport.recv_receipt_request(connection,
+                    prefix=transport.io._recv_prefix(connection, deadline_ns=deadline), deadline_ns=deadline)
+                connection.sendall(encoded)
+            def client(path):
+                with self.assertRaises(transport.AuthorityTransportError):
+                    self.exchange_receipt(path)
+            self.serve(handler, client)
+        for value in ((ACK,), "éé", "x" * (transport.wire.MAX_AUTHORITY_ORIGINAL + 1)):
+            with self.assertRaises(transport.AuthorityTransportError):
+                transport.send_receipt_response(None, value, deadline_ns=bound())
 
 
 if __name__ == "__main__":

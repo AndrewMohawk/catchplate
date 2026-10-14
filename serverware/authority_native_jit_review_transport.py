@@ -1,4 +1,4 @@
-"""Authorize-only Unix framing; transport is not cold or request admission.
+"""Separate authorize/receipt framing; transport is not cold or request admission.
 
 The serving owner must authenticate its peer before receiving the prefix or
 token. The client checks the configured Unix peer before transmitting any
@@ -20,11 +20,16 @@ from serverware import authority_revocation_writer_transport as io
 AuthorityTransportError = io.AuthorityTransportError
 REQUEST_MAGIC = b"SWJOAQ01"
 RESPONSE_MAGIC = b"SWJOAR01"
+RECEIPT_REQUEST_MAGIC = b"SWJORQ01"
+RECEIPT_RESPONSE_MAGIC = b"SWJORR01"
+REQUEST_MAGICS = (REQUEST_MAGIC, RECEIPT_REQUEST_MAGIC)
 _REQUEST_LIMITS = ((2, wire.MAX_NATIVE_ORIGINAL), (36, 36), (64, 64))
 _RESPONSE_LIMITS = tuple((2, maximum) for maximum in
     (wire.MAX_AUTHORITY_ORIGINAL, 512 * 1024, 512 * 1024, 1024 * 1024, 128 * 1024))
+_RECEIPT_REQUEST_LIMITS = _REQUEST_LIMITS + ((2, wire.MAX_AUTHORITY_ORIGINAL),) * 2
+_RECEIPT_RESPONSE_LIMITS = ((2, wire.MAX_AUTHORITY_ORIGINAL),)
 _TOKEN_CHARACTERS = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
-_ERROR = "native review authorize transport refused"
+_ERROR = "native review transport refused"
 
 
 def _require(value):
@@ -66,6 +71,13 @@ def _request(challenge_original, session_id, session_token_original):
 def _response(originals):
     _require(type(originals) is tuple and len(originals) == 5)
     return tuple(_ascii(value, *limit) for value, limit in zip(originals, _RESPONSE_LIMITS))
+
+
+def _receipt_request(challenge_original, session_id, session_token_original,
+        authorization_original, preparation_original):
+    return (*_request(challenge_original, session_id, session_token_original),
+        _ascii(authorization_original, 2, wire.MAX_AUTHORITY_ORIGINAL),
+        _ascii(preparation_original, 2, wire.MAX_AUTHORITY_ORIGINAL))
 
 
 def _lengths(sizes, limits):
@@ -111,9 +123,50 @@ def send_response(connection, originals, *, deadline_ns):
     io._check_deadline(deadline_ns)
 
 
+def recv_receipt_request(connection, *, deadline_ns, prefix):
+    _require(type(prefix) is bytes and prefix == RECEIPT_REQUEST_MAGIC)
+    digest = _text(io._recv_exact_until(connection, 71, deadline_ns=deadline_ns))
+    _digest(digest)
+    epoch = _epoch(int.from_bytes(io._recv_exact_until(connection, 8, deadline_ns=deadline_ns), "big"))
+    challenge, session, token, authorization, preparation = _receive_parts(
+        connection, _RECEIPT_REQUEST_LIMITS, deadline_ns)
+    challenge_text, session_text = _text(challenge), _text(session)
+    authorization_text, preparation_text = _text(authorization), _text(preparation)
+    _receipt_request(challenge_text, session_text, token, authorization_text, preparation_text)
+    io._check_deadline(deadline_ns)
+    return digest, epoch, challenge_text, session_text, token, authorization_text, preparation_text
+
+
+def send_receipt_response(connection, acknowledgment_original, *, deadline_ns):
+    raw = _ascii(acknowledgment_original, 2, wire.MAX_AUTHORITY_ORIGINAL)
+    io._send_exact_until(connection, RECEIPT_RESPONSE_MAGIC + len(raw).to_bytes(8, "big"), deadline_ns=deadline_ns)
+    io._send_exact_until(connection, raw, deadline_ns=deadline_ns)
+    io._check_deadline(deadline_ns)
+
+
 def exchange(path, *, configuration_digest, deadline_epoch_ns, challenge_original,
         session_id, session_token_original, deadline_ns, expected_peer_uid, expected_peer_gid):
     raw = _request(challenge_original, session_id, session_token_original)
+    return _exchange(path, configuration_digest=configuration_digest, deadline_epoch_ns=deadline_epoch_ns,
+        raw=raw, deadline_ns=deadline_ns, expected_peer_uid=expected_peer_uid,
+        expected_peer_gid=expected_peer_gid, receipt=False)
+
+
+def exchange_receipt(path, *, configuration_digest, deadline_epoch_ns, challenge_original,
+        session_id, session_token_original, authorization_original, preparation_original,
+        deadline_ns, expected_peer_uid, expected_peer_gid):
+    raw = _receipt_request(challenge_original, session_id, session_token_original,
+        authorization_original, preparation_original)
+    return _exchange(path, configuration_digest=configuration_digest, deadline_epoch_ns=deadline_epoch_ns,
+        raw=raw, deadline_ns=deadline_ns, expected_peer_uid=expected_peer_uid,
+        expected_peer_gid=expected_peer_gid, receipt=True)[0]
+
+
+def _exchange(path, *, configuration_digest, deadline_epoch_ns, raw, deadline_ns,
+        expected_peer_uid, expected_peer_gid, receipt):
+    _require(type(receipt) is bool)
+    request_magic, response_magic, limits = ((RECEIPT_REQUEST_MAGIC, RECEIPT_RESPONSE_MAGIC, _RECEIPT_RESPONSE_LIMITS)
+        if receipt else (REQUEST_MAGIC, RESPONSE_MAGIC, _RESPONSE_LIMITS))
     digest, epoch = _digest(configuration_digest), _epoch(deadline_epoch_ns)
     _require(type(path) is str and 1 <= len(path) <= 107 and path.startswith("/") and "\x00" not in path)
     try:
@@ -121,7 +174,7 @@ def exchange(path, *, configuration_digest, deadline_epoch_ns, challenge_origina
     except UnicodeError:
         raise AuthorityTransportError(_ERROR) from None
     _require(all(type(value) is int and 0 <= value < 2**32 for value in (expected_peer_uid, expected_peer_gid)))
-    header = REQUEST_MAGIC + digest + epoch.to_bytes(8, "big") + b"".join(len(value).to_bytes(8, "big") for value in raw)
+    header = request_magic + digest + epoch.to_bytes(8, "big") + b"".join(len(value).to_bytes(8, "big") for value in raw)
     io._check_deadline(deadline_ns)
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
@@ -133,9 +186,10 @@ def exchange(path, *, configuration_digest, deadline_epoch_ns, challenge_origina
         for value in raw:
             io._send_exact_until(connection, value, deadline_ns=deadline_ns)
         io._call_until(connection, deadline_ns, lambda: connection.shutdown(socket.SHUT_WR))
-        _require(io._recv_prefix(connection, deadline_ns=deadline_ns) == RESPONSE_MAGIC)
-        returned = tuple(_text(value) for value in _receive_parts(connection, _RESPONSE_LIMITS, deadline_ns))
-        _response(returned)
+        _require(io._recv_prefix(connection, deadline_ns=deadline_ns) == response_magic)
+        returned = tuple(_text(value) for value in _receive_parts(connection, limits, deadline_ns))
+        if not receipt:
+            _response(returned)
         io._check_deadline(deadline_ns)
     except BaseException:
         try:

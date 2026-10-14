@@ -1,7 +1,12 @@
 # Managed workload renewal — implementation contract
 
-This feature is being implemented, not deployed or accepted. Existing clients
-remain manual-only. It does not confer native or hardware-backed authority.
+This feature is deployed in the ordinary instance at `b5cc5f6f` / normal Rust
+`116dc526`. Existing clients remain manual-only unless explicitly enrolled.
+Isolated stock-Requests/normal-proxy checks and deployed read-only UI checks have
+passed; the helper's default HTTPS transport with its locked dependencies and a
+real enrolled workload job remain separate acceptance work. See the
+[current checkpoint](project-completion.md#current-checkpoint--october-13-workload-renewal-rollout).
+This feature does not confer native or hardware-backed authority.
 
 An administrator explicitly enrolls one workload Ed25519 public key with a
 finite 1–90 day grant and a 1–24 hour token lifetime. The workload retains its

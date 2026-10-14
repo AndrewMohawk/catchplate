@@ -90,6 +90,7 @@ depends on the deployment's advertised capabilities and approved destinations.
 
 | Job | Current operator-workspace boundary |
 | --- | --- |
+| Keep a long-running client's proxy token renewed | Optional finite workload-key enrollment is deployed; existing clients stay manual unless explicitly enrolled. Isolated stock-Requests/normal-proxy handoff and expiry checks passed. The standalone helper's default HTTPS transport with its locked dependencies and a real enrolled workload job remain unverified. [Client guide](examples/managed-client/README.md). |
 | Read or create GitHub issues and comments | Deployed PAT and GitHub App connections, exact repository/Issues permissions and automatic App installation-token renewal. Isolated Node/Python/Go App-through-Rust reads passed across token renewal, scope denials and revocation. Real GitHub acceptance remains open. [Contract](docs/operator-github-client-compatibility.md). |
 | Read Gmail for a connected account | Configured Google OAuth and the Gmail read-only permission. Actual Node/Python and updated-Go jobs passed isolated proxy verification across expiry, automatic refresh and denials. Real Google consent and the deployed inbox job remain unverified. [Verification](docs/operator-gmail-job-verification.md#current-node-python-and-go-sdk-acceptance--isolated-jobs-passed). |
 | Call a custom JSON API | Static Bearer/custom-header key, approved HTTPS destination and exact path; bounded request/response modes, not arbitrary API compatibility. |

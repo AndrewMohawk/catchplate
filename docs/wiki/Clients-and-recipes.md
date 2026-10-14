@@ -49,6 +49,20 @@ Replace the public placeholders with your deployment's values. Disable shell tra
 
 The `.env.example` files document inputs; the examples do not automatically load them. **Download private client config** is available only while the page holds the matching one-time token. That JSON contains the client token, is not an executable, and is not automatically loaded by the examples. Keep it out of source control, chat and logs.
 
+## Optional renewal for a long-running workload
+
+Manual token rotation remains the default. The deployed ordinary instance offers **Clients → Managed workload renewal**, but no existing client is implicitly enrolled. Renewal requires an administrator's explicit Ed25519 public-key enrollment: a **1–90 day grant** and **1–24 hour tokens**, never beyond the grant's deadline. It changes neither permissions nor provider credentials.
+
+1. Use a separate client and private helper directory for each workload or replica; do not share a renewal owner across workers.
+2. Follow the [managed-client README's initialization instructions](https://github.com/AndrewMohawk/serverware/blob/main/examples/managed-client/README.md#enroll-once). The helper generates its private key locally and prints only the public key. Keep the private key on the workload host; never paste it into Serverware.
+3. Save any displayed one-time client token privately before enrollment clears it from the page. In **Clients → Managed workload renewal**, select the existing client, paste only the public key, choose both lifetimes, review the consent and choose **Enroll workload public key**. Enrollment does not issue a token; it can shorten the existing token's expiry to the grant deadline.
+4. Wait for the matching saved policy to load, then choose **Download public setup JSON**. This contains public identifiers, fingerprint and timing—not a private key or proxy token. Follow the same README's `configure` instructions using that setup and the separately saved token.
+5. Follow the README's [worker instructions](https://github.com/AndrewMohawk/serverware/blob/main/examples/managed-client/README.md#run-a-worker) for the actual run commands and CA setup. A saved enrollment or setup download does not prove a renewal or provider request succeeded.
+
+The helper must regularly obtain a current token and replace SDK connection pools when its generation changes. The previous token has **at most five minutes of overlap**, ending sooner at its original expiry. Renewal cannot extend its own enrollment. Cancellation, enrollment replacement or manual rotation invalidates the old renewal authority and overlap; see [Operations and maintenance](https://github.com/AndrewMohawk/serverware/wiki/Operations-and-maintenance#manage-workload-renewal).
+
+The normal proxy passed an isolated synthetic-provider check with stock Requests 2.31.0, and the deployed GET-only UI check passed. The helper's exact default HTTPS transport with its newer locked dependency graph, an explicitly enrolled deployed workload and a real provider job still need acceptance. See the [project tracker](https://github.com/AndrewMohawk/serverware/blob/main/docs/project-completion.md#finite-workload-token-renewal--deployed); do not interpret this recipe as real-provider verification.
+
 ## Node.js, Python and Go: read GitHub issues
 
 Start with **GitHub issues: read** for one exact repository. Either a saved PAT or a verified GitHub App connection can supply the provider credential. Python and Go are read-only; Node also has explicit issue/comment creation commands.
@@ -149,6 +163,6 @@ Use the same workload model: create a client for the agent/job, grant only its r
 
 For a different application, first identify its documented proxy, proxy-authentication and TLS hooks. Setting `HTTPS_PROXY` alone is **not** a general SDK integration guarantee. The examples use explicit per-client transport configuration; some launch isolated children. npm and PyGithub also document combined-CA tradeoffs rather than independent trust stores. Never weaken TLS or rewrite SDK requests to force a preset match.
 
-Use finite job deadlines and inspect audit records on failure. Do not automatically retry writes, post unknown outcomes, or interpret a blocked response as proof of no upstream effect. Application-token expiry is separate from provider-token refresh: explicitly rotate a lost/expired client token in **Clients**, update that workload's secret, and revoke unused permissions or clients. See [Operations and maintenance](https://github.com/AndrewMohawk/serverware/wiki/Operations-and-maintenance).
+Use finite job deadlines and inspect audit records on failure. Do not automatically retry writes, post unknown outcomes, or interpret a blocked response as proof of no upstream effect. Client-token expiry is separate from provider-token refresh. Manually managed clients need explicit rotation and a workload-secret update; long-running workers can instead use the optional finite enrollment above. Revoke unused permissions or clients. See [Operations and maintenance](https://github.com/AndrewMohawk/serverware/wiki/Operations-and-maintenance).
 
 AWS credential storage is not an ECR publication recipe, and ordinary approval-dependent jobs are not enabled by these examples. For unavailable capabilities or denials, use [Troubleshooting](https://github.com/AndrewMohawk/serverware/wiki/Troubleshooting) and the [capability matrix](https://github.com/AndrewMohawk/serverware/wiki/Capability-matrix-and-glossary); do not substitute broader authority.

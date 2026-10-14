@@ -38,7 +38,17 @@ Do not disconnect an account merely to reauthorize it. Disconnected/quarantined 
 
 Open **Clients**, select a replacement lifetime and choose **Rotate client token**. Save the new token when shown once, update the workload's private secret store and wait for the matching policy to load. The previous token stops working after the proxy loads the update; coordinate the change with the workload owner.
 
-Rotation preserves the client identity and assignments. It does not refresh an OAuth account or replace a provider key. Tokens expire automatically: one hour, one day, seven days, 30 days or 90 days are offered, with 30 days the default. There is no unlimited token or automatic client-token renewal. If you lose the one-time display, explicitly rotate again rather than expecting the console to retrieve it. [Client lifecycle source](https://github.com/AndrewMohawk/serverware/blob/main/serverware/operator_demo_web/workspace_applications.js).
+Rotation preserves the client identity and assignments. It does not refresh an OAuth account or replace a provider key. Manual tokens expire automatically: one hour, one day, seven days, 30 days or 90 days are offered, with 30 days the default. There is no unlimited token. Manual rotation also invalidates any workload-renewal enrollment and previous-token overlap. If you lose the one-time display, explicitly rotate again rather than expecting the console to retrieve it. [Client lifecycle source](https://github.com/AndrewMohawk/serverware/blob/main/serverware/operator_demo_web/workspace_applications.js).
+
+## Manage workload renewal
+
+Optional **Clients → Managed workload renewal** is deployed; clients remain manual-only until an administrator explicitly enrolls a workload public key. Use the [enrollment walkthrough](https://github.com/AndrewMohawk/serverware/wiki/Clients-and-recipes#optional-renewal-for-a-long-running-workload) and [managed-client README](https://github.com/AndrewMohawk/serverware/blob/main/examples/managed-client/README.md) for initialization, configuration and worker commands. Keep the private key local and use one client/renewal owner per workload or replica.
+
+Choose a finite 1–90 day enrollment and 1–24 hour token lifetime. Neither renewal nor restart extends the grant. Old-token overlap ends at the earlier of its original expiry and five minutes after rotation; the worker must refresh its SDK connections within that window. Enrollment can shorten the current token's expiry, not extend it. Review grant expiry separately from token expiry and provider consent.
+
+To stop renewal, select the client and choose **Cancel renewal enrollment**, then confirm the saved policy has loaded. Cancellation removes the enrollment and previous-token overlap but leaves the current finite token available for manual use until its existing expiry. To stop the workload's access entirely, revoke the client instead. Replacing enrollment, manually rotating its token or revoking the client invalidates the previous renewal authority and overlap.
+
+After an uncertain renewal, preserve the helper's private journal and follow its exact-operation recovery instructions; do not delete state or automatically replay provider writes. Re-enrollment may require a new private helper directory. Saved state and the deployed read-only UI check are not a verified enrolled workload or real-provider job. [Renewal contract and acceptance boundary](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-workload-renewal.md).
 
 ## Stop access at the right scope
 
@@ -46,6 +56,7 @@ Rotation preserves the client identity and assignments. It does not refresh an O
 | --- | --- | --- |
 | One client operation | **Permissions → Revoke access rule** | The client and saved credential |
 | All access by one workload | **Clients → Revoke application** | Shared credentials and other clients |
+| Future token renewal only | **Clients → Managed workload renewal → Cancel renewal enrollment** | The current token until its existing expiry, client identity and permissions |
 | Future local use of a provider credential | Remove referencing permissions, then **Credentials → Revoke credential** | Audit history; no claim of provider-side revocation |
 | A managed provider account connection | Use its explicit account disconnect review | Follow its result; local denial and provider cleanup are distinct |
 

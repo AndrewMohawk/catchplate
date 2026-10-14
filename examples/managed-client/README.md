@@ -3,8 +3,10 @@
 This standalone Linux example keeps a workload's Serverware proxy login renewed
 under an explicit, finite administrator enrollment. It does not receive a real
 provider credential, extend its enrollment, acquire new permissions, or provide
-native/hardware-backed authority. The source and offline tests do **not** establish
-deployment, real proxy continuity, or a successful GitHub request.
+native/hardware-backed authority. The ordinary renewal feature is deployed;
+see the [recorded checkpoint](../../docs/project-completion.md#current-checkpoint--october-13-workload-renewal-rollout).
+The source and offline tests alone do **not** establish proxy continuity or a
+successful GitHub request. No existing client was automatically enrolled.
 
 `managed_client.py` uses only the Python standard library and `cryptography`.
 `github_read_loop.py` adds unmodified `requests` for repeated read-only GitHub
@@ -203,6 +205,9 @@ only that test imports `serverware.operator_workload_renewal`. Other tests use
 real temporary disk journals and fake HTTP to exercise crash/restart, exact
 replay, private permissions, single-writer locking, response refusal, expiry,
 overlap and stock Requests pool handoff. They make no network/provider requests.
-Real renewal HTTP, loaded proxy policy, old/new CONNECT sessions and a live
-stock-library handoff still require separate end-to-end verification. See the
-[renewal contract](../../docs/operator-workload-renewal.md).
+An isolated check separately exercised real renewal HTTP, loaded normal-proxy
+policy, old/new CONNECT sessions and stock Requests 2.31.0 handoff against a
+synthetic provider. It did not use this helper's default HTTPS renewal transport
+or its newer locked Requests graph. Those exact helper/transport checks and a
+real enrolled provider job remain open; do not treat the deployed read-only UI
+check as their acceptance. See the [renewal contract](../../docs/operator-workload-renewal.md).

@@ -7,8 +7,10 @@ Positive observations delegate to the actual implementations; no successful
 reader, proof or kernel is mocked. Negative fault injections corrupt only
 already replayed writer inputs or consume the original work/time allowance.
 Configuration/trust policies are explicit test inputs, not cold admission.
-There is no SQL acquisition, real OIDC/WebAuthn ceremony, hardware, authorized
-service selection, commit, ACK, disclosure, decision or provider execution.
+The generic native receipt replay is also exercised without replacing its
+proof/kernel replay. There is no SQL acquisition, real OIDC/WebAuthn ceremony,
+hardware, authorized service selection, commit, ACK, disclosure, decision or
+provider execution. Fixture clocks do not establish live-window performance.
 """
 from __future__ import annotations
 
@@ -390,23 +392,122 @@ class NativeReviewPlanOriginalReplayTests(unittest.TestCase):
         self.assertNotIn(TOKEN, result.before_vector_original + result.after_vector_original + result.mutations_original)
 
     def test_receipt_writer_uses_same_replay_and_only_four_authenticated_effect_rows(self):
+        from serverware import authority_current_root_execution_admission as pending
+
         case = self.receipt_fixture()
-        with patch.object(reads, "admit_original_reads_on_work", wraps=reads.admit_original_reads_on_work) as replay, \
+        manifest, chunks = case.prepared()
+        originals = (canonical(case.request), case.challenge.encode("ascii"),
+            case.authorization.encode("ascii"), case.preparation.encode("ascii"), manifest)
+        replay = owner.root_replay
+        errors = (owner.NativeJitReviewPlanOwnerError, replay.CurrentRootPlanReplayError)
+
+        def invocation(selected):
+            return {"operation": wire.RECEIPT, "originals": originals,
+                "expectations": {"request": case.request},
+                "planner_public_key": case.opening.role.public_key(),
+                "operation_public_key": case.opening.grant_key.public_key(),
+                "before_vector_bytes": case.vector_original, "work": selected._work,
+                "native_review_owner": selected, "native_review_frames": chunks,
+                "session_token_original": TOKEN, "live_window": LIVE,
+                "transport_deadline_ns": LIVE[4]}
+
+        # These controls must stop before any original proof/kernel replay. No
+        # failed control gets a successful substitute or a reused owner.
+        controls = ({"native_review_owner": object()}, {"work": meter()},
+            {"originals": originals[:-1]}, {"native_review_frames": None},
+            {"session_token_original": b""},
+            {"live_window": (NOW, MONO, MONO, NOW + 28 * SECOND,
+                MONO + 28 * SECOND, 28 * SECOND, 0)})
+        for changes in controls:
+            selected = case.plan_owner()
+            arguments = invocation(selected)
+            arguments.update(changes)
+            with self.subTest(control=tuple(changes)), patch.object(kernel,
+                    "_evaluate_with_reads_on_work", wraps=kernel._evaluate_with_reads_on_work) as reached:
+                with self.assertRaises(errors):
+                    replay._replay_on_work(**arguments)
+                self.assertEqual(reached.call_count, 0)
+
+        for changes in ({"root_public_key": Ed25519PrivateKey.from_private_bytes(b"W" * 32).public_key()},
+                {"current_root_enrollment_bytes": b"{}"}, {"work": meter()}):
+            selected = case.plan_owner()
+            arguments = {"root_public_key": case.root_key.public_key(),
+                "current_root_enrollment_bytes": case.enrollment, "work": selected._work}
+            arguments.update(changes)
+            with self.subTest(context=tuple(changes)), self.assertRaises(errors):
+                replay._native_context_on_work(wire.RECEIPT, selected, **arguments)
+
+        selected = case.plan_owner()
+        with patch.object(time, "time_ns", new=lambda: LIVE[3]), \
+                patch.object(time, "monotonic_ns", new=lambda: LIVE[4]), \
+                patch.object(kernel, "_evaluate_with_reads_on_work",
+                    wraps=kernel._evaluate_with_reads_on_work) as reached:
+            with self.assertRaises(errors):
+                replay._replay_on_work(**invocation(selected))
+            self.assertEqual(reached.call_count, 0)
+
+        # Neither historical entrypoint may interpret missing possession as
+        # recovery authority. Dummy control bytes are deliberately unreachable.
+        history = {"operation": wire.RECEIPT, "originals": originals,
+            "expectations": {"request": case.request},
+            "planner_public_key": case.opening.role.public_key(),
+            "operation_public_key": case.opening.grant_key.public_key(),
+            "enrollment_bytes": case.enrollment, "root_public_key": case.root_key.public_key(),
+            "reserve_request_bytes": b"{}", "reserve_receipt_bytes": b"{}", "snapshot_bytes": b"{}",
+            "expected_database_id": "synthetic-native-review-originals",
+            "expected_generation_digest": sha(b"synthetic generation"), "expected_pending_sequence": 1,
+            "expected_pending_head_digest": sha(b"unreachable pending"), "expected_fence": 1,
+            "live_window": LIVE, "work": meter(), "transport_deadline_ns": LIVE[4]}
+        for entrypoint in (pending._admit_for_completion_on_work, pending._admit_for_custody_completion_on_work):
+            with self.subTest(history=entrypoint.__name__), \
+                    patch.object(pending, "_derive_on_work", wraps=pending._derive_on_work) as reached:
+                with self.assertRaises(pending.CurrentRootExecutionAdmissionError):
+                    entrypoint(**history)
+                self.assertEqual(reached.call_count, 0)
+
+        selected = case.plan_owner()
+        replay._native_context_on_work(wire.RECEIPT, selected,
+            root_public_key=case.root_key.public_key(), current_root_enrollment_bytes=case.enrollment,
+            work=selected._work)
+        observed = []
+        actual_kernel = kernel._evaluate_with_reads_on_work
+
+        def observe_kernel(**arguments):
+            result = actual_kernel(**arguments)
+            observed.append(result)
+            return result
+
+        with patch.object(reads, "admit_original_reads_on_work", wraps=reads.admit_original_reads_on_work) as proof_replay, \
+                patch.object(kernel, "_evaluate_with_reads_on_work", side_effect=observe_kernel), \
                 patch.object(owner.primary, "evaluate_primary_radix_batch",
                     wraps=owner.primary.evaluate_primary_radix_batch) as writer:
-            actual = case.replay()
-        self.assertEqual(replay.call_count, 1)
+            actual = owner.root_replay._replay_on_work(**invocation(selected))
+        self.assertEqual(proof_replay.call_count, 1)
         self.assertEqual(writer.call_count, 1)
+        self.assertEqual(len(observed), 1)
+        effects, _acquired = observed[0]
         inputs = writer.call_args.kwargs
         self.assertEqual(len(inputs["selected_rows"]), 4)
         self.assertEqual(len(inputs["before_proofs"]), 4)
         self.assertEqual(len(inputs["mutations"]), 4)
+        self.assertEqual(actual.selected_rows, inputs["selected_rows"])
+        self.assertEqual(actual.mutations, effects.mutations)
+        self.assertEqual(actual.result, effects.result)
+        self.assertEqual(actual.originals, originals)
+        self.assertEqual(actual.before_vector_bytes, case.vector_original)
         self.assertEqual({value.table for value in inputs["table_contracts"]},
             {value.table for value in reads.primary_contract.primary_table_contracts(wire.RECEIPT)})
         self.assertEqual({value["table"] for value in inputs["selected_rows"]},
             {"approval_review_receipts", "metadata_audit_outbox", reads.audit_capacity.AGGREGATE_TABLE})
-        self.assertEqual(json.loads(actual.after_vector_original),
-            case.rebuilt_after(json.loads(actual.mutations_original)))
+        self.assertEqual(json.loads(actual.after_vector_bytes), case.rebuilt_after(actual.mutations))
+        self.assertEqual(actual.original_interval[1], effects.result["expiresAtEpochNs"])
+        self.assertLess(actual.original_interval[1], LIVE[3])
+        self.assertNotIn(TOKEN, b"".join(originals + chunks) + actual.before_vector_bytes
+            + actual.after_vector_bytes + canonical(actual.selected_rows)
+            + canonical(actual.mutations) + canonical(actual.result))
+        self.assertNotIn("session_token_original", actual.__dataclass_fields__)
+        with self.assertRaises(errors):
+            owner.root_replay._replay_on_work(**invocation(selected))
 
     def test_writer_refuses_corruption_after_genuine_original_replay(self):
         case = self.receipt_fixture()

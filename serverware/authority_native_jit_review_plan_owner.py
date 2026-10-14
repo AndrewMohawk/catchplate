@@ -229,8 +229,67 @@ class NativeJitReviewPlanOwner:
             preparation_original=preparation_original, read_manifest_original=read_manifest_original,
             read_frames=read_frames)
 
+    def _bind_execution_context_on_work(self, *, root_public_key,
+            current_root_enrollment_bytes, work):
+        """Bind the actual generic consumer to this reader's admitted originals."""
+        self._check()
+        _require(work is self._work and self._reader_pins[0] == wire.RECEIPT
+            and isinstance(root_public_key, Ed25519PublicKey)
+            and type(current_root_enrollment_bytes) is bytes)
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+        actual = root_public_key.public_bytes(Encoding.Raw, PublicFormat.Raw)
+        wanted = self._reader_pins[2].public_bytes(Encoding.Raw, PublicFormat.Raw)
+        work.charge(input_bytes=len(actual) + len(wanted)
+            + len(current_root_enrollment_bytes) + len(self._reader_pins[3]))
+        _require(actual == wanted and current_root_enrollment_bytes == self._reader_pins[3])
+        self._check()
+
+    def _replay_for_execution_on_work(self, *, originals, expectations,
+            before_vector_bytes, session_token_original, read_frames,
+            live_window, transport_deadline_ns, work):
+        """Original-only continuation into the existing successor replay owner.
+
+        The service supplies a new one-shot owner for each distinct processing
+        stage, never a cached successful verdict or retained possession token.
+        All stages retain the original opening bracket; a narrower deadline
+        cannot be renewed by constructing another owner.
+        """
+        try:
+            self._check()
+            window = reads.head.clock._validate(live_window)
+            _require(work is self._work and self._reader_pins[0] == wire.RECEIPT
+                and window[:3] == self._window[:3] and window[3] <= self._window[3]
+                and window[4] <= self._window[4] and window[5] <= self._window[5]
+                and window[6] <= self._window[6]
+                and type(transport_deadline_ns) is int
+                and 0 < transport_deadline_ns <= min(self._deadline, window[4]))
+            root_replay._originals(wire.RECEIPT, originals, before_vector_bytes)
+            _require(type(expectations) is dict and set(expectations) == {"request"})
+            request = _json(originals[0], MAX_REQUEST_BYTES, work)
+            root_replay.framing._same(request, expectations["request"], work,
+                "native receipt differs from independent request")
+            _require(time.monotonic_ns() < transport_deadline_ns)
+            result = self._run(request, session_token_original=session_token_original,
+                challenge_original=originals[1].decode("ascii"),
+                authorization_original=originals[2].decode("ascii"),
+                preparation_original=originals[3].decode("ascii"),
+                read_manifest_original=originals[4], read_frames=read_frames,
+                execution_originals=originals)
+            work.charge(input_bytes=len(before_vector_bytes) + len(result.before_vector_bytes))
+            _require(result.before_vector_bytes == before_vector_bytes
+                and reads.head.clock._check_on_work(window, work=work) < result.original_interval[1]
+                and time.monotonic_ns() < transport_deadline_ns)
+            self._check()
+            return result
+        except BaseException as exc:
+            self._failed = True
+            if isinstance(exc, Exception):
+                raise NativeJitReviewPlanOwnerError() from None
+            raise
+
     def _run(self, request, *, session_token_original, challenge_original, authorization_original,
-            preparation_original, read_manifest_original, read_frames):
+            preparation_original, read_manifest_original, read_frames, execution_originals=None):
         try:
             self._check()
             _require(not self._used)
@@ -289,6 +348,35 @@ class NativeJitReviewPlanOwner:
             mutations = _json_original(list(effects.mutations), reads.vector.authority.MAX_RESULT_BYTES, work)
             self._check()
             _require(self._last_epoch < effects.result["expiresAtEpochNs"])
+            if execution_originals is not None:
+                # These are this invocation's actual authenticated rows and
+                # effects. Large read-only originals remain in the bounded
+                # stream, not in the generic four-row CAS packet.
+                _require(operation == wire.RECEIPT)
+                writable = {"approval_review_receipts", "metadata_audit_outbox",
+                    reads.audit_capacity.AGGREGATE_TABLE}
+                selected = [row for row in acquired.selected_rows if row["table"] in writable]
+                _require(len(selected) == len(effects.mutations) == 4)
+                work.prepare_copy(selected)
+                owned = root_replay.capture._JSONCapture(
+                    root_replay.capture._SharedLedger(work)).visit({"request": request,
+                        "result": effects.result, "selectedRows": selected,
+                        "mutations": list(effects.mutations)})
+                frame = root_replay.framing._frame
+                plan_digest = frame("serverware.nativeJitReviewReceiptPlanIdentity/v1",
+                    execution_originals, work)
+                record_digest = frame("serverware.nativeJitReviewReceiptOriginalsIdentity/v1",
+                    execution_originals, work)
+                interval = (kernel.quota._database_epoch_ns(acquired.database_now),
+                    effects.result["expiresAtEpochNs"])
+                _require(interval[0] < interval[1])
+                root_replay.shape._integer(effects.work_units,
+                    reads.vector.authority.operation_spec(operation)["maximumWorkUnits"], minimum=1)
+                return root_replay._ReplayedPlan(operation, owned["request"], execution_originals,
+                    record_digest, before, after, frame(reads.vector.IDENTITY_DOMAIN, (before,), work),
+                    frame(reads.vector.IDENTITY_DOMAIN, (after,), work), owned["result"], interval,
+                    plan_digest, None, None, tuple(owned["selectedRows"]),
+                    tuple(owned["mutations"]), effects.work_units)
             return PreparedNativeJitReviewPlan(operation, request_original, challenge_original,
                 authorization_original, preparation_original, read_manifest_original, read_frames,
                 result, mutations, before, after)

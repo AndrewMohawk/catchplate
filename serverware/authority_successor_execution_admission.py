@@ -45,7 +45,8 @@ def _admit_on_work(*, operation, originals, expectations, planner_public_key,
         grant_bytes, grant_enrollment_bytes, expected_authorization_digest,
         expected_database_id, expected_generation_digest, expected_pending_sequence,
         expected_pending_head_digest, expected_fence, live_window, work,
-        transport_deadline_ns=None, activation_custody=None):
+        transport_deadline_ns=None, activation_custody=None, native_review_owner=None,
+        native_review_frames=None, session_token_original=None):
     """Derive an execution candidate from all genuine originals on one work.
 
     Request authorization and the exact pending head/fence are independent
@@ -88,7 +89,8 @@ def _admit_on_work(*, operation, originals, expectations, planner_public_key,
         expected_pending_sequence=expected_pending_sequence,
         expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
         live_window=window, work=work, transport_deadline_ns=inherited,
-        activation_custody=held_custody)
+        activation_custody=held_custody, native_review_owner=native_review_owner,
+        native_review_frames=native_review_frames, session_token_original=session_token_original)
 
     def live():
         now = clock._check_on_work(window, work=work)

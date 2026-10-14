@@ -59,6 +59,8 @@ class _PreparedCustody:
     pending_decision_digest: str
     issued_at_epoch_ns: int
     expires_at_epoch_ns: int
+    native_manifest_original: bytes | None = None
+    native_frames: tuple[bytes, ...] = ()
 
 
 def _raw_frame(raw, maximum, work):
@@ -77,11 +79,23 @@ def _component(value, maximum_bytes, maximum_nodes, work):
         raise SuccessorExecutionPacketError("successor packet component exceeds its source bound")
 
 
-def _encode_candidate_on_work(candidate, authorization_digest, plan_originals, controls, work):
+def _encode_candidate_on_work(candidate, authorization_digest, plan_originals, controls, work,
+        *, native_review_frames=None):
     """Private suffix reached only by this invocation's actual admission below."""
     if type(candidate) is not pending._ExecutionCandidate:
         raise SuccessorExecutionPacketError("successor packet requires its same-call actual candidate")
     operation = candidate.operation
+    native_manifest, native_frames = None, ()
+    if operation == pending.replay.NATIVE_REVIEW_OPERATION:
+        from serverware import authority_native_jit_review_plan_stream as stream
+
+        if (type(native_review_frames) is not tuple or not 0 < len(native_review_frames) <= stream.MAX_FRAMES
+                or any(type(raw) is not bytes or not 0 < len(raw) <= stream.FRAME_BYTES for raw in native_review_frames)
+                or sum(map(len, native_review_frames)) > stream.MAX_ORIGINAL_BYTES):
+            raise SuccessorExecutionPacketError("native receipt needs its genuinely replayed bounded frame originals")
+        native_manifest, native_frames = plan_originals[4], native_review_frames
+    elif native_review_frames is not None:
+        raise SuccessorExecutionPacketError("native read frames cannot enter another successor family")
     spec = authority.operation_spec(operation)
     if (type(candidate.selected_rows) is not tuple
             or len(candidate.selected_rows) > spec["maximumQueryRows"]
@@ -136,7 +150,8 @@ def _encode_candidate_on_work(candidate, authorization_digest, plan_originals, c
     encoded = vector.encoding._bounded_wire(packet, vector.capture._SharedLedger(work),
         maximum_bytes=MAX_BYTES, maximum_nodes=MAX_NODES)
     identity = vector.framing._frame(IDENTITY_DOMAIN, (encoded,), work)
-    return _PreparedCustody(encoded, identity, owned["marker"]["pending_decision_digest"], issued, expires)
+    return _PreparedCustody(encoded, identity, owned["marker"]["pending_decision_digest"], issued, expires,
+        native_manifest, native_frames)
 
 
 def _prepare_on_work(*, operation, originals, expectations, planner_public_key,
@@ -145,7 +160,8 @@ def _prepare_on_work(*, operation, originals, expectations, planner_public_key,
         grant_bytes, grant_enrollment_bytes, expected_authorization_digest,
         expected_database_id, expected_generation_digest, expected_pending_sequence,
         expected_pending_head_digest, expected_fence, live_window, work,
-        transport_deadline_ns=None, activation_custody=None):
+        transport_deadline_ns=None, activation_custody=None, native_review_owner=None,
+        native_review_frames=None, session_token_original=None):
     """Admit genuine originals once, then encode their closed custody packet."""
     vector.capture._SharedLedger(work)
     held_custody = activation_custody
@@ -181,5 +197,7 @@ def _prepare_on_work(*, operation, originals, expectations, planner_public_key,
         expected_database_id=scope[0], expected_generation_digest=scope[1],
         expected_pending_sequence=scope[2], expected_pending_head_digest=scope[3],
         expected_fence=scope[4], live_window=scope[5], transport_deadline_ns=scope[6], work=work,
-        activation_custody=held_custody)
-    return _encode_candidate_on_work(candidate, held_authorization, plan_originals, controls, work)
+        activation_custody=held_custody, native_review_owner=native_review_owner,
+        native_review_frames=native_review_frames, session_token_original=session_token_original)
+    return _encode_candidate_on_work(candidate, held_authorization, plan_originals, controls, work,
+        native_review_frames=native_review_frames)

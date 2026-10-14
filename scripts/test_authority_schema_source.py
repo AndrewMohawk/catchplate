@@ -24,6 +24,8 @@ sys.path.insert(0, str(ROOT))
 
 from serverware import authority_contract, authority_native_activation_schema, authority_native_jit_retention_schema
 from serverware.authority_store import schema as schema_module
+from serverware.authority_store import successor_execution_sql, successor_execution_privileges
+from serverware.authority_store import policy_file_read_sql, policy_file_genesis_sql, planner_read_sql
 from serverware.authority_store.completed_v9_schema_source import (
     COMPLETED_V9_RECEIPT_TABLE,
     completed_v9_schema_programs,
@@ -1078,14 +1080,15 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
 
     def test_sqlite_retained_protocol_is_denied_while_v3_identity_stays_immutable(self):
         sql = planner_retention_sqlite_guards_sql()
-        self.assertEqual(sql.count("CREATE TRIGGER IF NOT EXISTS"), 9)
+        self.assertEqual(sql.count("CREATE TRIGGER IF NOT EXISTS"), 10)
         for name in ("serverware_planner_retention_insert_guard", "serverware_planner_retention_guard",
                      "serverware_retained_sqlite_insert_guard", "serverware_writer_request_sqlite_insert_guard",
                      "serverware_writer_ack_sqlite_insert_guard",
                      "serverware_webauthn_evidence_retained_sqlite_insert_guard",
                      "serverware_webauthn_transition_retained_sqlite_insert_guard",
                      "serverware_current_root_marker_sqlite_insert_guard",
-                     "serverware_successor_custody_sqlite_insert_guard"):
+                     "serverware_successor_custody_sqlite_insert_guard",
+                     "serverware_successor_frames_sqlite_insert_guard"):
             self.assertIn(name, sql)
         self.assertIn("NEW.plan_protocol <> 'v3' OR NEW.retained_record_digest IS NOT NULL", sql)
         self.assertIn("BEFORE INSERT ON policy_authority_revocation_retained_plans", sql)
@@ -1101,6 +1104,8 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         self.assertIn("SQLite current-root commit marker admission is disabled", sql)
         self.assertIn("BEFORE INSERT ON policy_authority_successor_execution_custody", sql)
         self.assertIn("SQLite successor execution custody admission is disabled", sql)
+        self.assertIn("BEFORE INSERT ON policy_authority_successor_execution_frames", sql)
+        self.assertIn("SQLite successor execution frame admission is disabled", sql)
         for field in (*authority_contract.PLANNER_RESERVATION_IMMUTABLE_COLUMNS,
                       *authority_contract.PLANNER_PAYLOAD_IMMUTABLE_COLUMNS,
                       *authority_contract.PLANNER_TERMINAL_IMMUTABLE_COLUMNS):
@@ -1260,6 +1265,93 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         literals = {node.value for node in ast.walk(required) if isinstance(node, ast.Constant) and type(node.value) is str}
         self.assertTrue({"serverware_guard_capability_retention", "serverware_capability_retention_guard",
                         "serverware_capability_retention_insert_guard", "serverware_capability_sidecar_sqlite_insert_guard"}.issubset(literals))
+
+    def test_native_successor_frame_schema_is_bounded_immutable_framework_custody(self):
+        contract = authority_contract.SUCCESSOR_EXECUTION_FRAME_CONTRACT
+        table = authority_contract.SUCCESSOR_EXECUTION_FRAME_TABLE
+        self.assertEqual(contract["maximumFrameBytes"], 131072)
+        self.assertEqual(contract["maximumStreamBytes"], 100663296)
+        self.assertEqual(contract["maximumFrames"], 1068)
+        self.assertEqual(contract["primaryKey"], ("pending_decision_digest", "frame_ordinal"))
+        self.assertEqual(contract["parentKey"], ("pending_decision_digest", "packet_digest"))
+        self.assertIn(table, authority_contract.POSTGRES_IMMUTABLE_CUSTODY_TABLES)
+        self.assertIn(table, authority_contract.V9_ADDITIONAL_PROTECTED_TABLES)
+        self.assertIn(table, authority_contract._FRAMEWORK_CUSTODY_TABLES)
+        self.assertIn(table, planner_read_sql.EXCLUDED_TABLES)
+        self.assertFalse(contract["publicExecutionEnabled"])
+        self.assertFalse(contract["sqliteAdmission"])
+        ddl = self.extension.split("CREATE TABLE IF NOT EXISTS " + table + " (", 1)[1].split("\n        );", 1)[0]
+        for fragment in ("frame_bytes BYTEA NOT NULL", "PRIMARY KEY (pending_decision_digest, frame_ordinal)",
+                "FOREIGN KEY (pending_decision_digest, packet_digest)",
+                "REFERENCES policy_authority_successor_execution_custody",
+                "DEFERRABLE INITIALLY DEFERRED", "frame_ordinal BETWEEN 0 AND 1067",
+                "byte_count BETWEEN 1 AND 131072", "length(frame_bytes) = byte_count"):
+            self.assertIn(fragment, ddl)
+        for forbidden in ("CASCADE", "session_token", "__SUCCESSOR_"):
+            self.assertNotIn(forbidden, ddl)
+
+    def test_native_successor_frame_renderer_closes_stream_before_issue_and_execution(self):
+        digest = "sha256:" + "1" * 64
+        sql = successor_execution_sql.successor_execution_functions_sql('"metadata"',
+            issuer_role=authority_contract.SUCCESSOR_ISSUER_ROLE,
+            executor_role=authority_contract.SUCCESSOR_EXECUTOR_ROLE,
+            recovery_role=authority_contract.SUCCESSOR_RECOVERY_ROLE, owner_role="metadata_owner",
+            issuer_pins=(digest, digest, digest, "CN=issuer", "11", "CN=CA"),
+            executor_pins=(digest, digest, digest, "CN=executor", "12", "CN=CA"),
+            recovery_pins=(digest, digest, digest, "CN=recovery", "13", "CN=CA"))
+        self.assertEqual(sql.count("CREATE OR REPLACE FUNCTION"), 4)
+        function_name = authority_contract.SUCCESSOR_FRAME_FUNCTION
+        self.assertEqual(authority_contract.SUCCESSOR_EXECUTION_FUNCTION_SIGNATURES[function_name],
+            ("text", "text", "bigint", "bytea"))
+        append = sql.split('"metadata".' + function_name + "(", 1)[1].split("CREATE OR REPLACE FUNCTION", 1)[0]
+        for fragment in ("supplied_pending_decision_digest text, supplied_packet_digest text, supplied_frame_ordinal bigint, supplied_frame bytea",
+                "RETURNS TABLE(frame_ordinal bigint, byte_count bigint, bytes_digest text)",
+                "sxf_stored_count IS DISTINCT FROM supplied_frame_ordinal",
+                "sxf_stored_bytes + sxf_byte_count > 100663296",
+                "successor native stream is already closed",
+                "pg_catalog.sha256(supplied_frame)", "session_user IS DISTINCT FROM 'serverware_policy_authority_successor_issuer'"):
+            self.assertIn(fragment, append)
+        self.assertNotIn("ON CONFLICT", append)
+        for operation in (authority_contract.SUCCESSOR_ISSUE_FUNCTION, authority_contract.SUCCESSOR_EXECUTE_FUNCTION):
+            body = sql.split('"metadata".' + operation + "(", 1)[1].split("CREATE OR REPLACE FUNCTION", 1)[0]
+            for fragment in ("pg_catalog.jsonb_array_length(sxf_manifest->'rowChunkCounts') <> 13",
+                    "sxf_leaf_size > sxf_maxima[sxf_leaf_index]",
+                    "pg_catalog.sha256(sxf_row.frame_bytes)", "pg_catalog.sha256(sxf_leaf)",
+                    "sxf_ordinal IS DISTINCT FROM sxf_stored_count", "sxf_leaf := NULL;"):
+                self.assertIn(fragment, body)
+            self.assertNotIn("string_agg(stored.frame_bytes", body)
+            self.assertNotIn("array_agg(stored.frame_bytes", body)
+        self.assertLess(sql.index("successor native stream has missing or extra frames"),
+            sql.index('INSERT INTO "metadata".policy_authority_successor_execution_custody'))
+        self.assertIn("native successor historical completion is not available", sql)
+
+    def test_native_successor_privilege_extension_preserves_existing_scalar_consumers(self):
+        sql, parameters = successor_execution_privileges.successor_execution_privilege_check(
+            role=authority_contract.SUCCESSOR_ISSUER_ROLE, namespace="metadata")
+        self.assertEqual(parameters, (authority_contract.SUCCESSOR_ISSUER_ROLE, "metadata", [],
+            authority_contract.SUCCESSOR_ISSUE_FUNCTION))
+        self.assertEqual(sql.count("%s"), 4)
+        self.assertIn("%s::pg_catalog.text AS expected_function", sql)
+        self.assertIn("'text, text, bigint, bytea'", sql)
+        self.assertIn("THEN 2 ELSE 1 END", sql)
+        for module in (policy_file_read_sql, policy_file_genesis_sql):
+            actual_sql, actual_parameters = module.privilege_check(namespace="metadata")
+            self.assertIs(actual_sql, sql)
+            self.assertEqual(actual_parameters, (module.ROLE, "metadata", [], module.FUNCTION))
+        self.assertNotIn("expected_functions", sql)
+
+    def test_native_successor_frame_bindings_reach_existing_install_and_acl_owners(self):
+        source, tree = read_source("serverware/db.py", 16 * 1024 * 1024)
+        seal = function(tree, "_seal_postgres_schema_acl")
+        roster = assignment(seal, "successor_functions")
+        self.assertIn("authority_contract.SUCCESSOR_FRAME_FUNCTION", ast.get_source_segment(source, roster))
+        for name in ("_seal_postgres_schema_acl", "_validate_policy_authority_owner_apply_function"):
+            text = ast.get_source_segment(source, function(tree, name))
+            self.assertIn("authority_contract.SUCCESSOR_EXECUTION_FUNCTION_SIGNATURES[", text)
+            self.assertIn("authority_contract.SUCCESSOR_FRAME_FUNCTION", text)
+        for name in ("_POLICY_AUTHORITY_RUNTIME_INACCESSIBLE_TABLES", "_POLICY_AUTHORITY_FRAMEWORK_CUSTODY_TABLES"):
+            self.assertIn("authority_contract.SUCCESSOR_EXECUTION_FRAME_TABLE",
+                ast.get_source_segment(source, assignment(tree, name)))
 
 
 if __name__ == "__main__":

@@ -176,7 +176,8 @@ def _derive_on_work(*, operation, originals, expectations, planner_public_key,
         reserve_receipt_bytes, snapshot_bytes, expected_database_id, expected_generation_digest,
         expected_pending_sequence, expected_pending_head_digest, expected_fence,
         live_window, work, transport_deadline_ns, historical_controls, custody_effects=False,
-        activation_custody=None):
+        activation_custody=None, native_review_owner=None, native_review_frames=None,
+        session_token_original=None):
     """Fixed replay shared by separate live-execution/historical-completion paths.
 
     ``original_interval`` in the candidate is the effective ORIGINAL RESERVE
@@ -189,8 +190,9 @@ def _derive_on_work(*, operation, originals, expectations, planner_public_key,
         raise CurrentRootExecutionAdmissionError("pending admission purpose is not source-selected")
     if type(custody_effects) is not bool or custody_effects and not historical_controls:
         raise CurrentRootExecutionAdmissionError("custody effects identity is historical-completion only")
-    if historical_controls and type(operation) is str and operation == replay.ACTIVATION_OPERATION:
-        raise CurrentRootExecutionAdmissionError("activation historical completion is not implemented")
+    if historical_controls and type(operation) is str and operation in (
+            replay.ACTIVATION_OPERATION, replay.NATIVE_REVIEW_OPERATION):
+        raise CurrentRootExecutionAdmissionError("live-possession historical completion is not implemented")
     evidence.capture._SharedLedger(work)
     held_operation = operation
     held_custody = activation_custody
@@ -214,6 +216,8 @@ def _derive_on_work(*, operation, originals, expectations, planner_public_key,
     initial_now = _live(window, inherited, work)
     replay._activation_context_on_work(held_operation, held_custody,
         root_public_key=held_root, current_root_enrollment_bytes=enrollment, work=work)
+    replay._native_context_on_work(held_operation, native_review_owner,
+        root_public_key=held_root, current_root_enrollment_bytes=enrollment, work=work)
     if historical_controls:
         material, request, request_digest = authorization._verify_historical_request_on_work(
             request_bytes=reserve, enrollment_bytes=enrollment, root_public_key=held_root, work=work)
@@ -235,7 +239,9 @@ def _derive_on_work(*, operation, originals, expectations, planner_public_key,
     replayed = replay._replay_on_work(operation=held_operation, originals=plan_originals,
         expectations=expected, planner_public_key=planner_key, operation_public_key=operation_key,
         before_vector_bytes=before_bytes, work=work, activation_custody=held_custody,
-        live_window=window, transport_deadline_ns=inherited)
+        live_window=window, transport_deadline_ns=inherited,
+        native_review_owner=native_review_owner, native_review_frames=native_review_frames,
+        session_token_original=session_token_original)
     for field in ("operation", "requestDigest", "operationId"):
         evidence.plan._same(request[field], replayed.request[field], work,
             "execution reserve differs from actual typed plan request")
@@ -289,7 +295,8 @@ def _admit_on_work(*, operation, originals, expectations, planner_public_key,
         operation_public_key, enrollment_bytes, root_public_key, reserve_request_bytes,
         reserve_receipt_bytes, snapshot_bytes, expected_database_id, expected_generation_digest,
         expected_pending_sequence, expected_pending_head_digest, expected_fence,
-        live_window, work, transport_deadline_ns=None, activation_custody=None):
+        live_window, work, transport_deadline_ns=None, activation_custody=None,
+        native_review_owner=None, native_review_frames=None, session_token_original=None):
     """Live original controls plus genuine replay; no execution authority alone."""
     return _derive_on_work(operation=operation, originals=originals, expectations=expectations,
         planner_public_key=planner_public_key, operation_public_key=operation_public_key,
@@ -300,7 +307,9 @@ def _admit_on_work(*, operation, originals, expectations, planner_public_key,
         expected_pending_sequence=expected_pending_sequence,
         expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
         live_window=live_window, work=work, transport_deadline_ns=transport_deadline_ns,
-        historical_controls=False, activation_custody=activation_custody)
+        historical_controls=False, activation_custody=activation_custody,
+        native_review_owner=native_review_owner, native_review_frames=native_review_frames,
+        session_token_original=session_token_original)
 
 
 def _admit_for_completion_on_work(*, operation, originals, expectations, planner_public_key,
@@ -315,8 +324,8 @@ def _admit_for_completion_on_work(*, operation, originals, expectations, planner
     caller's fresh completion window is checked throughout; expired execution
     authority is not renewed. No selected rows or mutations are returned.
     """
-    if type(operation) is str and operation == replay.ACTIVATION_OPERATION:
-        raise CurrentRootExecutionAdmissionError("activation historical completion is not implemented")
+    if type(operation) is str and operation in (replay.ACTIVATION_OPERATION, replay.NATIVE_REVIEW_OPERATION):
+        raise CurrentRootExecutionAdmissionError("live-possession historical completion is not implemented")
     return _derive_on_work(operation=operation, originals=originals, expectations=expectations,
         planner_public_key=planner_public_key, operation_public_key=operation_public_key,
         enrollment_bytes=enrollment_bytes, root_public_key=root_public_key,
@@ -340,8 +349,8 @@ def _admit_for_custody_completion_on_work(*, operation, originals, expectations,
     Exactly one plan replay occurs; only (_PendingCompletion, effects_digest)
     is returned, never executable selected rows, mutations or a result object.
     """
-    if type(operation) is str and operation == replay.ACTIVATION_OPERATION:
-        raise CurrentRootExecutionAdmissionError("activation historical custody completion is not implemented")
+    if type(operation) is str and operation in (replay.ACTIVATION_OPERATION, replay.NATIVE_REVIEW_OPERATION):
+        raise CurrentRootExecutionAdmissionError("live-possession historical custody completion is not implemented")
     return _derive_on_work(operation=operation, originals=originals, expectations=expectations,
         planner_public_key=planner_public_key, operation_public_key=operation_public_key,
         enrollment_bytes=enrollment_bytes, root_public_key=root_public_key,

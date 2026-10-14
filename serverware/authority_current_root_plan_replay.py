@@ -43,8 +43,9 @@ REVOCATION_OPERATION = revocation.plan.contract.OPERATION
 EVIDENCE_OPERATIONS = evidence.plan.contract.OPERATIONS
 TRANSITION_OPERATIONS = transition.plan.contract.OPERATIONS
 ACTIVATION_OPERATION = activation_contract.OPERATION
+NATIVE_REVIEW_OPERATION = "jit.review-open.receipt.issue"
 # Planning registration alone never grants an original execution-frame grammar.
-OPERATIONS = (frozenset({REVOCATION_OPERATION, ACTIVATION_OPERATION})
+OPERATIONS = (frozenset({REVOCATION_OPERATION, ACTIVATION_OPERATION, NATIVE_REVIEW_OPERATION})
     | EVIDENCE_OPERATIONS | TRANSITION_OPERATIONS)
 MAX_ORIGINAL_BYTES = authority.MAX_RESULT_BYTES
 _REVOCATION_EXPECTATIONS = revocation.wire._EXPECTATIONS - {
@@ -81,7 +82,7 @@ class _ReplayedPlan:
 
 def _frame_maxima(operation):
     """Return original-frame caps only for implemented disjoint replay families."""
-    if (OPERATIONS != frozenset({REVOCATION_OPERATION, ACTIVATION_OPERATION})
+    if (OPERATIONS != frozenset({REVOCATION_OPERATION, ACTIVATION_OPERATION, NATIVE_REVIEW_OPERATION})
             | EVIDENCE_OPERATIONS | TRANSITION_OPERATIONS
             or not OPERATIONS <= delta.OPERATIONS
             or not OPERATIONS <= frozenset(delta.programs.PROGRAMS)
@@ -93,6 +94,12 @@ def _frame_maxima(operation):
     if type(operation) is not str or operation not in OPERATIONS:
         raise CurrentRootPlanReplayError("successor operation has no implemented original replay family")
     delta._source(operation)
+    if operation == NATIVE_REVIEW_OPERATION:
+        from serverware import authority_native_jit_review_open_contract as native
+        from serverware import authority_native_jit_review_plan_stream as stream
+
+        return (64 * 1024, native.MAX_NATIVE_ORIGINAL, native.MAX_AUTHORITY_ORIGINAL,
+            native.MAX_NATIVE_ORIGINAL, stream.MAX_MANIFEST_BYTES)
     if operation == REVOCATION_OPERATION:
         return (revocation.plan.contract.MAX_PAYLOAD_BYTES, revocation.MAX_CONTEXT_BYTES)
     if operation in EVIDENCE_OPERATIONS:
@@ -149,7 +156,12 @@ def _expectations(operation, expectations, planner_key, operation_key, work):
         owned["database_now"] = database_now
         return owned
     owned = capture._JSONCapture(ledger).visit(expectations)
-    if operation in EVIDENCE_OPERATIONS:
+    if operation == NATIVE_REVIEW_OPERATION:
+        shape._object(owned, frozenset({"request"}), "native receipt independent request")
+        from serverware import authority_transition_native_jit_review_open as native
+
+        native._arguments(owned["request"], operation, work)
+    elif operation in EVIDENCE_OPERATIONS:
         evidence.plan._validate_expectations(owned, operation)
     elif operation in TRANSITION_OPERATIONS:
         actual = transition.plan.contract._validate_expectations(owned)
@@ -172,6 +184,21 @@ def _activation_context_on_work(operation, activation_custody, *, root_public_ke
             work=work)
     if activation_custody is not None:
         raise CurrentRootPlanReplayError("activation custody cannot bind another replay family")
+
+
+def _native_context_on_work(operation, native_review_owner, *, root_public_key,
+        current_root_enrollment_bytes, work):
+    """Join genuine native reader root originals, not a caller-created verdict."""
+    if operation == NATIVE_REVIEW_OPERATION:
+        from serverware import authority_native_jit_review_plan_owner as native
+
+        if type(native_review_owner) is not native.NativeJitReviewPlanOwner:
+            raise CurrentRootPlanReplayError("native receipt requires its actual original replay owner")
+        native.NativeJitReviewPlanOwner._bind_execution_context_on_work(native_review_owner,
+            root_public_key=root_public_key, current_root_enrollment_bytes=current_root_enrollment_bytes,
+            work=work)
+    elif native_review_owner is not None:
+        raise CurrentRootPlanReplayError("native receipt owner cannot bind another replay family")
 
 
 def _primary_documents(values, work):
@@ -360,7 +387,8 @@ def _transition(originals, expected, planner_key, operation_key, work):
 
 def _replay_on_work(*, operation, originals, expectations, planner_public_key,
         operation_public_key, before_vector_bytes, work, activation_custody=None,
-        live_window=None, transport_deadline_ns=None):
+        live_window=None, transport_deadline_ns=None, native_review_owner=None,
+        native_review_frames=None, session_token_original=None):
     """Reconstruct complete effects from original plans on one existing work.
 
     Revocation expectations are the existing closed verifier expectations minus
@@ -379,6 +407,18 @@ def _replay_on_work(*, operation, originals, expectations, planner_public_key,
     held_operation = operation
     held_originals, held_before = _originals(held_operation, originals, before_vector_bytes)
     planner_key, operation_key = planner_public_key, operation_public_key
+    if held_operation == NATIVE_REVIEW_OPERATION:
+        from serverware import authority_native_jit_review_plan_owner as native
+
+        if type(native_review_owner) is not native.NativeJitReviewPlanOwner or activation_custody is not None:
+            raise CurrentRootPlanReplayError("native receipt requires its actual original replay owner")
+        owned = _expectations(held_operation, expectations, planner_key, operation_key, work)
+        return native.NativeJitReviewPlanOwner._replay_for_execution_on_work(native_review_owner,
+            originals=held_originals, expectations=owned, before_vector_bytes=held_before,
+            session_token_original=session_token_original, read_frames=native_review_frames,
+            live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work)
+    if native_review_owner is not None or native_review_frames is not None or session_token_original is not None:
+        raise CurrentRootPlanReplayError("native receipt material cannot replay another family")
     if held_operation == ACTIVATION_OPERATION:
         from serverware import authority_oidc_session_activation_execution_custody as activation_owner
         from serverware import authority_webauthn_evidence_plan_clock as activation_clock

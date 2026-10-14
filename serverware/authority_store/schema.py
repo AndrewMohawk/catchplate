@@ -229,6 +229,7 @@ def _policy_candidate_authority_source_contract_digest(*, database_configuration
             "jitOriginalPageDdl": _policy_authority_jit_original_page_ddl('"serverware_metadata"'),
             "currentRootCommitMarker": dict(authority_contract.CURRENT_ROOT_COMMIT_MARKER_CONTRACT),
             "successorExecutionCustody": dict(authority_contract.SUCCESSOR_EXECUTION_CUSTODY_CONTRACT),
+            "successorExecutionFrames": dict(authority_contract.SUCCESSOR_EXECUTION_FRAME_CONTRACT),
             "successorExecutionPrivilegeSqlDigest": SUCCESSOR_EXECUTION_PRIVILEGE_SQL_DIGEST,
             "successorExecutionFunctionSignatures": {
                 name: list(arguments)
@@ -1344,6 +1345,7 @@ def _policy_candidate_authority_required_guard_names(
                               "serverware_webauthn_transition_retained_sqlite_insert_guard",
                               "serverware_current_root_marker_sqlite_insert_guard",
                               "serverware_successor_custody_sqlite_insert_guard",
+                              "serverware_successor_frames_sqlite_insert_guard",
                               "serverware_capability_retention_insert_guard",
                               "serverware_capability_sidecar_sqlite_insert_guard"})
     immutable_tables = (_POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES
@@ -1680,6 +1682,13 @@ def _validate_policy_candidate_authority_structure(
             != authority_contract.SUCCESSOR_EXECUTION_CUSTODY_COLUMNS
             or any(column["nullable"] for column in custody_columns)):
         raise PolicyCandidateAuthorityError("successor execution custody columns are not source exact")
+    frames = table_manifests[authority_contract.SUCCESSOR_EXECUTION_FRAME_TABLE]
+    if (tuple(column["name"] for column in frames["columns"])
+            != authority_contract.SUCCESSOR_EXECUTION_FRAME_COLUMNS
+            or any(column["nullable"] for column in frames["columns"])
+            or tuple(frames["primaryKey"])
+            != authority_contract.SUCCESSOR_EXECUTION_FRAME_CONTRACT["primaryKey"]):
+        raise PolicyCandidateAuthorityError("successor execution frame columns/key are not source exact")
     for table in (
         _POLICY_CANDIDATE_AUTHORITY_IMMUTABLE_TABLES
         + _POLICY_CANDIDATE_AUTHORITY_HEAD_TABLES

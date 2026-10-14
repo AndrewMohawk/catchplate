@@ -18,6 +18,7 @@ ROLE = "serverware_policy_authority_planner"
 EXCLUDED_TABLES = frozenset({
     authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE,
     authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE,
+    authority_contract.SUCCESSOR_EXECUTION_FRAME_TABLE,
 })
 PRIVILEGE_SQL_DIGEST = VERIFIER_READ_PRIVILEGE_SQL_DIGEST
 

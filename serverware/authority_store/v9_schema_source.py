@@ -99,6 +99,9 @@ def planner_retention_sqlite_guards_sql() -> str:
         CREATE TRIGGER IF NOT EXISTS serverware_successor_custody_sqlite_insert_guard
         BEFORE INSERT ON policy_authority_successor_execution_custody
         BEGIN SELECT RAISE(ABORT, 'SQLite successor execution custody admission is disabled'); END;
+        CREATE TRIGGER IF NOT EXISTS serverware_successor_frames_sqlite_insert_guard
+        BEFORE INSERT ON policy_authority_successor_execution_frames
+        BEGIN SELECT RAISE(ABORT, 'SQLite successor execution frame admission is disabled'); END;
     """
 
 
@@ -225,7 +228,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 ),
                 CHECK (status = 'completed'),
                 CHECK (length(before_manifest_json) BETWEEN 2 AND 67108864),
@@ -258,7 +261,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(key_columns_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 )
             );
 
@@ -301,7 +304,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(template_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 )
             );
 
@@ -354,7 +357,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(evidence_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 )
             );
 
@@ -392,7 +395,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (expires_at_epoch_ns > created_at_epoch_ns),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 )
             );
 
@@ -472,7 +475,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 )
             );
 
@@ -613,7 +616,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 )
             );
 
@@ -672,7 +675,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 )
             );
 
@@ -748,7 +751,7 @@ def authority_v9_schema_source() -> str:
                     AND planner_key_digest ~ '^sha256:[0-9a-f]{64}$'
                     AND evidence_key_digest ~ '^sha256:[0-9a-f]{64}$'
                 ),
-                CHECK (source_revision = 'serverware.policyCandidateAuthoritySource/2026-07-30.350')
+                CHECK (source_revision = 'serverware.policyCandidateAuthoritySource/2026-07-30.351')
             );
 
         -- Original authenticated execution packets are protected framework
@@ -766,6 +769,7 @@ def authority_v9_schema_source() -> str:
             expires_at_epoch_ns BIGINT NOT NULL,
             issuer_identity_digest TEXT NOT NULL,
             CONSTRAINT policy_authority_successor_execution_custody_pkey PRIMARY KEY (pending_decision_digest),
+            UNIQUE (pending_decision_digest, packet_digest),
             UNIQUE (enrollment_digest, capability_digest),
             UNIQUE (enrollment_digest, operation_id),
             UNIQUE (enrollment_digest, fence),
@@ -780,6 +784,31 @@ def authority_v9_schema_source() -> str:
                 AND generation_digest ~ '^sha256:[0-9a-f]{64}$'
                 AND capability_digest ~ '^sha256:[0-9a-f]{64}$'
                 AND operation_id ~ '^sha256:[0-9a-f]{64}$'
+                AND issuer_identity_digest ~ '^sha256:[0-9a-f]{64}$')
+        );
+
+        -- Literal native read frames are framework custody, never business
+        -- roots. The deferred parent binding prevents a partial upload from
+        -- committing; only the fixed issuer can create the final parent.
+        CREATE TABLE IF NOT EXISTS policy_authority_successor_execution_frames (
+            pending_decision_digest TEXT NOT NULL,
+            packet_digest TEXT NOT NULL,
+            frame_ordinal BIGINT NOT NULL,
+            byte_count BIGINT NOT NULL,
+            bytes_digest TEXT NOT NULL,
+            frame_bytes BYTEA NOT NULL,
+            issuer_identity_digest TEXT NOT NULL,
+            PRIMARY KEY (pending_decision_digest, frame_ordinal),
+            CONSTRAINT serverware_successor_frame_packet_fk
+                FOREIGN KEY (pending_decision_digest, packet_digest)
+                REFERENCES policy_authority_successor_execution_custody
+                    (pending_decision_digest, packet_digest)
+                DEFERRABLE INITIALLY DEFERRED,
+            CHECK (frame_ordinal BETWEEN 0 AND __SUCCESSOR_MAX_FRAME_ORDINAL__),
+            CHECK (byte_count BETWEEN 1 AND 131072 AND length(frame_bytes) = byte_count),
+            CHECK (pending_decision_digest ~ '^sha256:[0-9a-f]{64}$'
+                AND packet_digest ~ '^sha256:[0-9a-f]{64}$'
+                AND bytes_digest ~ '^sha256:[0-9a-f]{64}$'
                 AND issuer_identity_digest ~ '^sha256:[0-9a-f]{64}$')
         );
 
@@ -810,7 +839,7 @@ def authority_v9_schema_source() -> str:
                 UNIQUE (enrollment_digest, fence),
                 UNIQUE (enrollment_digest, operation_id),
                 UNIQUE (enrollment_digest, capability_digest),
-                CHECK (source_revision = 'serverware.policyCandidateAuthoritySource/2026-07-30.350'),
+                CHECK (source_revision = 'serverware.policyCandidateAuthoritySource/2026-07-30.351'),
                 CHECK (length(database_id) BETWEEN 1 AND 128
                     AND database_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'),
                 CHECK (pending_sequence BETWEEN 1 AND 9223372036854775807),
@@ -927,7 +956,7 @@ def authority_v9_schema_source() -> str:
                     AND planner_key_digest ~ '^sha256:[0-9a-f]{64}$'
                     AND operation_key_digest ~ '^sha256:[0-9a-f]{64}$'
                 ),
-                CHECK (source_revision = 'serverware.policyCandidateAuthoritySource/2026-07-30.350')
+                CHECK (source_revision = 'serverware.policyCandidateAuthoritySource/2026-07-30.351')
             );
 
         CREATE TABLE IF NOT EXISTS
@@ -1006,7 +1035,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (historical_expectations_bytes_digest ~ '^sha256:[0-9a-f]{64}$'),
                 CHECK (planner_key_digest ~ '^sha256:[0-9a-f]{64}$'),
                 CHECK (verifier_key_digest ~ '^sha256:[0-9a-f]{64}$'),
-                CHECK (source_revision = 'serverware.policyCandidateAuthoritySource/2026-07-30.350')
+                CHECK (source_revision = 'serverware.policyCandidateAuthoritySource/2026-07-30.351')
             );
         CREATE TABLE IF NOT EXISTS
             policy_authority_revocation_writer_acknowledgments (
@@ -1044,7 +1073,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (generation_digest ~ '^sha256:[0-9a-f]{64}$'),
                 CHECK (writer_response_spki_digest ~ '^sha256:[0-9a-f]{64}$'),
                 CHECK (exact_ack_bytes_digest ~ '^sha256:[0-9a-f]{64}$'),
-                CHECK (source_revision = 'serverware.policyCandidateAuthoritySource/2026-07-30.350')
+                CHECK (source_revision = 'serverware.policyCandidateAuthoritySource/2026-07-30.351')
             );
         CREATE TABLE IF NOT EXISTS
             policy_authority_revocation_retained_capabilities (
@@ -1128,7 +1157,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 )
             );
 
@@ -1179,7 +1208,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (length(state_json) BETWEEN 2 AND 4194304),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 )
             );
 
@@ -1241,7 +1270,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (expires_at_epoch_ns > created_at_epoch_ns),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 )
             );
 
@@ -1278,7 +1307,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 )
             );
 
@@ -1309,7 +1338,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (deleted_at_epoch_ns >= 0),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 )
             );
 
@@ -1354,7 +1383,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 )
             );
 
@@ -1408,7 +1437,7 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 )
             );
 
@@ -1452,7 +1481,7 @@ def authority_v9_schema_source() -> str:
                 CHECK (updated_at_epoch_ns >= 0),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 )
             );
 
@@ -1500,7 +1529,7 @@ def authority_v9_schema_source() -> str:
             ),
             CHECK (
                 source_revision =
-                'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                'serverware.policyCandidateAuthoritySource/2026-07-30.351'
             )
         );
 
@@ -1567,7 +1596,7 @@ def authority_v9_schema_source() -> str:
             ),
             CHECK (
                 source_revision =
-                'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                'serverware.policyCandidateAuthoritySource/2026-07-30.351'
             )
         );
 
@@ -1627,11 +1656,14 @@ def authority_v9_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                    'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                    'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 )
             );
     """.replace(
         "__MAX_PLAN_SELECTED_BYTES__", str(authority_contract.MAX_PLAN_SELECTED_BYTES)
     ).replace(
         "__MAX_PLAN_WORK_UNITS__", str(authority_contract.MAX_PLAN_WORK_UNITS)
+    ).replace(
+        "__SUCCESSOR_MAX_FRAME_ORDINAL__",
+        str(authority_contract.SUCCESSOR_EXECUTION_FRAME_CONTRACT["maximumFrames"] - 1)
     )

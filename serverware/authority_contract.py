@@ -12,7 +12,7 @@ from serverware import authority_oauth_retirement_succession_catalog as retireme
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.350"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.351"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -685,6 +685,7 @@ JIT_ORIGINAL_PAGE_CONTRACT = MappingProxyType({
 POSTGRES_IMMUTABLE_CUSTODY_TABLES = (
     RECOVERY_HISTORY_PAGE_TABLE, CHALLENGE_MAINTENANCE_PAGE_TABLE, JIT_ORIGINAL_PAGE_TABLE,
     RECOVERY_INVALIDATION_RETAINED_TABLE,
+    "policy_authority_successor_execution_frames",
     *native_jit_retention.TABLES,
 )
 
@@ -705,8 +706,10 @@ SUCCESSOR_RECOVERY_ROLE = "serverware_policy_authority_successor_recovery"
 SUCCESSOR_ISSUE_FUNCTION = "serverware_policy_authority_issue_successor_execution"
 SUCCESSOR_EXECUTE_FUNCTION = "serverware_policy_authority_execute_successor"
 SUCCESSOR_READ_FUNCTION = "serverware_policy_authority_read_successor_execution"
+SUCCESSOR_FRAME_FUNCTION = "serverware_policy_authority_issue_successor_frame"
 SUCCESSOR_EXECUTION_FUNCTION_SIGNATURES = MappingProxyType({
     SUCCESSOR_ISSUE_FUNCTION: ("text", "text"),
+    SUCCESSOR_FRAME_FUNCTION: ("text", "text", "bigint", "bytea"),
     SUCCESSOR_EXECUTE_FUNCTION: ("text", "text"),
     SUCCESSOR_READ_FUNCTION: ("text", "text"),
 })
@@ -716,12 +719,46 @@ SUCCESSOR_EXECUTION_CUSTODY_COLUMNS = (
     "generation_digest", "capability_digest", "operation_id", "fence",
     "issued_at_epoch_ns", "expires_at_epoch_ns", "issuer_identity_digest",
 )
+SUCCESSOR_EXECUTION_FRAME_TABLE = "policy_authority_successor_execution_frames"
+SUCCESSOR_EXECUTION_FRAME_COLUMNS = (
+    "pending_decision_digest", "packet_digest", "frame_ordinal", "byte_count",
+    "bytes_digest", "frame_bytes", "issuer_identity_digest",
+)
+SUCCESSOR_EXECUTION_FRAME_CONTRACT = MappingProxyType({
+    "schema": "serverware.policyAuthoritySuccessorExecutionFrames/v1",
+    "table": SUCCESSOR_EXECUTION_FRAME_TABLE,
+    "columns": SUCCESSOR_EXECUTION_FRAME_COLUMNS,
+    "primaryKey": ("pending_decision_digest", "frame_ordinal"),
+    "parentKey": ("pending_decision_digest", "packet_digest"),
+    "parentTable": SUCCESSOR_EXECUTION_CUSTODY_TABLE,
+    "parentConstraint": "deferrable-initially-deferred-no-cascade",
+    "operation": "jit.review-open.receipt.issue",
+    "manifestPlanPosition": 4,
+    "maximumFrameBytes": 128 * 1024,
+    "maximumStreamBytes": 96 * 1024 * 1024,
+    "maximumFrames": 1068,
+    "issuerRole": SUCCESSOR_ISSUER_ROLE,
+    "issuerFunction": SUCCESSOR_FRAME_FUNCTION,
+    "functionArgumentTypes": ("text", "text", "bigint", "bytea"),
+    "append": "exact-next-ordinal-before-final-packet-same-physical-transaction",
+    "closure": "source-schedule-and-literal-leaf-sha256-at-issue-and-execution",
+    "maximumReassembly": "one-source-bounded-original-leaf",
+    "directRuntimePrivileges": (), "directIssuerPrivileges": (),
+    "directExecutorPrivileges": (), "directRecoveryPrivileges": (),
+    "postgresOnly": True, "sqliteAdmission": False, "publicExecutionEnabled": False,
+    "immutability": "all-columns-update-delete-denied-truncate-privilege-denied",
+    "frameworkCustodyExcludedFromBusinessRoots": True,
+    "primaryMaintenance": False, "countedMaintenance": False,
+    "historicalNativeCompletion": "unavailable-no-session-token-retained",
+    "existingStoreMigration": "separately-reviewed-no-adoption-synthesis-or-cascade",
+})
 SUCCESSOR_EXECUTION_CUSTODY_CONTRACT = MappingProxyType({
     "schema": "serverware.policyAuthoritySuccessorExecutionCustody/v1",
     "table": SUCCESSOR_EXECUTION_CUSTODY_TABLE,
     "columns": SUCCESSOR_EXECUTION_CUSTODY_COLUMNS,
     "primaryKey": ("pending_decision_digest",),
-    "uniqueKeys": (("packet_digest",), ("enrollment_digest", "capability_digest"),
+    "uniqueKeys": (("packet_digest",), ("pending_decision_digest", "packet_digest"),
+        ("enrollment_digest", "capability_digest"),
         ("enrollment_digest", "operation_id"), ("enrollment_digest", "fence")),
     "issuerRole": SUCCESSOR_ISSUER_ROLE, "executorRole": SUCCESSOR_EXECUTOR_ROLE,
     "recoveryRole": SUCCESSOR_RECOVERY_ROLE,
@@ -922,6 +959,7 @@ _FRAMEWORK_CUSTODY_TABLES = frozenset(
         JIT_ORIGINAL_PAGE_TABLE,
         CURRENT_ROOT_COMMIT_MARKER_TABLE,
         SUCCESSOR_EXECUTION_CUSTODY_TABLE,
+        SUCCESSOR_EXECUTION_FRAME_TABLE,
         "policy_authority_query_dependency_manifests",
         "policy_authority_schema_contracts",
         "policy_authority_verifier_capabilities",
@@ -1659,6 +1697,7 @@ V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
     "policy_canary_intake_batches",
     *PHASE2_STORE_TABLES,
     SUCCESSOR_EXECUTION_CUSTODY_TABLE,
+    SUCCESSOR_EXECUTION_FRAME_TABLE,
     "credential_generations",
     "oauth_exchange_reservations",
     "oauth_measured_exchange_custody",
@@ -3979,6 +4018,7 @@ def operation_contract_document() -> dict[str, Any]:
         "completionReaderRole": COMPLETION_READER_ROLE,
         "completionReadTables": sorted(COMPLETION_READ_TABLES),
         "successorExecutionCustody": dict(SUCCESSOR_EXECUTION_CUSTODY_CONTRACT),
+        "successorExecutionFrames": dict(SUCCESSOR_EXECUTION_FRAME_CONTRACT),
         "successorExecutionFunctionSignatures": {
             name: list(arguments) for name, arguments in SUCCESSOR_EXECUTION_FUNCTION_SIGNATURES.items()
         },

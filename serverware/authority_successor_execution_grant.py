@@ -322,7 +322,8 @@ def _replay_claims(replayed, work):
 def _verify_on_work(*, grant_bytes, grant_enrollment_bytes, current_root_enrollment_bytes,
         root_public_key, operation, originals, expectations, planner_public_key, operation_public_key,
         before_vector_bytes, expected_authorization_digest, now_epoch_ns, work,
-        activation_custody=None, live_window=None, transport_deadline_ns=None):
+        activation_custody=None, live_window=None, transport_deadline_ns=None,
+        native_review_owner=None, native_review_frames=None, session_token_original=None):
     """Verify original grant and genuine original plan once on the same work.
 
     Activation retains a real supplied window and inherited bound: its live
@@ -354,17 +355,37 @@ def _verify_on_work(*, grant_bytes, grant_enrollment_bytes, current_root_enrollm
         window, current = activation_delivery._window(live_window, transport_deadline_ns, work)
     elif held_custody is not None:
         raise SuccessorExecutionGrantError("activation custody cannot verify another grant family")
+    if original_operation == replay.NATIVE_REVIEW_OPERATION:
+        from serverware import authority_webauthn_evidence_plan_clock as native_clock
+        import time
+
+        shape._integer(transport_deadline_ns, minimum=1)
+        window = native_clock._validate(live_window)
+        last_epoch, last_monotonic = window[0], window[2]
+
+        def current():
+            nonlocal last_epoch, last_monotonic
+            now = native_clock._check_on_work(window, work=work)
+            mono = evidence.production._callback(work, time.monotonic_ns)
+            if now < last_epoch or mono < last_monotonic or mono >= min(window[4], transport_deadline_ns):
+                raise SuccessorExecutionGrantError("native receipt original window expired")
+            last_epoch, last_monotonic = now, mono
+            return now
     owned = replay._expectations(original_operation, expectations, planner_key, operation_key, work)
     if current is not None:
         current()
     replay._activation_context_on_work(original_operation, held_custody,
+        root_public_key=root_key, current_root_enrollment_bytes=current_raw, work=work)
+    replay._native_context_on_work(original_operation, native_review_owner,
         root_public_key=root_key, current_root_enrollment_bytes=current_raw, work=work)
     if current is not None:
         current()
     replayed = replay._replay_on_work(operation=original_operation, originals=held_originals,
         expectations=owned, planner_public_key=planner_key, operation_public_key=operation_key,
         before_vector_bytes=held_before, work=work, activation_custody=held_custody,
-        live_window=window, transport_deadline_ns=transport_deadline_ns)
+        live_window=window, transport_deadline_ns=transport_deadline_ns,
+        native_review_owner=native_review_owner, native_review_frames=native_review_frames,
+        session_token_original=session_token_original)
     expected = _replay_claims(replayed, work)
     if current is not None:
         now = current()

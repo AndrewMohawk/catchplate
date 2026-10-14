@@ -145,6 +145,8 @@ def _produce_complete_on_work(*, operation, originals, expectations, planner_pub
     original grant/reserve intervals. The caller still owns delivery, durable
     acknowledgment and uncertainty handling under the exact pending checkpoint.
     """
+    if operation == pending.replay.NATIVE_REVIEW_OPERATION:
+        raise CurrentRootCompletionError("native receipt historical completion is unavailable")
     evidence.capture._SharedLedger(work)
     shape = authorization.shape
     held = pending._originals(operation, originals, enrollment_bytes,
@@ -221,6 +223,130 @@ def _produce_complete_on_work(*, operation, originals, expectations, planner_pub
     return _read_and_sign_on_work(candidate=candidate, configuration=configuration,
         enrollment=enrollment, root_public_key=held_root, completion_private_key=held_signer,
         pins=pins, window=window, bound=bound, not_before_epoch_ns=last_epoch, work=work)
+
+
+def _complete_native_review_on_work(*, process, originals, expectations,
+        planner_public_key, operation_public_key, enrollment_bytes, root_public_key,
+        completion_private_key, reserve_request_bytes, reserve_receipt_bytes, snapshot_bytes,
+        grant_bytes, grant_enrollment_bytes, expected_authorization_digest,
+        expected_database_id, expected_generation_digest, expected_pending_sequence,
+        expected_pending_head_digest, expected_fence, commit_reader, decision_client,
+        native_review_owner, native_review_frames, session_token_original,
+        live_window, transport_deadline_ns, work):
+    """Actual live replay/read/complete publication before purpose-bound ACK.
+
+    This is not historical recovery: possession and the original opening window
+    remain mandatory through signing. A failed or uncertain exchange retains
+    the existing pending/committed state; there is no retry, rearm or rollback.
+    The actual cold executor owns the distinct disclosure key. No successful
+    candidate, caller receipt, marker or commit assertion is accepted here.
+    """
+    from serverware import authority_current_root_transport as transport
+    from serverware import authority_native_jit_review_open_contract as native
+    from serverware import authority_native_jit_review_open_signers as signers
+    from serverware import authority_native_jit_review_plan_owner as native_owner
+    from serverware import authority_service as service
+    from serverware import authority_successor_execution_window as windows
+
+    if (type(native_review_owner) is not native_owner.NativeJitReviewPlanOwner
+            or type(process) is not service.AuthorityProcess
+            or type(process.configuration) is not service.MeasuredConfiguration):
+        raise CurrentRootCompletionError("native completion requires its actual cold owners")
+    configuration_original = service._canonical(process.configuration.payload)
+    work.charge(input_bytes=len(configuration_original) + len(native_review_owner._configuration_original))
+    if configuration_original != native_review_owner._configuration_original:
+        raise CurrentRootCompletionError("native completion configuration differs from genuine replay")
+    # Both are public configuration roots; use their actual SPKI identities,
+    # never a caller assertion or the current-root state's distinct role key.
+    evidence.plan._same(grants.keys._spki_on_work(process.configuration.root_key, work),
+        grants.keys._spki_on_work(native_review_owner._root_key, work), work,
+        "native completion configuration root changed")
+    reader_config = reader.CurrentRootCommitReader._snapshot_configuration(commit_reader)
+    decision_config = transport.CurrentRootDecisionClient._snapshot_configuration(decision_client)
+    window = clock._validate(live_window)
+    authorization.shape._integer(transport_deadline_ns, minimum=1)
+    bound = min(window[4], transport_deadline_ns)
+    last_epoch, last_monotonic = window[0], window[2]
+
+    def live():
+        nonlocal last_epoch, last_monotonic
+        now = clock._check_on_work(window, work=work)
+        mono = evidence.production._callback(work, time.monotonic_ns)
+        if now < last_epoch or mono < last_monotonic or mono >= bound:
+            raise CurrentRootCompletionError("native receipt original completion window expired")
+        last_epoch, last_monotonic = now, mono
+        return now
+
+    live()
+    candidate = execution._admit_on_work(operation=native.RECEIPT, originals=originals,
+        expectations=expectations, planner_public_key=planner_public_key,
+        operation_public_key=operation_public_key, enrollment_bytes=enrollment_bytes,
+        root_public_key=root_public_key, reserve_request_bytes=reserve_request_bytes,
+        reserve_receipt_bytes=reserve_receipt_bytes, snapshot_bytes=snapshot_bytes,
+        grant_bytes=grant_bytes, grant_enrollment_bytes=grant_enrollment_bytes,
+        expected_authorization_digest=expected_authorization_digest,
+        expected_database_id=expected_database_id, expected_generation_digest=expected_generation_digest,
+        expected_pending_sequence=expected_pending_sequence,
+        expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
+        live_window=window, transport_deadline_ns=bound, work=work,
+        native_review_owner=native_review_owner, native_review_frames=native_review_frames,
+        session_token_original=session_token_original)
+    material = authorization._admit_enrollment_on_work(enrollment_bytes=enrollment_bytes,
+        root_public_key=root_public_key, work=work)
+    policy = material.payload
+    pins = (material.enrollment_digest, policy["databaseId"], policy["generationDigest"],
+        policy["completion"]["measurementDigest"], policy["maxControlAgeNs"], policy["maxClockSkewNs"])
+    window = windows._narrow(window, deadline_epoch_ns=candidate.original_interval[1],
+        maximum_lifetime_ns=pins[4], maximum_clock_skew_ns=pins[5])
+    bound = min(bound, window[4])
+    complete_original = _read_and_sign_on_work(candidate=candidate, configuration=reader_config,
+        enrollment=enrollment_bytes, root_public_key=root_public_key,
+        completion_private_key=completion_private_key, pins=pins, window=window, bound=bound,
+        not_before_epoch_ns=live(), not_before_monotonic_ns=last_monotonic, work=work)
+    _material, complete, complete_digest = authorization._verify_request_on_work(
+        request_bytes=complete_original, enrollment_bytes=enrollment_bytes,
+        root_public_key=root_public_key, now_epoch_ns=live(), work=work)
+    # Only the real fixed client can publish the completion. A generic executor
+    # reply or a caller-provided receipt cannot reach the signing suffix.
+    completion_original = evidence.production._callback(work,
+        lambda: transport._exchange_on_configuration(decision_config,
+            action="complete", request_bytes=complete_original, deadline_ns=bound))
+    live()
+    receipt = authorization._verify_receipt_on_work(receipt_bytes=completion_original,
+        enrollment_bytes=enrollment_bytes, root_public_key=root_public_key, work=work)
+    joins = {"action": "complete", "enrollmentDigest": material.enrollment_digest,
+        "databaseId": expected_database_id, "generationDigest": expected_generation_digest,
+        "requestDigest": complete_digest, "sequence": expected_pending_sequence + 1,
+        "previousHeadDigest": expected_pending_head_digest, "fence": expected_fence,
+        "pendingRequestDigest": candidate.marker["pending_request_digest"],
+        "beforeVectorDigest": candidate.marker["before_vector_digest"],
+        "afterVectorDigest": candidate.marker["after_vector_digest"],
+        "issuedAtEpochNs": complete["issuedAtEpochNs"], "expiresAtEpochNs": complete["expiresAtEpochNs"]}
+    for name, wanted in joins.items():
+        evidence.plan._same(receipt[name], wanted, work, "native durable completion receipt changed")
+    result = candidate.result
+    marker_original = work.wire(candidate.marker)
+    work.charge(hashes=2, input_bytes=len(marker_original) + len(completion_original))
+    payload = {"schema": native.ACKNOWLEDGMENT_SCHEMA, "operation": native.RECEIPT,
+        **{name: result[name] for name in ("requestDigest", "authorizationSha256", "preparationSha256",
+            "scope", "reviewDigest", "receiptId", "receiptExpiresAtEpochNs")},
+        "commitMarkerSha256": "sha256:" + hashlib.sha256(marker_original).hexdigest(),
+        "completionReceiptSha256": "sha256:" + hashlib.sha256(completion_original).hexdigest(),
+        "afterRootVectorDigest": candidate.marker["after_vector_digest"],
+        "committedAtEpochNs": live(),
+        "expiresAtEpochNs": min(window[3], result["expiresAtEpochNs"], receipt["expiresAtEpochNs"])}
+    payload_original = work.wire(payload)
+    work.charge(input_bytes=len(native.ACKNOWLEDGMENT_SCHEMA) + 1 + len(payload_original))
+    message = native.ACKNOWLEDGMENT_SCHEMA.encode("ascii") + b"\0" + payload_original
+    with signers._borrow(process, purpose="committed-disclosure") as signer:
+        signature = evidence.production._callback(work, lambda: signer.sign(message))
+        encoded = authorization.transport._encode(signature, work)
+        envelope = {"schema": native.ACKNOWLEDGMENT_SCHEMA.replace("serverware.native", "serverware.signedNative", 1),
+            "payload": payload, "signatureBase64Url": encoded}
+        original = work.wire(envelope).decode("ascii")
+        native.verify_commit_acknowledgment_original(original, public_key=signer.public_key(), now_epoch_ns=live())
+    live()
+    return original
 
 
 def _match_custody_on_work(*, payload, candidate, actual_effects_digest,

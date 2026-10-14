@@ -44,6 +44,7 @@ from serverware import authority_successor_execution_grant as grants
 from serverware import authority_successor_execution_packet as packet
 from serverware import authority_oidc_session_activation_delivery_execution_packet as delivery_packet
 from serverware.authority_store import current_root_execution_sql as effects
+from serverware.authority_store import successor_execution_frames_sql as native_frames
 from serverware.authority_store.mutation_sql import _schema_name
 from serverware.authority_store.revocation_retained_sql import _closed, _literal
 
@@ -51,6 +52,7 @@ from serverware.authority_store.revocation_retained_sql import _closed, _literal
 ISSUE_FUNCTION = "serverware_policy_authority_issue_successor_execution"
 EXECUTE_FUNCTION = "serverware_policy_authority_execute_successor"
 READ_FUNCTION = "serverware_policy_authority_read_successor_execution"
+FRAME_FUNCTION = "serverware_policy_authority_issue_successor_frame"
 ISSUER_IDENTITY_DOMAIN = "serverware.policyAuthoritySuccessorIssuerSession/v1"
 EXECUTOR_IDENTITY_DOMAIN = "serverware.policyAuthoritySuccessorExecutorSession/v1"
 RECOVERY_IDENTITY_DOMAIN = "serverware.policyAuthoritySuccessorRecoverySession/v1"
@@ -469,6 +471,7 @@ def _packet(namespace):
             {_originals(namespace)}
             {_bindings(namespace)}
         END IF;
+        {native_frames.closure_body_sql(namespace, integer=_integer, digests=_digests, live=_live)}
         {_live()}
     """
 
@@ -522,7 +525,7 @@ def _admission(namespace, role, owner_role, pins, domain, *, recovery=False):
 def successor_execution_functions_sql(namespace: str, *, issuer_role: str, executor_role: str,
         recovery_role: str, owner_role: str, issuer_pins: tuple, executor_pins: tuple,
         recovery_pins: tuple) -> str:
-    """Render fixed issue2/consume2/read2; caller owns install/ACL/catalog."""
+    """Render fixed frame4/issue2/consume2/read2; caller owns install/ACL/catalog."""
     _schema_name(namespace)
     for role in (issuer_role, executor_role, recovery_role, owner_role):
         if type(role) is not str or re.fullmatch(r"[a-z][a-z0-9_]{0,62}", role) is None:
@@ -543,6 +546,7 @@ def successor_execution_functions_sql(namespace: str, *, issuer_role: str, execu
             *issuer_pins[3:], *issuer_pins[:3])) + ")")
     common = f"""
         {effects.current_root_execution_declarations_sql()}
+        {native_frames.declarations_sql(namespace)}
         sxe_row {namespace}.{table}%ROWTYPE;
         sxe_packet_text text; sxe_packet_digest text; sxe_packet jsonb; sxe_spec jsonb;
         sxe_canonical text; sxe_text text; sxe_raw bytea; sxe_signature bytea;
@@ -620,6 +624,8 @@ def successor_execution_functions_sql(namespace: str, *, issuer_role: str, execu
         IF NOT {_closed('sxe_packet', packet.PACKET_FIELDS)}
             OR sxe_packet->>'schema' IS DISTINCT FROM {_literal(packet.SCHEMA)}
         THEN RAISE EXCEPTION 'successor recovery packet is not the closed source shape'; END IF;
+        IF sxe_packet->>'operation' = {_literal(native_frames.OPERATION)}
+        THEN RAISE EXCEPTION 'native successor historical completion is not available'; END IF;
         {_wire(namespace, 'sxe_packet', 'sxe_canonical', packet.MAX_BYTES)}
         IF sxe_canonical IS DISTINCT FROM sxe_packet_text
         THEN RAISE EXCEPTION 'successor recovery packet bytes are not canonical'; END IF;
@@ -658,6 +664,10 @@ def successor_execution_functions_sql(namespace: str, *, issuer_role: str, execu
         END;
         $serverware_successor_custody$;
     """) for name, arguments, returns, role, pins, domain, body in (
+        (FRAME_FUNCTION, "supplied_pending_decision_digest text, supplied_packet_digest text, supplied_frame_ordinal bigint, supplied_frame bytea",
+            "TABLE(frame_ordinal bigint, byte_count bigint, bytes_digest text)",
+            issuer_role, issuer_pins, ISSUER_IDENTITY_DOMAIN,
+            native_frames.append_body_sql(namespace, live=_live)),
         (ISSUE_FUNCTION, "supplied_packet_json text, supplied_packet_digest text",
             "TABLE(pending_decision_digest text, packet_digest text, issued_at_epoch_ns bigint, expires_at_epoch_ns bigint)",
             issuer_role, issuer_pins, ISSUER_IDENTITY_DOMAIN, issue),

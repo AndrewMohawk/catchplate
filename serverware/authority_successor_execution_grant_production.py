@@ -49,13 +49,16 @@ class _HeldInputs:
     original_bytes: int
     activation_custody: object | None
     live_window: tuple | None
+    native_review_owner: object | None
+    native_review_frames: tuple | None
 
 
 def _produce_on_work(*, operation, originals, expectations, planner_public_key,
         operation_public_key, before_vector_bytes, grant_enrollment_bytes,
         current_root_enrollment_bytes, root_public_key, authorizer_private_key,
         expected_authorization_digest, deadline_epoch_ns, work, transport_deadline_ns=None,
-        activation_custody=None, live_window=None):
+        activation_custody=None, live_window=None, native_review_owner=None,
+        native_review_frames=None, session_token_original=None):
     """Sign original-plan-derived claims once on the supplied cumulative work.
 
     ``expected_authorization_digest`` must come from independently admitted
@@ -72,14 +75,17 @@ def _produce_on_work(*, operation, originals, expectations, planner_public_key,
         root_public_key=root_public_key, authorizer_private_key=authorizer_private_key,
         deadline_epoch_ns=deadline_epoch_ns, work=work,
         transport_deadline_ns=transport_deadline_ns, activation_custody=activation_custody,
-        live_window=live_window)
-    return _produce_held_on_work(held, expected_authorization_digest, work=work)
+        live_window=live_window, native_review_owner=native_review_owner,
+        native_review_frames=native_review_frames)
+    return _produce_held_on_work(held, expected_authorization_digest, work=work,
+        session_token_original=session_token_original)
 
 
 def _hold_on_work(*, operation, originals, expectations, planner_public_key,
         operation_public_key, before_vector_bytes, grant_enrollment_bytes,
         current_root_enrollment_bytes, root_public_key, authorizer_private_key,
-        deadline_epoch_ns, work, transport_deadline_ns=None, activation_custody=None, live_window=None):
+        deadline_epoch_ns, work, transport_deadline_ns=None, activation_custody=None, live_window=None,
+        native_review_owner=None, native_review_frames=None):
     """Capture the caller graph before the dedicated authorization callback."""
     capture._SharedLedger(work)
     held_operation = operation
@@ -123,13 +129,29 @@ def _hold_on_work(*, operation, originals, expectations, planner_public_key,
         held_planner, held_operation_key, work)
     replay._activation_context_on_work(held_operation, held_custody,
         root_public_key=held_root, current_root_enrollment_bytes=held_current_enrollment, work=work)
+    replay._native_context_on_work(held_operation, native_review_owner,
+        root_public_key=held_root, current_root_enrollment_bytes=held_current_enrollment, work=work)
+    if held_operation == replay.NATIVE_REVIEW_OPERATION:
+        if held_window is None:
+            raise SuccessorExecutionGrantProductionError("native receipt grant requires its original live window")
+        from serverware import authority_native_jit_review_plan_stream as native_stream
+
+        if (type(native_review_frames) is not tuple
+                or not 0 < len(native_review_frames) <= native_stream.MAX_FRAMES
+                or any(type(raw) is not bytes or not 0 < len(raw) <= native_stream.FRAME_BYTES
+                    for raw in native_review_frames)
+                or sum(map(len, native_review_frames)) > native_stream.MAX_ORIGINAL_BYTES):
+            raise SuccessorExecutionGrantProductionError("native receipt grant requires immutable bounded originals")
+    elif native_review_frames is not None:
+        raise SuccessorExecutionGrantProductionError("native receipt frames cannot authorize another family")
     return _HeldInputs(held_operation, held_originals, held_before,
         held_grant_enrollment, held_current_enrollment, held_root, held_signer,
         held_planner, held_operation_key, owned_expectations, held_deadline,
-        inherited, original_bytes, held_custody, held_window)
+        inherited, original_bytes, held_custody, held_window, native_review_owner, native_review_frames)
 
 
-def _produce_held_on_work(held, held_authorization, *, work, request_binding=None):
+def _produce_held_on_work(held, held_authorization, *, work, request_binding=None,
+        session_token_original=None):
     """Shared private suffix; a binding is only from the raw-auth composition.
 
     No externally exposed producer accepts a successful authorization carrier.
@@ -147,6 +169,10 @@ def _produce_held_on_work(held, held_authorization, *, work, request_binding=Non
     held_deadline, inherited = held.deadline, held.inherited
     owned_expectations = held.expectations
     activation = held_operation == replay.ACTIVATION_OPERATION
+    native_review = held_operation == replay.NATIVE_REVIEW_OPERATION
+    if (native_review and request_binding is not None
+            or not native_review and session_token_original is not None):
+        raise SuccessorExecutionGrantProductionError("native possession cannot authorize another purpose")
     if activation and request_binding is not None:
         from serverware import authority_oidc_session_activation_execution_authorization as activation_authorization
 
@@ -252,8 +278,10 @@ def _produce_held_on_work(held, held_authorization, *, work, request_binding=Non
     replayed = replay._replay_on_work(operation=held_operation, originals=held_originals,
         expectations=owned_expectations, planner_public_key=held_planner,
         operation_public_key=held_operation_key, before_vector_bytes=held_before, work=work,
-        activation_custody=held.activation_custody, live_window=window if activation else None,
-        transport_deadline_ns=bound if activation else None)
+        activation_custody=held.activation_custody, live_window=window if activation or native_review else None,
+        transport_deadline_ns=bound if activation or native_review else None,
+        native_review_owner=held.native_review_owner, native_review_frames=held.native_review_frames,
+        session_token_original=session_token_original)
     issued, original_expires = replayed.original_interval
     if request_binding is not None:
         if activation:

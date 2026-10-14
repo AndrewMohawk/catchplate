@@ -158,7 +158,8 @@ def _produce_reserve_on_work(*, operation, originals, expectations, planner_publ
         operation_public_key, before_vector_bytes, enrollment_bytes, root_public_key,
         computation_private_key, capability_digest, predecessor_sequence,
         predecessor_head_digest, fence, deadline_epoch_ns, work, transport_deadline_ns=None,
-        live_window=None, activation_custody=None):
+        live_window=None, activation_custody=None, native_review_owner=None,
+        native_review_frames=None, session_token_original=None):
     """Replay genuine originals and sign one nonrenewing reserve control.
 
     A fresh request requires live original history. No new control can extend
@@ -167,7 +168,7 @@ def _produce_reserve_on_work(*, operation, originals, expectations, planner_publ
     """
     evidence.capture._SharedLedger(work)
     held_operation, held_custody = operation, activation_custody
-    if type(held_operation) is str and held_operation == replay.ACTIVATION_OPERATION:
+    if type(held_operation) is str and held_operation in (replay.ACTIVATION_OPERATION, replay.NATIVE_REVIEW_OPERATION):
         if live_window is None:
             raise CurrentRootComputationError("activation computation requires its original supplied window")
         authorization.shape._integer(transport_deadline_ns, minimum=1)
@@ -217,10 +218,14 @@ def _produce_reserve_on_work(*, operation, originals, expectations, planner_publ
     live()
     replay._activation_context_on_work(held_operation, held_custody,
         root_public_key=held_root, current_root_enrollment_bytes=held_enrollment, work=work)
+    replay._native_context_on_work(held_operation, native_review_owner,
+        root_public_key=held_root, current_root_enrollment_bytes=held_enrollment, work=work)
     replayed = replay._replay_on_work(operation=held_operation, originals=held_originals,
         expectations=owned, planner_public_key=planner_key,
         operation_public_key=operation_key, before_vector_bytes=held_before, work=work,
-        activation_custody=held_custody, live_window=held_window, transport_deadline_ns=bound)
+        activation_custody=held_custody, live_window=held_window, transport_deadline_ns=bound,
+        native_review_owner=native_review_owner, native_review_frames=native_review_frames,
+        session_token_original=session_token_original)
     live()
     produced = _sign_replayed_on_work(replayed=replayed, enrollment_bytes=held_enrollment,
         root_public_key=held_root, computation_private_key=held_signer,
@@ -244,7 +249,7 @@ def _sign_replayed_on_work(*, replayed, enrollment_bytes, root_public_key,
     grant verification remains outside this module to avoid a dependency cycle.
     """
     evidence.capture._SharedLedger(work)
-    if replayed.operation == replay.ACTIVATION_OPERATION:
+    if replayed.operation in (replay.ACTIVATION_OPERATION, replay.NATIVE_REVIEW_OPERATION):
         if live_window is None:
             raise CurrentRootComputationError("activation signing requires its original supplied window")
         authorization.shape._integer(transport_deadline_ns, minimum=1)

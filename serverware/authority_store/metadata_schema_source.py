@@ -3281,7 +3281,7 @@ def metadata_base_schema_source() -> str:
                 ),
                 CHECK (
                     source_revision =
-                        'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                        'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 ),
                 CHECK (
                     length(structural_manifest_json)
@@ -3336,7 +3336,7 @@ def metadata_base_schema_source() -> str:
                     CHECK (schema_version = 9),
                     CHECK (
                         source_revision =
-                            'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                            'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                     ),
                     CHECK (
                         function_name =
@@ -3663,7 +3663,7 @@ def metadata_base_schema_source() -> str:
                     CHECK (committed_at_epoch_ns >= 0),
                     CHECK (
                         source_revision =
-                        'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                        'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                     )
                 );
 
@@ -3784,7 +3784,7 @@ def metadata_base_schema_source() -> str:
                     ),
                     CHECK (
                         source_revision =
-                        'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                        'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                     )
                 );
 
@@ -3901,7 +3901,7 @@ def metadata_base_schema_source() -> str:
                     CHECK (committed_at_epoch_ns >= 0),
                     CHECK (
                         source_revision =
-                            'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                            'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                     ),
                     CHECK (
                         length(response_json) BETWEEN 2 AND 75497472
@@ -4048,7 +4048,7 @@ def metadata_base_schema_source() -> str:
                     CHECK (committed_at_epoch_ns >= 0),
                     CHECK (
                         source_revision =
-                            'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                            'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                     ),
                     CHECK (
                         length(response_json) BETWEEN 2 AND 75497472
@@ -8825,7 +8825,7 @@ def metadata_base_schema_source() -> str:
                 CHECK (finalized_at_epoch_ns >= 0),
                 CHECK (
                     source_revision =
-                        'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                        'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 ),
                 CHECK (length(identity_json) BETWEEN 2 AND 4194304),
                 CHECK (length(manifest_json) BETWEEN 2 AND 4194304),
@@ -8878,7 +8878,7 @@ def metadata_base_schema_source() -> str:
                 CHECK (page_count > 0),
                 CHECK (
                     source_revision =
-                        'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                        'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                 ),
                 CHECK (expires_at_epoch_ns > prepared_at_epoch_ns),
                 CHECK (length(identity_json) BETWEEN 2 AND 4194304),
@@ -9072,7 +9072,7 @@ def metadata_base_schema_source() -> str:
                     ),
                     CHECK (
                         source_revision =
-                            'serverware.policyCandidateAuthoritySource/2026-07-30.350'
+                            'serverware.policyCandidateAuthoritySource/2026-07-30.351'
                     ),
                     CHECK (
                         length(authorization_material_json)

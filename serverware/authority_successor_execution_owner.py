@@ -31,6 +31,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from contextlib import contextmanager
+import hashlib
 import os
 import time
 
@@ -86,6 +87,8 @@ _SEARCH_PATH = "SET LOCAL search_path TO serverware_metadata, pg_catalog, pg_tem
 _WAIT_TIMEOUTS = ("lock_timeout", "idle_in_transaction_session_timeout", "statement_timeout")
 _ISSUE_SQL = ("SELECT * FROM serverware_metadata."
     "serverware_policy_authority_issue_successor_execution(%s, %s)")
+_FRAME_SQL = ("SELECT * FROM serverware_metadata."
+    "serverware_policy_authority_issue_successor_frame(%s, %s, %s, %s)")
 _EXECUTE_SQL = ("SELECT serverware_metadata.serverware_policy_authority_execute_successor(%s, %s) "
     "AS marker_json")
 _READ_SQL = ("SELECT serverware_metadata.serverware_policy_authority_read_successor_execution(%s, %s) "
@@ -96,6 +99,54 @@ _BOUNDED_READ_SQL = ("WITH held AS MATERIALIZED (SELECT serverware_metadata."
     "AS packet_json FROM held")
 _ISSUE_FIELDS = frozenset({"pending_decision_digest", "packet_digest",
     "issued_at_epoch_ns", "expires_at_epoch_ns"})
+
+
+def _issue_native_frames_on_work(prepared, *, one, window, bound, work):
+    """Fixed same-transaction suffix after genuine replay, not a packet API.
+
+    Keep the existing per-original source budget: a large stream never enters
+    one aggregate work or SQL parameter. This function receives only this
+    issuer invocation's private prepared output and fixed SQL continuation.
+    """
+    from serverware import authority_native_jit_review_plan_stream as stream
+
+    if prepared.native_manifest_original is None:
+        if prepared.native_frames != ():
+            raise SuccessorExecutionOwnerError("native frame inventory has no original manifest")
+        return
+    # Request identity is part of the manifest already genuinely replayed by
+    # packet preparation. SQL independently rejoins it to the signed packet.
+    work.charge(input_bytes=3 * len(prepared.native_manifest_original))
+    manifest = stream.reads.contract.grammar.document(
+        prepared.native_manifest_original.decode("ascii"), stream.MAX_MANIFEST_BYTES)
+    manifest, count = stream._manifest(prepared.native_manifest_original,
+        packet.pending.replay.NATIVE_REVIEW_OPERATION, manifest["read"]["requestDigest"], work)
+    if len(prepared.native_frames) != count:
+        raise SuccessorExecutionOwnerError("native frame inventory changed after genuine replay")
+    budget = stream._StreamWork(work, window, bound, len(manifest["originals"]))
+    ordinal = 0
+    for leaf_index, leaf in enumerate(manifest["originals"]):
+        with budget.stage(leaf_index) as child:
+            offset = 0
+            while offset < leaf["byteCount"]:
+                raw = prepared.native_frames[ordinal]
+                size = min(stream.FRAME_BYTES, leaf["byteCount"] - offset)
+                if len(raw) != size:
+                    raise SuccessorExecutionOwnerError("native original frame schedule changed")
+                child.charge(hashes=1, input_bytes=len(raw))
+                digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+                row = one(_FRAME_SQL, (prepared.pending_decision_digest,
+                    prepared.packet_digest, ordinal, raw))
+                wanted = {"frame_ordinal": ordinal, "byte_count": size, "bytes_digest": digest}
+                authorization.shape._object(row, frozenset(wanted), "native frame durable readback")
+                if any(type(row[name]) is not type(value) for name, value in wanted.items()):
+                    raise SuccessorExecutionOwnerError("native frame readback type changed")
+                authorization.plan._same(row, wanted, child, "native frame literal readback changed")
+                offset += size
+                ordinal += 1
+    budget.finish()
+    if ordinal != count:
+        raise SuccessorExecutionOwnerError("native frame upload is incomplete")
 
 
 def _configuration(config, role):
@@ -292,6 +343,8 @@ def _run_on_configuration(config, *, purpose, parameters, expected, live_window,
                 catalog()
                 waits()
                 if purpose == "issue":
+                    if type(expected) is packet._PreparedCustody:
+                        _issue_native_frames_on_work(expected, one=one, window=window, bound=bound, work=work)
                     row = one(_ISSUE_SQL, parameters)
                     authorization.shape._object(row, _ISSUE_FIELDS, "successor custody readback")
                     wanted = {"pending_decision_digest": expected.pending_decision_digest,
@@ -365,7 +418,8 @@ class SuccessorExecutionIssuer:
             grant_bytes, grant_enrollment_bytes, expected_authorization_digest,
             expected_database_id, expected_generation_digest, expected_pending_sequence,
             expected_pending_head_digest, expected_fence, live_window, work,
-            transport_deadline_ns=None, activation_custody=None):
+            transport_deadline_ns=None, activation_custody=None, native_review_owner=None,
+            native_review_frames=None, session_token_original=None):
         held_custody = activation_custody
         if type(operation) is str and operation == packet.pending.replay.ACTIVATION_OPERATION:
             authorization.shape._integer(transport_deadline_ns, minimum=1)
@@ -380,7 +434,8 @@ class SuccessorExecutionIssuer:
             expected_generation_digest=expected_generation_digest, expected_pending_sequence=expected_pending_sequence,
             expected_pending_head_digest=expected_pending_head_digest, expected_fence=expected_fence,
             live_window=window, work=work, transport_deadline_ns=bound,
-            activation_custody=held_custody)
+            activation_custody=held_custody, native_review_owner=native_review_owner,
+            native_review_frames=native_review_frames, session_token_original=session_token_original)
         work.charge(input_bytes=len(prepared.packet_bytes))
         text = prepared.packet_bytes.decode("ascii")
         work.prepare_utf8(prepared.packet_digest)

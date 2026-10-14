@@ -1739,6 +1739,7 @@ _POLICY_AUTHORITY_RUNTIME_INACCESSIBLE_TABLES = frozenset(
     {
         authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE,
         authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE,
+        authority_contract.SUCCESSOR_EXECUTION_FRAME_TABLE,
     }
 )
 _POLICY_AUTHORITY_EXECUTOR_FUNCTION_SIGNATURES = tuple(
@@ -1832,6 +1833,7 @@ _POLICY_AUTHORITY_FRAMEWORK_CUSTODY_TABLES = frozenset(
     } | set(authority_contract.POSTGRES_COUNTED_STORE_TABLES)
     | {authority_contract.CURRENT_ROOT_COMMIT_MARKER_TABLE,
        authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE,
+       authority_contract.SUCCESSOR_EXECUTION_FRAME_TABLE,
        authority_contract.JIT_ORIGINAL_PAGE_TABLE}
 )
 _POLICY_AUTHORITY_OPERATION_READ_TABLES = MappingProxyType(
@@ -3625,9 +3627,10 @@ def _seal_postgres_schema_acl(
     }:
         raise error_type("metadata completion reader must be a separate fixed role")
     successor_functions = ({
-        authority_contract.SUCCESSOR_ISSUER_ROLE: authority_contract.SUCCESSOR_ISSUE_FUNCTION,
-        authority_contract.SUCCESSOR_EXECUTOR_ROLE: authority_contract.SUCCESSOR_EXECUTE_FUNCTION,
-        authority_contract.SUCCESSOR_RECOVERY_ROLE: authority_contract.SUCCESSOR_READ_FUNCTION,
+        authority_contract.SUCCESSOR_ISSUER_ROLE: (
+            authority_contract.SUCCESSOR_ISSUE_FUNCTION, authority_contract.SUCCESSOR_FRAME_FUNCTION),
+        authority_contract.SUCCESSOR_EXECUTOR_ROLE: (authority_contract.SUCCESSOR_EXECUTE_FUNCTION,),
+        authority_contract.SUCCESSOR_RECOVERY_ROLE: (authority_contract.SUCCESSOR_READ_FUNCTION,),
     } if completion_enabled else {})
     if set(successor_functions) & {
         runtime_role, authority_executor_role, authority_verifier_role,
@@ -4134,7 +4137,8 @@ def _seal_postgres_schema_acl(
                 + executor_role_name
             )
             for table in sorted(runtime_read_only_tables):
-                if table == authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE:
+                if table in {authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE,
+                        authority_contract.SUCCESSOR_EXECUTION_FRAME_TABLE}:
                     continue
                 table_name = _policy_candidate_authority_identifier(table)
                 cur.execute(
@@ -4188,12 +4192,14 @@ def _seal_postgres_schema_acl(
             for identity_role in (runtime_role, executor_role, verifier_role):
                 cur.execute("GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO "
                     + _policy_candidate_authority_identifier(identity_role))
-            for successor_role, function in successor_functions.items():
+            for successor_role, functions in successor_functions.items():
                 successor_role_name = _policy_candidate_authority_identifier(successor_role)
-                function_name = _policy_candidate_authority_identifier(function)
                 cur.execute("GRANT USAGE ON SCHEMA " + schema_name + " TO " + successor_role_name)
-                cur.execute("GRANT EXECUTE ON FUNCTION " + schema_name + "." + function_name
-                    + "(text, text) TO " + successor_role_name)
+                for function in functions:
+                    function_name = _policy_candidate_authority_identifier(function)
+                    arguments = ", ".join(authority_contract.SUCCESSOR_EXECUTION_FUNCTION_SIGNATURES[function])
+                    cur.execute("GRANT EXECUTE ON FUNCTION " + schema_name + "." + function_name
+                        + "(" + arguments + ") TO " + successor_role_name)
             for materializer_sql in (_policy_file_read_sql, _policy_file_genesis_sql):
                 materializer = _policy_candidate_authority_identifier(materializer_sql.ROLE)
                 materializer_function = _policy_candidate_authority_identifier(materializer_sql.FUNCTION)
@@ -4421,8 +4427,8 @@ def _seal_postgres_schema_acl(
             "|| ')' = ANY(%s) "
             "AND grant_entry.privilege_type = 'EXECUTE' "
             "AND NOT grant_entry.is_grantable)"
-            " OR (grantee.rolname = %s AND function_record.proname = %s "
-            "AND pg_catalog.oidvectortypes(function_record.proargtypes) = 'text, text' "
+            " OR (grantee.rolname = %s AND function_record.proname || '(' || "
+            "pg_catalog.oidvectortypes(function_record.proargtypes) || ')' = ANY(%s) "
             "AND grant_entry.privilege_type = 'EXECUTE' AND NOT grant_entry.is_grantable)"
             " OR (grantee.rolname = %s AND function_record.proname = %s "
             "AND pg_catalog.oidvectortypes(function_record.proargtypes) = 'text, text' "
@@ -4446,7 +4452,8 @@ def _seal_postgres_schema_acl(
                 planner_writer_role,
                 planner_function_identities,
                 authority_contract.SUCCESSOR_ISSUER_ROLE if completion_enabled else "",
-                authority_contract.SUCCESSOR_ISSUE_FUNCTION if completion_enabled else "",
+                [name + "(" + ", ".join(authority_contract.SUCCESSOR_EXECUTION_FUNCTION_SIGNATURES[name]) + ")"
+                    for name in successor_functions.get(authority_contract.SUCCESSOR_ISSUER_ROLE, ())],
                 authority_contract.SUCCESSOR_EXECUTOR_ROLE if completion_enabled else "",
                 authority_contract.SUCCESSOR_EXECUTE_FUNCTION if completion_enabled else "",
                 authority_contract.SUCCESSOR_RECOVERY_ROLE if completion_enabled else "",
@@ -4838,7 +4845,8 @@ def _seal_postgres_schema_acl(
                 kind = str(relation["relkind"])
                 expected = (
                     set()
-                    if name == authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE
+                    if name in {authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE,
+                        authority_contract.SUCCESSOR_EXECUTION_FRAME_TABLE}
                     else
                     {
                         "SELECT",
@@ -6762,6 +6770,10 @@ def _legacy_migrate_policy_candidate_authority_offline(
                 raise PolicyCandidateAuthorityError(
                     "successor execution custody requires a separately reviewed migration"
                 )
+            if _metadata_table_exists(conn, authority_contract.SUCCESSOR_EXECUTION_FRAME_TABLE):
+                raise PolicyCandidateAuthorityError(
+                    "successor execution frame custody requires a separately reviewed migration"
+                )
             for table in _POLICY_CANDIDATE_AUTHORITY_REPLACEABLE_TABLES:
                 if _metadata_table_exists(conn, table):
                     conn.execute(
@@ -7152,6 +7164,10 @@ def _prepare_policy_candidate_authority_schema(
     if _metadata_table_exists(conn, authority_contract.SUCCESSOR_EXECUTION_CUSTODY_TABLE):
         raise PolicyCandidateAuthorityError(
             "successor execution custody requires a separately reviewed migration"
+        )
+    if _metadata_table_exists(conn, authority_contract.SUCCESSOR_EXECUTION_FRAME_TABLE):
+        raise PolicyCandidateAuthorityError(
+            "successor execution frame custody requires a separately reviewed migration"
         )
     for table in _POLICY_CANDIDATE_AUTHORITY_REPLACEABLE_TABLES:
         if _metadata_table_exists(conn, table):
@@ -21130,8 +21146,8 @@ def _validate_policy_authority_owner_apply_function(
         "pg_catalog.to_regrole(%s)::pg_catalog.oid "
         "AND grant_entry.privilege_type = 'EXECUTE' "
         "AND NOT grant_entry.is_grantable)"
-        " OR (function_record.proname = %s "
-        "AND pg_catalog.oidvectortypes(function_record.proargtypes) = 'text, text' "
+        " OR (function_record.proname || '(' || "
+        "pg_catalog.oidvectortypes(function_record.proargtypes) || ')' = ANY(%s) "
         "AND grant_entry.grantee = pg_catalog.to_regrole(%s)::pg_catalog.oid "
         "AND grant_entry.privilege_type = 'EXECUTE' AND NOT grant_entry.is_grantable)"
         " OR (function_record.proname = %s "
@@ -21165,7 +21181,8 @@ def _validate_policy_authority_owner_apply_function(
                 for name, types in AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES
             ),
             _METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE,
-            authority_contract.SUCCESSOR_ISSUE_FUNCTION,
+            [name + "(" + ", ".join(authority_contract.SUCCESSOR_EXECUTION_FUNCTION_SIGNATURES[name]) + ")"
+                for name in (authority_contract.SUCCESSOR_ISSUE_FUNCTION, authority_contract.SUCCESSOR_FRAME_FUNCTION)],
             authority_contract.SUCCESSOR_ISSUER_ROLE,
             authority_contract.SUCCESSOR_EXECUTE_FUNCTION,
             authority_contract.SUCCESSOR_EXECUTOR_ROLE,
@@ -21419,7 +21436,8 @@ def _validate_policy_authority_owner_apply_function(
             if row["proname"] in issuer_function_types
         )
         or any(
-            str(row["argument_types"]) != "text, text"
+            str(row["argument_types"]) != ", ".join(
+                authority_contract.SUCCESSOR_EXECUTION_FUNCTION_SIGNATURES[row["proname"]])
             or row["prosecdef"] is not True
             or row["proisstrict"] is not False
             or str(row["provolatile"]) != "v"

@@ -8,6 +8,26 @@ admission and a pending-only atomic transition. A successful submission means
 **review pending, not credential release**. This integration is not deployed or
 accepted end to end; it does not establish native startup or working approvals.
 
+## Review receipt implementation checkpoint
+
+The receipt path now carries the original native review frames through the
+existing grant, reserve, issuer and executor interfaces. Frames and the final
+packet share one transaction; the SQL closure checks the complete frame schedule
+before applying the receipt's four authenticated mutations. Session possession
+is transient and is not retained for unattended replay.
+
+The live completion entrypoint independently reads the committed marker and full
+root vector, publishes completion through the existing current-root client, and
+only then signs the purpose-bound disclosure acknowledgment. Historical native
+completion remains unavailable. Focused original-replay and schema/privilege
+checks passed; a real PostgreSQL commit and this completion path have not yet
+been exercised together.
+
+This is source implementation, not activation. The cold HTTP service connection,
+key-backed decision join and same-attempt proxy continuation are still missing.
+`native_jit_review_open_service.selected()` remains disabled, and the deployed
+ordinary instance has not been migrated to this new schema contract.
+
 ## What the new profile selects
 
 `--native-jit-review-startup-v26` selects the closed

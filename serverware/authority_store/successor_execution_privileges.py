@@ -1,7 +1,8 @@
 """Exact purpose-specific successor role privileges, without database IO.
 
-All three roles have zero relation/sequence privileges and exactly one protected
-function. The genuine generic verifier query supplies the complete effective
+All three roles have zero relation/sequence privileges. The issuer has exactly
+packet issue2 and bounded frame4; executor and recovery each have one function.
+The genuine generic verifier query supplies the complete effective
 schema/database/membership/column/PUBLIC checks. Closed source replacements
 change only the required function contract, never accept a caller inventory.
 This checks ACL and function metadata, not function/trigger source bodies.
@@ -37,25 +38,30 @@ SUCCESSOR_EXECUTION_PRIVILEGE_SQL = _replace_once(
     generic.VERIFIER_READ_PRIVILEGE_SQL, _REQUESTED,
     _REQUESTED + ",\n           %s::pg_catalog.text AS expected_function")
 SUCCESSOR_EXECUTION_PRIVILEGE_SQL = _replace_once(
-    SUCCESSOR_EXECUTION_PRIVILEGE_SQL, _FUNCTIONS, """    SELECT function_record.oid,
+    SUCCESSOR_EXECUTION_PRIVILEGE_SQL, _FUNCTIONS, f"""    SELECT function_record.oid,
            function_record.proowner, function_record.proacl, function_record.prokind,
            function_record.prosecdef, function_record.proisstrict,
            function_record.provolatile, function_record.proconfig,
            language.lanname, authority.role_oid, authority.nspowner, authority.namespace_name,
-           (function_record.proname::pg_catalog.text = authority.expected_function
-            AND pg_catalog.oidvectortypes(function_record.proargtypes) = 'text, text') AS expected
+           ((function_record.proname::pg_catalog.text = authority.expected_function
+             AND pg_catalog.oidvectortypes(function_record.proargtypes) = 'text, text')
+            OR (authority.expected_function = '{authority.SUCCESSOR_ISSUE_FUNCTION}'
+                AND function_record.proname::pg_catalog.text = '{authority.SUCCESSOR_FRAME_FUNCTION}'
+                AND pg_catalog.oidvectortypes(function_record.proargtypes) = 'text, text, bigint, bytea')) AS expected
     FROM authority
     JOIN pg_catalog.pg_proc AS function_record
       ON function_record.pronamespace = authority.namespace_oid
     LEFT JOIN pg_catalog.pg_language AS language ON language.oid = function_record.prolang""")
 SUCCESSOR_EXECUTION_PRIVILEGE_SQL = _replace_once(
-    SUCCESSOR_EXECUTION_PRIVILEGE_SQL, _FUNCTION_PRIVILEGE, """    SELECT 'function-privilege'
+    SUCCESSOR_EXECUTION_PRIVILEGE_SQL, _FUNCTION_PRIVILEGE, f"""    SELECT 'function-privilege'
     FROM metadata_functions
     WHERE pg_catalog.has_function_privilege(role_oid, oid, 'EXECUTE') IS DISTINCT FROM expected
        OR pg_catalog.has_function_privilege(role_oid, oid, 'EXECUTE WITH GRANT OPTION') IS NOT FALSE
     UNION ALL
     SELECT 'required-function'
-    WHERE (SELECT pg_catalog.count(*) FROM metadata_functions WHERE expected) <> 1
+    WHERE (SELECT pg_catalog.count(*) FROM metadata_functions WHERE expected)
+        IS DISTINCT FROM (SELECT CASE WHEN expected_function = '{authority.SUCCESSOR_ISSUE_FUNCTION}'
+            THEN 2 ELSE 1 END FROM authority)
     UNION ALL
     SELECT 'function-metadata'
     FROM metadata_functions
@@ -79,4 +85,6 @@ def successor_execution_privilege_check(*, role, namespace):
     function = (authority.SUCCESSOR_ISSUE_FUNCTION if role == authority.SUCCESSOR_ISSUER_ROLE
         else authority.SUCCESSOR_EXECUTE_FUNCTION if role == authority.SUCCESSOR_EXECUTOR_ROLE
         else authority.SUCCESSOR_READ_FUNCTION)
+    # Preserve the existing scalar interface used by the independent policy
+    # file readers. Only the source-fixed issuer function selects frame4 too.
     return SUCCESSOR_EXECUTION_PRIVILEGE_SQL, (role, namespace, [], function)

@@ -1,0 +1,64 @@
+name: Hosted guided prerequisites
+
+# Manual, setup-only probe. This does not deploy Serverware or run the guided
+# journey. It uses fresh GitHub VM resources, never homelab data or secrets.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hosted-guided-prerequisites-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prerequisites:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      TEST_IMAGE: python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+      DOCKER_HOST: unix:///var/run/docker.sock
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Provision the disposable runner prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Linux
+          probe_uid="$(id -u)"
+          probe_user="$(id -un)"
+          test "$probe_uid" -ne 0
+          test -f /sys/fs/cgroup/cgroup.controllers
+          mkdir -m 700 "$RUNNER_TEMP/serverware-hosted-prerequisites"
+          timeout --kill-after=2s 10s /usr/bin/docker --host unix:///var/run/docker.sock version --format '{{.Server.Version}}'
+          timeout --kill-after=2s 10s /usr/bin/docker --host unix:///var/run/docker.sock compose version --short
+          # This configures only this ephemeral GitHub VM's existing job user.
+          # A reachable user manager is measured below, never inferred here.
+          timeout --kill-after=2s 15s sudo loginctl enable-linger "$probe_user"
+          timeout --kill-after=2s 15s sudo systemctl start "user@${probe_uid}.service"
+          export XDG_RUNTIME_DIR="/run/user/$probe_uid"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          test -S "$XDG_RUNTIME_DIR/bus"
+          timeout --kill-after=2s 10s systemctl --user list-unit-files --no-legend --no-pager default.target
+          timeout --kill-after=5s 180s /usr/bin/docker --host unix:///var/run/docker.sock pull "$TEST_IMAGE"
+      - name: Check actual cgroup ownership and isolated loopback transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          # 60 seconds of probe work plus 20 seconds of cleanup, with an outer
+          # observation ceiling. A timeout never licenses a new create attempt.
+          timeout --kill-after=5s 90s python3 -I -S -B scripts/check_operator_hosted_prerequisites.py \
+            --output "$RUNNER_TEMP/serverware-hosted-prerequisites/result.json"
+      - name: Retain only the bounded public prerequisite receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: hosted-guided-prerequisites
+          path: ${{ runner.temp }}/serverware-hosted-prerequisites/result.json
+          if-no-files-found: warn
+          retention-days: 7

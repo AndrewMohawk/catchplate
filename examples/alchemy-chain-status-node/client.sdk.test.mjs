@@ -15,6 +15,14 @@ const ENV = { SERVERWARE_PROXY_URL: 'https://proxy.example.test',
   SERVERWARE_PROXY_TOKEN: 'synthetic_app_token', SERVERWARE_CA_FILE: '/not-read.pem',
   SERVERWARE_ALCHEMY_CHAIN: 'eth-mainnet' };
 
+function connectLater(Wire, options, callback) {
+  const wire = new Wire(options);
+  // Match a real connect/secureConnect event. An inline callback re-enters
+  // Undici's active resume loop, which intentionally ignores that nested call.
+  setImmediate(callback, null, wire);
+  return wire;
+}
+
 async function fixture(t, responseFor) {
   const forbid = () => { throw new Error('Offline SDK fixture forbids networking'); };
   t.mock.method(net.Socket.prototype, 'connect', forbid);
@@ -64,7 +72,7 @@ async function fixture(t, responseFor) {
   const { createPublicClient, http } = await import('viem');
   const { Agent, fetch, interceptors } = await import('undici');
   const agent = new Agent({ connections: 1, pipelining: 0, allowH2: false,
-    connect(options, callback) { callback(null, new Wire(options)); } });
+    connect(options, callback) { return connectLater(Wire, options, callback); } });
   t.after(async () => { await agent.destroy(); });
   const config = configuration(ENV);
   const sdk = createSdk(config, boundedDispatcher(agent, interceptors), { createPublicClient, http, fetch });
@@ -150,4 +158,14 @@ test('bounded actual SDK response rejects oversized JSON without retry', { timeo
   const f = await fixture(t, (call) => ({ body: { jsonrpc: '2.0', id: call.body.id, result: 'x'.repeat(RESPONSE_LIMIT) } }));
   await assert.rejects(perform(f.config, f.sdk));
   assert.equal(f.calls.length, 1);
+});
+
+test('in-memory connector delivers one connected socket only after returning', { timeout: 2000 }, async () => {
+  const options = { hostname: 'eth-mainnet.g.alchemy.com' }, calls = [];
+  class Wire { constructor(selected) { assert.equal(selected, options); } }
+  const wire = connectLater(Wire, options, (...args) => { calls.push(args); });
+  assert.ok(wire instanceof Wire);
+  assert.deepEqual(calls, []);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, [[null, wire]]);
 });

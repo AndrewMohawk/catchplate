@@ -33,6 +33,8 @@ from scripts.run_operator_x_examples_fixture import failure_site
 
 PREFIX = "/api/operator-demo/approvals"
 SCHEMA = "serverware.privateHostApprovalCheck/v1"
+ERROR_CODES = {"host_trusted_approval_required", "host_trusted_approval_outcome_unknown",
+    "host_trusted_approval_unavailable", "generic_header_not_allowed", "policy_snapshot_revoked"}
 
 
 class HostApprovalCheck(OperatorCatalogCheck):
@@ -41,7 +43,7 @@ class HostApprovalCheck(OperatorCatalogCheck):
 
     def __init__(self, args):
         super().__init__(args)
-        self.phase, self.basic_secret = "preflight", None
+        self.phase, self.basic_secret, self.failure_observation = "preflight", None, None
         network.assert_isolated_network()
         require(args.control_base == "http://127.0.0.1:3000"
             and args.management_base == "http://127.0.0.1:9091"
@@ -83,8 +85,21 @@ class HostApprovalCheck(OperatorCatalogCheck):
         code, output, error = run_curl(argv, private, min(12, self.timeout()))
         self.clean(output); self.clean(error)
         wire, separator, tail = output.rpartition(b"\nserverware-host-approval:")
+        status = re.fullmatch(rb"([0-9]{3}):([0-9]{3})\n", tail) if separator else None
+        self.failure_observation = {"curlExit": code, "connectStatus": int(status[1]) if status else None,
+            "httpStatus": int(status[2]) if status else None, "providerArrivals": None,
+            "stderrPresent": bool(error), "errorCode": None}
+        try:
+            document = json.loads(wire.partition(b"\r\n\r\n")[2])
+            code_value = document.get("error") if isinstance(document, dict) else None
+            if code_value is not None:
+                self.failure_observation["errorCode"] = code_value if code_value in ERROR_CODES else "other"
+        except (ValueError, TypeError):
+            pass
+        self.failure_observation["providerArrivals"] = self.count()
         require(separator and tail == ("200:" + str(expected_status) + "\n").encode()
-            and code == 0 and not error and self.count() == expected_count, "proxy result or provider count differs")
+            and code == 0 and not error and self.failure_observation["providerArrivals"] == expected_count,
+            "proxy result or provider count differs")
         head, separator, body = wire.partition(b"\r\n\r\n")
         require(separator and len(head) <= 16384 and head.startswith(("HTTP/1.1 " + str(expected_status) + " ").encode()),
             "origin response framing differs")
@@ -150,7 +165,7 @@ class HostApprovalCheck(OperatorCatalogCheck):
             "methods": ["POST"], "request_body_mode": "preserve_json_v1", "response_mode": V2_RESPONSE_MODE,
             "request_fields": [], "response_fields": [], "credential_input": "replace_exact",
             "placeholder": oracle.DUMMY_AUTHORIZATION, "query_keys": list(oracle.QUERY_KEYS),
-            "allowed_headers": ["accept", "user-agent"], "approval_mode": "host_review_v1"},
+            "allowed_headers": ["accept", "accept-encoding", "user-agent"], "approval_mode": "host_review_v1"},
             collection="access_rules", result_key="access_rule", event="operator_catalog.access_rule.created", creates=True, authority_changed=True)
         self.wait_catalog_loaded("approval_rule_loaded")
         self.phase = "first-request"
@@ -237,6 +252,8 @@ def main():
         result = {"schema": SCHEMA, "ok": False, "stage": check.phase if check else "preflight",
             "error": "host_approval_acceptance_failed", "exceptionType": type(error).__name__,
             "failureSite": failure_site(error, Path(__file__).resolve().parents[1])}
+        if check is not None and check.failure_observation is not None:
+            result["observation"] = check.failure_observation
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
     print(json.dumps(result, sort_keys=True), flush=True)

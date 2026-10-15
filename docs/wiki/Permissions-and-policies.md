@@ -51,11 +51,12 @@ Where the X posting quota capability is available, the UTC-day limit counts post
 
 The accepted ordinary model is **host-trusted review**, selected per permission
 as `approval_mode: host_review_v1`. It belongs to this same Serverware instance,
-not a separate demo. Deployment and connected verification are still pending;
-check the [project tracker](https://github.com/AndrewMohawk/serverware/blob/main/docs/project-completion.md)
-before relying on it.
+not a separate demo. It is deployed and passed connected synthetic-provider
+verification; real-provider use remains separate. Existing permissions are
+unchanged until explicitly edited. See the
+[project tracker](https://github.com/AndrewMohawk/serverware/blob/main/docs/project-completion.md#current-live-deployment).
 
-The intended flow is: the client receives HTTP 428 and a review link, the existing
+The flow is: the client receives HTTP 428 and a review link, the existing
 authenticated administrator reviews the exact request and chooses **Approve
 once** or **Deny**, then the client explicitly retries the same request. Approval
 expires and is one-use; decisions and consumption are audited. It does not allow

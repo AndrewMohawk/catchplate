@@ -52,8 +52,9 @@ After an uncertain renewal, preserve the helper's private journal and follow its
 
 ## Host-trusted request review
 
-This workflow is being implemented in the ordinary instance; these steps are not
-a claim that it is already deployed or verified. When the instance offers it:
+Host-trusted review is deployed in the ordinary instance and passed a connected
+synthetic-provider check. Existing permissions have not been changed; opt in only
+for the intended permission. This is not real-provider or hardware acceptance.
 
 1. Explicitly enable `host_review_v1` on the intended permission and wait for the
    matching policy to load. Do not combine it with the shared X daily quota.

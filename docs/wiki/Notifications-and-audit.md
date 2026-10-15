@@ -36,7 +36,7 @@ Each slot supports one to three total attempts. Only known pre-dispatch DNS, con
 
 ## Why an action alert might not arrive
 
-An enabled destination does not create an actionable source. The optional native observation bridge needs separately admitted owner/readiness information and the original action deadline. Legacy ordinary approval/JIT alerts remain suppressed. The new host-trusted review workflow is being implemented separately in this same app; its action-alert source must be advertised and verified before relying on delivery. Configuring Slack neither enables approvals nor starts a pilot.
+An enabled destination does not create an actionable source. The optional native observation bridge needs separately admitted owner/readiness information and the original action deadline. Legacy ordinary approval/JIT alerts remain suppressed. Host-trusted review is now deployed in this same app, but its action-alert source and receiver delivery require separate verification. Configuring Slack neither enables approvals nor starts a pilot.
 
 A real required action belongs on its authenticated review page. Notification links are locators, not bearer approvals, and delivery cannot extend the deadline. Check the source status as well as the destination/worker status. [Action-source boundary](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-notifications.md#what-messages-mean).
 
@@ -46,16 +46,17 @@ A real required action belongs on its authenticated review page. Notification li
 
 New workspace builds include **Pending actions** for saved request metadata.
 Deployment status is recorded in the
-[project tracker](https://github.com/AndrewMohawk/serverware/blob/main/docs/project-completion.md#pending-actions--implemented-deployment-pending).
+[project tracker](https://github.com/AndrewMohawk/serverware/blob/main/docs/project-completion.md#current-live-deployment).
 Choose **Select request** to inspect its ID, client, route, method, expiry and
 policy. Reopening its exact link keeps that selection; a missing request never
 silently selects another. The queue shows at most the first 100 visible pending
 records, so an absent record is not proof of approval or denial.
 
 An empty queue is different from a load or authentication failure. Refresh only
-reads metadata. The planned `host_review_v1` flow adds **Approve once** and
+reads metadata. The deployed `host_review_v1` flow adds **Approve once** and
 **Deny** for the existing authenticated administrator reviewing an exact request;
-it is not yet a deployed/verified capability or a security-key ceremony. The
+review shows metadata and a body hash, not body contents. It is not a security-key
+ceremony. The
 client explicitly retries the same request after approval; the approval expires
 and is one-use. A saved unknown decision outcome or uncertain provider write is
 not automatically retried. Notification delivery grants no authority and does

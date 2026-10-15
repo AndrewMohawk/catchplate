@@ -442,6 +442,8 @@ def validate_bindings(conn, catalog: dict | None = None, *, metadata_profile=Non
         from serverware import operator_workload_renewal_store
         operator_workload_renewal_store.validate(row)
     for row in catalog['access_rules']:
+        from serverware import operator_catalog_approvals
+        operator_catalog_approvals.validate(row)
         rule_content_modes(row)
         app, credential = applications.get(row['application_id']), credentials.get(row['credential_id'])
         if app is None or credential is None or row.get('route_id') != 'operator.' + row['id']:

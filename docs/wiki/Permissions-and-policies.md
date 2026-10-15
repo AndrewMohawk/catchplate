@@ -47,10 +47,34 @@ For npm publication, a window such as **09:00–17:00 UTC** is daily: start incl
 
 Where the X posting quota capability is available, the UTC-day limit counts posting **attempts** across all clients/connections for the verified account. Active permissions must agree on the restriction. An uncertain committed attempt is not refunded or automatically replayed, and the UI is not a live usage/reset dashboard. This ordinary trusted-host quota is not native rollback-proof authority. [Quota contract](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-x-posting-quotas.md).
 
+## Optional host-trusted approval
+
+The accepted ordinary model is **host-trusted review**, selected per permission
+as `approval_mode: host_review_v1`. It belongs to this same Serverware instance,
+not a separate demo. Deployment and connected verification are still pending;
+check the [project tracker](https://github.com/AndrewMohawk/serverware/blob/main/docs/project-completion.md)
+before relying on it.
+
+The intended flow is: the client receives HTTP 428 and a review link, the existing
+authenticated administrator reviews the exact request and chooses **Approve
+once** or **Deny**, then the client explicitly retries the same request. Approval
+expires and is one-use; decisions and consumption are audited. It does not allow
+arbitrary subsequent requests or automatically replay writes. Initially, do not
+combine this mode with the shared X daily posting quota.
+
+The review displays request metadata and a hash binding the submitted body, not
+the body contents. Approve only requests you recognize. Pending requests expire
+after five minutes; an approval lasts at most sixty seconds within that window.
+
+This trusts the server administrator: full host control can bypass the checks or
+alter local state. It does not require a per-action YubiKey/WebAuthn ceremony or
+provide TEE protection. Future hardware-backed enforcement is separate. See
+[review operations](https://github.com/AndrewMohawk/serverware/wiki/Operations-and-maintenance#host-trusted-request-review).
+
 ## Check activation and revocation
 
 **Saved · activation pending** means the permission is retained but not yet confirmed loaded by the proxy. **Active** confirms the matching policy, not provider health. Similarly, revocation may be **enforcement pending** until the updated policy loads. Use **Refresh activation** and investigate a persistent mismatch rather than recreating the permission.
 
 Revoking one permission retains its client and credential. Revoking a client also revokes its active permissions but retains shared credentials and other clients. Already-dispatched requests cannot be recalled. [Permission lifecycle](https://github.com/AndrewMohawk/serverware/blob/main/serverware/operator_demo_web/workspace_resources.js), [client lifecycle](https://github.com/AndrewMohawk/serverware/blob/main/serverware/operator_demo_web/workspace_applications.js).
 
-The files under [policies/](https://github.com/AndrewMohawk/serverware/tree/main/policies) are engineering examples, not a catalog to import wholesale. Some require authority unavailable in the ordinary workspace. There is no generic “require YubiKey” switch here that completes the separate protected-approval integration.
+The files under [policies/](https://github.com/AndrewMohawk/serverware/tree/main/policies) are engineering examples, not a catalog to import wholesale. Some require authority unavailable in the ordinary workspace. Ordinary host review is not a generic “require YubiKey” switch and does not complete the separate protected-approval integration.

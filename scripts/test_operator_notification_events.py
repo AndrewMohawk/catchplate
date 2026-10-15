@@ -142,6 +142,85 @@ class EventTests(unittest.TestCase):
         self.assertTrue(set(events.ACTION_EVENT_TYPES) <= set(events.AUDIT_EVENT_TYPES))
         self.assertFalse(any(kind.startswith("notification.") for kind in events.AUDIT_EVENT_TYPES))
 
+    def host_pending(self):
+        self.writer.execute("ALTER TABLE approval_requests ADD COLUMN approver_policy_json TEXT")
+        reviewer = "user:admin"
+        policy = {"schema": "serverware.hostTrustedApprovalReviewer/v1", "assurance": "host-trusted",
+            "reviewerId": reviewer, "maxUses": 1, "pendingTtlSeconds": 300, "approvalTtlSeconds": 60}
+        policy_json = json.dumps(policy, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        payload = {"assurance": "host-trusted", "approval_request_id": str(uuid.uuid4()),
+            "principal_id": "agent:operator-demo:" + str(uuid.uuid4()), "route_id": "operator." + str(uuid.uuid4()),
+            "credential_id": str(uuid.uuid4()), "credential_version": 1, "policy_hash": DIGEST,
+            "request_digest": DIGEST, "operation_digest": DIGEST, "method": "POST", "requested_at": REQUESTED, "expires_at": EXPIRES,
+            "reviewer_id": reviewer, "approver_policy_digest": "sha256:" + hashlib.sha256(policy_json.encode()).hexdigest(),
+            "url_commitment": "sha256:" + hashlib.sha256(CANARY.encode()).hexdigest()}
+        fields = ("route_id", "method", "expires_at", "principal_id", "credential_id", "credential_version",
+            "policy_hash", "request_digest", "operation_digest")
+        self.writer.execute("INSERT INTO approval_requests VALUES(" + ",".join("?" for _ in range(19)) + ")",
+            (payload["approval_request_id"], "pending", REQUESTED, *(payload[key] for key in fields),
+                60, 1, payload["approver_policy_digest"], payload["url_commitment"], CANARY, CANARY, policy_json))
+        self.writer.commit()
+        self.append(events.HOST_REQUESTED, payload, actor_type="proxy", actor=payload["principal_id"])
+        return payload
+
+    def test_host_requested_matches_exact_owned_metadata_without_reading_private_documents(self):
+        event = self.host_pending()
+        with self.reader(forbid_secrets=True) as conn:
+            batch, _ = events.read_batch(conn, events.EventCursor(), now_epoch_ms=NOW_MS)
+            action = batch[0].action_payload
+            self.assertTrue(events.host_action_payload(action))
+            self.assertEqual(action["review_path"], "/approvals/" + event["approval_request_id"] + "#pending-actions")
+            self.assertTrue(events.host_action_matches_source(conn, action, reviewer_id="user:admin", now_epoch_ms=NOW_MS))
+            self.assertFalse(events.host_action_matches_source(conn, action, reviewer_id="other-admin", now_epoch_ms=NOW_MS))
+            self.assertFalse(events.host_action_matches_source(conn, action, reviewer_id="user:admin", now_epoch_ms=NOW_MS + 60000))
+            self.assertFalse(events.native_action_payload(action))
+            self.assertNotIn(CANARY, json.dumps(batch[0].audit_payload) + json.dumps(action))
+        for field, changed in (("status", "approved"), ("expires_at", CREATED), ("approver_policy_json", "{}"),
+                ("request_digest", "sha256:" + "b" * 64), ("url", "sha256:" + "b" * 64),
+                ("credential_version", 2), ("grant_max_uses", 2)):
+            before = self.writer.execute("SELECT " + field + " FROM approval_requests").fetchone()[0]
+            self.writer.execute("UPDATE approval_requests SET " + field + "=?", (changed,)); self.writer.commit()
+            with self.subTest(field=field), self.reader(forbid_secrets=True) as conn:
+                self.assertFalse(events.host_action_matches_source(conn, action, reviewer_id="user:admin", now_epoch_ms=NOW_MS))
+                current, _ = events.read_batch(conn, events.EventCursor(), now_epoch_ms=NOW_MS)
+                self.assertIsNone(current[0].action_payload)
+                self.assertTrue(events.payload_matches_source(conn, batch[0].audit_payload, now_epoch_ms=NOW_MS))
+            self.writer.execute("UPDATE approval_requests SET " + field + "=?", (before,)); self.writer.commit()
+
+    def test_host_lifecycle_is_audit_only_except_requested_and_notes_never_escape(self):
+        requested = self.host_pending()
+        base = {key: requested[key] for key in events._HOST_COMMON}
+        for kind in ("reviewed", "approved", "denied", "expired", "claimed"):
+            event = dict(base)
+            if kind in {"reviewed", "approved", "denied"}:
+                event.update(review_receipt_id=str(uuid.uuid4()), review_digest=DIGEST)
+            if kind in {"approved", "denied"}:
+                event["note"] = CANARY
+            if kind == "claimed":
+                event["attempt_id"] = DIGEST
+            name = "operator.host_approval." + kind
+            self.append(name, event, actor_type="proxy" if kind == "claimed" else "admin",
+                actor=base["principal_id"] if kind == "claimed" else "user:admin")
+            self.assertIn(name, events.AUDIT_EVENT_TYPES)
+            self.assertNotIn(name, events.ACTION_EVENT_TYPES)
+        batch, _ = self.read()
+        self.assertEqual(len(batch), 6)
+        with self.reader(forbid_secrets=True) as conn:
+            for item in batch:
+                self.assertEqual(item.audit_payload["details"]["assurance"], "host-trusted")
+                self.assertTrue(events.payload_matches_source(conn, item.audit_payload, now_epoch_ms=NOW_MS))
+                self.assertNotIn(CANARY, json.dumps(item.audit_payload))
+            self.assertTrue(all(item.action_payload is None for item in batch[1:]))
+
+    def test_host_source_wrong_assurance_actor_or_private_fields_are_not_admitted(self):
+        event = self.host_pending()
+        _, cursor = self.read()
+        for changes in ({"assurance": "native"}, {"document": CANARY}, {"reviewer_id": None},
+                {"url_commitment": CANARY}, {"credential_version": True}):
+            self.append(events.HOST_REQUESTED, {**event, **changes}, actor_type="proxy", actor=event["principal_id"])
+        self.append(events.HOST_REQUESTED, event, actor_type="admin", actor="user:admin")
+        self.assertEqual(self.read(cursor)[0], ())
+
     def test_native_phase_filters_preserve_durable_source_metadata(self):
         records = [native_record(phase) for phase in ("prepare_available", "security_key_available", "confirmation_available")]
         for record in records:

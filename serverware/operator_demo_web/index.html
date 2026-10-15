@@ -154,6 +154,7 @@
 user-agent</textarea><p class="small muted">Provider authentication and JSON Content-Type are controlled separately.</p></details>
             </div>
           </div>
+          <div id="connect-approval-group"><label><input id="connect-approval-required" type="checkbox" disabled> Require human approval for each request</label><p id="connect-approval-help" class="small muted"></p></div>
           <button id="connect-review" type="submit">Review access</button>
         </fieldset></form>
       </div>
@@ -318,6 +319,7 @@ user-agent</textarea><p class="small muted">Do not list Content-Type: the reques
       <h3>Effective rule summary</h3><p id="rule-effective-context">Loading workspace status...</p><dl id="rule-effective-restrictions" class="metadata"></dl>
       <p class="small muted">Saving does not prove the proxy has loaded the rule or that an upstream request will succeed. Check activation after saving.</p>
     </div>
+    <label><input id="rule-approval-required" type="checkbox" disabled> Require human approval for each request</label><p id="rule-approval-help" class="small muted"></p>
     <button id="rule-save" type="submit">Save access rule</button>
   </fieldset>
   <p id="access-rule-form-status" role="status" aria-live="polite"></p>

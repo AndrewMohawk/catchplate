@@ -31,7 +31,9 @@ const AUDIT_PRESETS = {
     'credential.x_app_bearer_created'].map(type => 'operator_catalog.' + type),
   approval_history: ['approval.approved', 'approval.decision_recorded', 'approval.denied', 'approval.requested', 'approval.review_opened',
     'control_plane.approval.approved', 'control_plane.approval.consumed', 'control_plane.approval.denied',
-    'control_plane.approval.invalidated', 'control_plane.approval.requested'],
+    'control_plane.approval.invalidated', 'control_plane.approval.requested',
+    'operator.host_approval.approved', 'operator.host_approval.claimed', 'operator.host_approval.denied',
+    'operator.host_approval.expired', 'operator.host_approval.requested', 'operator.host_approval.reviewed'],
 };
 const EVENTS = JSON.parse(execFileSync('python3', ['-I', '-B', '-c',
   `import ast,json,pathlib
@@ -39,6 +41,15 @@ tree=ast.parse(pathlib.Path("serverware/operator_notification_events.py").read_t
 assignments={n.targets[0].id:n.value for n in tree.body if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name)}
 summaries=ast.literal_eval(assignments["_SUMMARIES"])
 summaries.update(ast.literal_eval(assignments["_GOOGLE_SUMMARIES"]))
+host_requested=ast.literal_eval(assignments["HOST_REQUESTED"])
+assert host_requested=="operator.host_approval.requested"
+host_summaries=assignments["_HOST_SUMMARIES"]
+assert isinstance(host_summaries,ast.Dict) and len(host_summaries.keys)==6
+for key,value in zip(host_summaries.keys,host_summaries.values):
+    name=host_requested if isinstance(key,ast.Name) and key.id=="HOST_REQUESTED" else ast.literal_eval(key)
+    summary=ast.literal_eval(value)
+    assert type(name) is str and type(summary) is str
+    summaries[name]=summary
 x_saved=ast.literal_eval(assignments["_X_CONFIGURATION_SAVED"])
 assert x_saved=="operator_catalog.x_oauth.configuration_saved"
 x_entries=[n for n in tree.body if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Subscript)
@@ -58,12 +69,13 @@ def event_list(node):
         values=[]
         for item in node.elts:
             if isinstance(item,ast.Constant) and type(item.value) is str: values.append(item.value)
+            elif isinstance(item,ast.Name) and item.id=="HOST_REQUESTED": values.append(host_requested)
             elif isinstance(item,ast.Starred): values.extend(event_list(item.value))
             else: raise ValueError("unsupported event enum expression")
         return values
     raise ValueError("unsupported event enum expression")
 result={"action_required":event_list(assignments["ACTION_EVENT_TYPES"]),"audit_log":event_list(assignments["AUDIT_EVENT_TYPES"])}
-assert all(len(values)<=(71 if channel=="audit_log" else 64) and len(values)==len(set(values)) for channel,values in result.items())
+assert all(len(values)<=(77 if channel=="audit_log" else 64) and len(values)==len(set(values)) for channel,values in result.items())
 print(json.dumps(result))`],
 {cwd: ROOT, timeout: 5000, maxBuffer: 65536, encoding: 'utf8'})); // AST only: no application/config/database import.
 const INPUTS = ['scripts/test_operator_notifications_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
@@ -379,20 +391,20 @@ const tests = [
       assert.equal(observed.posts.length, 0); assert.equal(await recovery(page), null); assert.deepEqual(observed.snapshot.slots, before);
       assert.equal(await form(page, 'action_required.webhook').locator('[data-notification-preset]').count(), 0);
     })],
-  ['71 available audit types preserve saved filters and enforce a 64-selection limit', browser => fixture(browser, {},
+  ['77 available audit types preserve saved filters and enforce a 64-selection limit', browser => fixture(browser, {},
     async (page, observed) => {
       await open(page); const target = form(page); const before = clone(observed.snapshot.slots);
-      assert.equal(await target.locator('[name="event_types"]').count(), 71);
+      assert.equal(await target.locator('[name="event_types"]').count(), 77);
       assert.equal(await target.locator('[name="event_types"]:checked').count(), 1);
       await target.locator('details').locator('summary').click();
       for (const checkbox of await target.locator('[name="event_types"]').all()) await checkbox.check();
-      assert.match(await target.locator('[data-notification-events-summary]').innerText(), /71\/64 selected/);
+      assert.match(await target.locator('[data-notification-events-summary]').innerText(), /77\/64 selected/);
       assert(await target.locator('[data-notification-save]').isDisabled());
       // Bypassing a disabled submit button still hits the same bounded guard.
       await target.evaluate(node => node.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})));
       assert.equal(observed.posts.length, 0); assert.equal(await recovery(page), null);
       assert.deepEqual(observed.snapshot.slots, before);
-      for (const checkbox of (await target.locator('[name="event_types"]').all()).slice(0, 6)) await checkbox.uncheck();
+      for (const checkbox of (await target.locator('[name="event_types"]').all()).slice(0, 12)) await checkbox.uncheck();
       assert.match(await target.locator('[data-notification-events-summary]').innerText(), /65\/64 selected/);
       assert(await target.locator('[data-notification-save]').isDisabled());
       for (const button of await target.locator('[data-notification-preset]').all()) assert(await button.isDisabled());
@@ -400,7 +412,7 @@ const tests = [
       await target.locator('[data-notification-preset="proxy_blocks"]').evaluate(node => node.dispatchEvent(new Event('click', {bubbles: true})));
       assert.deepEqual(await target.locator('[name="event_types"]:checked').evaluateAll(nodes => nodes.map(node => node.value)), overLimit);
       assert.equal(observed.posts.length, 0);
-      await target.locator('[name="event_types"]').nth(6).uncheck();
+      await target.locator('[name="event_types"]').nth(12).uncheck();
       assert(await target.locator('[data-notification-save]').isEnabled());
       await submit(page, target); assert.equal(observed.posts.length, 1);
       assert.equal(observed.posts[0].body.event_types.length, 64);
@@ -601,7 +613,7 @@ const tests = [
         assert.equal(await target.locator('[name="url"]').inputValue(), '');
       }
       assert.doesNotMatch(await form(page, SLOTS[1]).locator('[data-notification-delivery]').innerText(), /HTTP status:/);
-      assert.equal(EVENTS.audit_log.length, 71); assert.equal(EVENTS.action_required.length, 5);
+      assert.equal(EVENTS.audit_log.length, 77); assert.equal(EVENTS.action_required.length, 6);
       assert(EVENTS.audit_log.includes('operator_catalog.access_rule.npm_install_created'));
       assert(EVENTS.audit_log.includes('operator_catalog.credential.github_app_created'));
       assert(EVENTS.audit_log.includes('operator_catalog.x_oauth.configuration_saved'));

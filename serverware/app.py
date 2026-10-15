@@ -645,6 +645,10 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
         # parser. Do not prebuffer before that authentication; the unchanged
         # outer ASGI signer still supplies common response security headers.
         return await call_next(request)
+    from serverware import operator_host_approvals_api as host_approvals
+    if operator_active and request.method == "POST" and host_approvals.owns_post(request.scope.get("path")):
+        # The exact host-only routes authenticate before their bounded parser.
+        return await call_next(request)
     if _operator_catalog_body_is_route_owned(request.method, request.scope.get("path"),
             operator_active=operator_active):
         # Keep CSRF/admin/role/Origin admission ahead of the sole bounded body
@@ -18040,6 +18044,9 @@ def approval_capabilities(
             or request.headers.get("transfer-encoding") is not None):
         raise HTTPException(status_code=400,
             detail="approval capabilities requires an exact bodyless request", headers=headers)
+    from serverware import operator_demo, operator_host_approvals
+    if operator_demo.active():
+        return JSONResponse(operator_host_approvals.capabilities(identity), headers=headers)
     can_list = identity.has_any_role({"approver", "auditor"})
     # Observe the actual independently admitted opening owner and current
     # cookie/WebAuthn actor. This read never initializes an owner or a challenge.
@@ -30320,6 +30327,7 @@ from serverware import operator_google_configuration_api as _operator_google_con
 from serverware import operator_x_configuration_api as _operator_x_configuration_api
 from serverware import operator_x_accounts_api as _operator_x_accounts_api
 from serverware import operator_notification_api as _operator_notification_api
+from serverware import operator_host_approvals_api as _operator_host_approvals_api
 
 _fastapi_app.include_router(_registration_handoff_routes.router)
 _fastapi_app.include_router(_registration_recovery_routes.router)
@@ -30339,4 +30347,5 @@ _fastapi_app.include_router(_operator_google_configuration_api.router)
 _fastapi_app.include_router(_operator_x_configuration_api.router)
 _fastapi_app.include_router(_operator_x_accounts_api.router)
 _fastapi_app.include_router(_operator_notification_api.router)
+_fastapi_app.include_router(_operator_host_approvals_api.router)
 app = _SignedControlPlaneASGI(_fastapi_app)

@@ -444,12 +444,108 @@ def native_expiry_and_final_recheck():
     return {"expired_ingestion_refused": True, "original_nanoseconds_rechecked_after_snapshot": True}
 
 
+def host_approval_notifications():
+    """Real audit/outbox/SQLite, synthetic gate readiness; no network dispatch."""
+    from serverware import operator_host_approvals as host, operator_notifications as worker, operator_publication
+    f = Fixture()
+    assert host.enabled() and f.store.ACTION_SOURCE_AVAILABLE is False
+    f.save("action_required.webhook", event_types=[f.store.events.HOST_REQUESTED])
+    f.save("audit_log.webhook", event_types=sorted(f.store.events._HOST_SUMMARIES))
+    ready = True
+
+    def available():
+        try:
+            operator_publication.assert_held()
+        except operator_publication.PublicationError:
+            pass
+        else:
+            raise AssertionError("host readiness read while publication lock held")
+        with closing(f.db.connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE"); conn.rollback()
+        return ready
+
+    def requested(*, reviewer=None):
+        reviewer = f.config.ADMIN_USER_ID if reviewer is None else reviewer
+        now = f.store._now()
+        policy = host._policy(reviewer)
+        row = {"id": str(uuid.uuid4()), "route_id": "operator." + str(uuid.uuid4()), "method": "POST",
+            "url": "sha256:" + "a" * 64, "status": "pending", "requested_at": f.store._iso(now),
+            "expires_at": f.store._iso(now + 60000), "principal_id": "agent:operator-demo:" + str(uuid.uuid4()),
+            "credential_id": str(uuid.uuid4()), "credential_version": 1, "policy_hash": "sha256:" + "b" * 64,
+            "request_digest": "sha256:" + "c" * 64, "operation_digest": "sha256:" + "d" * 64,
+            "canonical_request": "PRIVATE_CANARY", "redacted_display": "PRIVATE_CANARY",
+            "grant_ttl_seconds": 60, "grant_max_uses": 1,
+            "approver_policy_json": host.canonical(policy), "approver_policy_digest": host.digest(policy)}
+        with f.store._write() as conn:
+            f.db._ensure_policy_route_reference(conn, row["route_id"])
+            conn.execute("INSERT INTO approval_requests (" + ",".join(row) + ") VALUES ("
+                + ",".join("?" for _ in row) + ")", tuple(row.values()))
+            host._audit(f.db, conn, "requested", row, row["principal_id"], method=row["method"],
+                requested_at=row["requested_at"], expires_at=row["expires_at"], reviewer_id=reviewer,
+                approver_policy_digest=row["approver_policy_digest"], url_commitment=row["url"])
+        return row
+
+    def audit():
+        claim = f.store.claim_next(f.store._now())
+        assert claim.channel == "audit_log" and f.store.current(claim, f.store._now())
+        assert claim.payload["details"]["assurance"] == "host-trusted"
+        f.clean_public(claim.payload)
+        f.store.finish(claim, f.transport.DeliveryResult("acknowledged", "acknowledged", 200), f.store._now())
+
+    with patch.object(host, "available", side_effect=available), \
+            patch.object(f.db, "_decrypt_approval_json", side_effect=AssertionError("notification decrypted private request")), \
+            patch.object(f.transport, "deliver", side_effect=AssertionError("notification test sent webhook")):
+        first = requested()
+        assert f.store.consume_events(f.store._now())["queued"] == 2
+        claim = f.store.claim_next(f.store._now())
+        assert f.store.is_host_action(claim) and not f.store.is_native_action(claim)
+        assert worker._before_dispatch(claim)
+        outbound = worker._outbound_payload(claim)
+        assert outbound["review_url"] == f.config.PUBLIC_URL + "/approvals/" + first["id"] + "#pending-actions"
+        assert "PRIVATE_CANARY" not in json.dumps(outbound)
+        f.store.finish(claim, f.transport.DeliveryResult("acknowledged", "acknowledged", 200), f.store._now())
+        audit()
+        for changed in ("decision", "gate", "expiry"):
+            row = requested()
+            assert f.store.consume_events(f.store._now())["queued"] == 2
+            claim = f.store.claim_next(f.store._now())
+            assert f.store.is_host_action(claim)
+            if changed == "decision":
+                with f.store._write() as conn:
+                    conn.execute("UPDATE approval_requests SET status='denied' WHERE id=?", (row["id"],))
+            elif changed == "gate":
+                ready = False
+            if changed == "expiry":
+                assert not f.store.current(claim, host._epoch(row["expires_at"]))
+            else:
+                assert not worker._before_dispatch(claim)
+            with closing(f.db.connect()) as conn:
+                state = conn.execute("SELECT status,last_code FROM operator_notification_deliveries WHERE delivery_id=?",
+                    (claim.delivery_id,)).fetchone()
+            expected = {"decision": ("suppressed", "action_no_longer_current"),
+                "gate": ("suppressed", "host_source_unavailable"), "expiry": ("expired", "action_expired")}
+            assert tuple(state) == expected[changed]
+            audit()  # Historical audit remains independently deliverable even when the gate is unavailable.
+            ready = True
+        requested(reviewer="other-reviewer")
+        outcome = f.store.consume_events(f.store._now())
+        assert outcome["queued"] == 1 and outcome["suppressed"] == 1
+        audit()
+        assert f.store.claim_next(f.store._now()) is None
+        with patch.object(host, "enabled", return_value=False):
+            assert not f.store.host_source_available()
+        assert f.store.ACTION_SOURCE_AVAILABLE is False and f.db.verify_audit_chain()["ok"]
+    return {"typed_host_action_and_independent_audit": True, "changed_expired_unavailable_suppressed": True,
+        "private_request_never_read": True, "network_dispatch": False}
+
+
 def worker(name):
     actions = {"settings": settings, "conflicts": conflicts, "tests": explicit_tests,
         "retries": retries_and_unknown, "replacement": replacement, "missing-key": missing_key,
         "rollback": rollback_orphan, "events": committed_events, "retained": retained_grammar,
         "action-gate": action_source_gate, "native": native_ingestion,
-        "native-rollback": native_rollback_and_collision, "native-expiry": native_expiry_and_final_recheck}
+        "native-rollback": native_rollback_and_collision, "native-expiry": native_expiry_and_final_recheck,
+        "host-approval": host_approval_notifications}
     print(json.dumps(actions[name](), sort_keys=True))
 
 
@@ -502,6 +598,10 @@ class NotificationStoreTests(unittest.TestCase):
 
     def test_native_expiry_refuses_ingestion_and_rechecks_after_local_snapshot(self):
         self.assertTrue(self.run_worker("native-expiry")["original_nanoseconds_rechecked_after_snapshot"])
+
+    def test_host_approval_exact_pending_source_and_independent_audit(self):
+        self.environment["SERVERWARE_HOST_TRUSTED_APPROVALS_ENABLED"] = "1"
+        self.assertTrue(self.run_worker("host-approval")["typed_host_action_and_independent_audit"])
 
 
 if __name__ == "__main__":

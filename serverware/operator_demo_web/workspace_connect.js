@@ -165,6 +165,9 @@ function createConnectView(workspace, applications, proxy) {
       renderInputs(); // The new app is now an exact confirmed pair; initialize its permission choice before showing access.
     }
     if (checkpoint.collection === 'access_rules') {
+      if ((item.approval_mode ?? 'automatic') !== (review?.rule.approval_mode ?? 'automatic')) {
+        message('The saved human-approval requirement differs from the reviewed permission. Inspect saved state; no repeat request was sent.'); return;
+      }
       if (item.application_id !== selectedApplication || item.credential_id !== selectedCredential) { message('Saved rule references did not match this setup. Review saved state.'); return; }
       if (isGmailRule(review?.rule) && (!gmailRuleValid(item, credential()) || item.query_mode !== review.rule.query_mode ||
           !operatorExact(gmailRulePayload(item), gmailRulePayload(review.rule)))) {
@@ -207,6 +210,8 @@ function createConnectView(workspace, applications, proxy) {
   function receipt(result, collection, key, providerName, providerKind) {
     if (!result[key] || typeof result[key].id !== 'string' || !Number.isSafeInteger(result.revision))
       throw operatorError('The saved resource receipt was incomplete. Review saved state; do not repeat automatically.');
+    if (collection === 'access_rules' && (result[key].approval_mode ?? 'automatic') !== (review?.rule.approval_mode ?? 'automatic'))
+      throw operatorError('The saved human-approval requirement differs from the reviewed permission. Inspect saved state; no repeat request was sent.');
     const xMutation = providerName !== undefined && providerKind === 'x' || collection === 'access_rules' && (isXRule(review?.rule) || isXPostRule(review?.rule));
     const alchemyMutation = providerName !== undefined && providerKind === 'alchemy' || collection === 'access_rules' && isAlchemyRule(review?.rule);
     const githubAppMutation = providerKind === 'github_app' || collection === 'access_rules' && isGithubAppCredential(credential());
@@ -431,6 +436,15 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-access-fields').disabled = saveOnly || !writable() || Boolean(checkpoint) || !activePair() || newRule &&
       (!workspace.ready('access_rules') || !availableCredentialInputModes(catalog()).length ||
         (!gmail && !providerPreset && !availableResponseModes(catalog()).length) || !catalog()?.allowed_upstreams.length);
+    const approvalDraft = {operation_bundle: element('connect-operation').value === 'exact' ? undefined : element('connect-operation').value,
+      ...(xPost && element('connect-x-post-quota').value === 'daily' ? {daily_post_attempt_limit: 1} : {})};
+    const approvalAvailable = operatorHostApprovalAvailable(catalog(), approvalDraft);
+    element('connect-approval-group').hidden = !newRule;
+    element('connect-approval-required').disabled = !newRule || !approvalAvailable && !element('connect-approval-required').checked;
+    element('connect-approval-help').textContent = Object.hasOwn(approvalDraft, 'daily_post_attempt_limit') ?
+      'Human approval cannot currently be combined with an X daily posting-attempt limit. Keep the quota, or explicitly choose a different restriction; neither is removed automatically.' : approvalAvailable ?
+      'Host-trusted: server administrators can bypass it. Each first request stops with HTTP 428; after approval the client must explicitly retry exactly that request once. No automatic replay.' :
+      'Host-trusted approvals are unavailable until this permission and the running proxy advertise matching support. Leave unchecked for ordinary permission-controlled access.';
     element('connect-review').disabled = newRule && (gmail && (!gmailAvailable(catalog(), credential()) ||
       !['sdk', 'custom'].includes(element('connect-gmail-client').value) || gmailSdk && Boolean(gmailSdkProblem())) || github && !githubAvailable(catalog(), credential()) ||
       x && !xAvailable(catalog(), credential()) ||
@@ -442,7 +456,8 @@ function createConnectView(workspace, applications, proxy) {
   }
   function reviewCurrent() {
     return review && activePair() && catalog()?.revision === review.revision && catalog()?.policy.policy_hash === review.policyHash && supported(review.rule) &&
-      (review.gmailClient !== 'sdk' || !gmailSdkProblem() && operatorExact(review.rule, gmailSdkRule())) &&
+      (review.gmailClient !== 'sdk' || !gmailSdkProblem() && operatorExact(review.rule, {...gmailSdkRule(),
+        ...(review.rule.approval_mode ? {approval_mode: review.rule.approval_mode} : {})})) &&
       (!isXRule(review.rule) || xCredentialReceiptMatches(credential(), review.xCredential)) &&
       (!isXPostRule(review.rule) || operatorExact(xAccountIdentity(credential()), review.xAccount)) &&
       (!isGithubAppCredential(credential()) || githubAppCredentialReceiptMatches(credential(), review.githubAppCredential)) &&
@@ -450,7 +465,7 @@ function createConnectView(workspace, applications, proxy) {
   }
   function renderReview() {
     if (!review) return;
-    const rows = [...operatorRuleCredentialRows(review.rule, credential()), ...operatorRuleRestrictions(review.rule)];
+    const rows = [...operatorRuleCredentialRows(review.rule, credential()), ...operatorRuleRestrictions(review.rule), ...operatorApprovalRows(review.rule)];
     if (review.gmailClient === 'sdk') rows.unshift(['Gmail client', 'Official Gmail SDK · choose Go, Node.js or Python in client setup'],
       ['Public dummy, not a secret', 'The SDK sends the exact dummy below. The application token authenticates separately to the HTTPS proxy using standard username/password login.']);
     element('connect-review-details').replaceChildren(...rows.flatMap(([name, value]) => [textNode('dt', name), textNode('dd', value)]));
@@ -751,6 +766,10 @@ function createConnectView(workspace, applications, proxy) {
     try {
       const existing = element('connect-rule-choice').value !== 'new';
       const rule = existing ? matchingRules().find(item => item.id === element('connect-rule-choice').value) : draftRule();
+      if (!existing && element('connect-approval-required').checked) {
+        if (!operatorHostApprovalAvailable(catalog(), rule)) throw operatorError('Host-trusted approval is unavailable for this permission. Review the approval choice; no grant was sent.');
+        rule.approval_mode = 'host_review_v1';
+      }
       if (!supported(rule)) throw operatorError('The selected saved rule is unavailable or unsupported. Choose again; no permissions were changed.');
       review = {existing, rule: JSON.parse(JSON.stringify(rule)), revision: catalog().revision, policyHash: catalog().policy.policy_hash};
       if (!existing && isGmailRule(rule)) review.gmailClient = element('connect-gmail-client').value;
@@ -769,10 +788,11 @@ function createConnectView(workspace, applications, proxy) {
     }
     if (!workspace.ready('access_rules')) return;
     await workspace.mutate(isXPostRule(review.rule) ? 'access-rules/x-post' : isNpmInstallRule(review.rule) ? 'access-rules/npm-install' : isAlchemyRule(review.rule) ? 'access-rules/alchemy-chain-status' : isXRule(review.rule) ? 'access-rules/x-username' : isNpmPublishRule(review.rule) ? 'access-rules/npm-publish' : isNpmRule(review.rule) ? 'access-rules/npm-metadata' : isGithubRule(review.rule) ? 'access-rules/github' : isGmailRule(review.rule) ? 'access-rules/gmail-read' : 'access-rules',
-      isXPostRule(review.rule) ? xPostRulePayload(review.rule) : isNpmInstallRule(review.rule) ? npmInstallRulePayload(review.rule) : isAlchemyRule(review.rule) ? alchemyRulePayload(review.rule) : isXRule(review.rule) ? xRulePayload(review.rule) : isNpmPublishRule(review.rule) ? npmPublishRulePayload(review.rule) : isNpmRule(review.rule) ? npmRulePayload(review.rule) : isGithubRule(review.rule) ? githubRulePayload(review.rule) : isGmailRule(review.rule) ? gmailRulePayload(review.rule) : {...review.rule},
+      {...(isXPostRule(review.rule) ? xPostRulePayload(review.rule) : isNpmInstallRule(review.rule) ? npmInstallRulePayload(review.rule) : isAlchemyRule(review.rule) ? alchemyRulePayload(review.rule) : isXRule(review.rule) ? xRulePayload(review.rule) : isNpmPublishRule(review.rule) ? npmPublishRulePayload(review.rule) : isNpmRule(review.rule) ? npmRulePayload(review.rule) : isGithubRule(review.rule) ? githubRulePayload(review.rule) : isGmailRule(review.rule) ? gmailRulePayload(review.rule) : review.rule),
+        ...(review.rule.approval_mode ? {approval_mode: review.rule.approval_mode} : {})},
       'connect-status', result => receipt(result, 'access_rules', 'access_rule')); render();
   });
-  for (const id of ['connect-credential-auth-type', 'connect-application-choice', 'connect-rule-choice', 'connect-operation', 'connect-gmail-client', 'connect-credential-input', 'connect-response-mode', 'connect-request-body-mode', 'connect-npm-publish-hours', 'connect-alchemy-chain'])
+  for (const id of ['connect-credential-auth-type', 'connect-application-choice', 'connect-rule-choice', 'connect-operation', 'connect-gmail-client', 'connect-credential-input', 'connect-response-mode', 'connect-request-body-mode', 'connect-npm-publish-hours', 'connect-alchemy-chain', 'connect-approval-required'])
     element(id).addEventListener('change', render);
   element('connect-include-diagnostics').addEventListener('change', () => {
     if (!writable() || checkpoint || step !== 0 || connectionMethod === 'google') { render(); return; }
@@ -812,6 +832,7 @@ function createConnectView(workspace, applications, proxy) {
   element('connect-back').addEventListener('click', () => { if (step > 0 && step < 4 && !workspace.state.busy && !checkpoint) { review = null; goto(step - 1); } });
   element('connect-status-refresh').addEventListener('click', () => workspace.refresh({manual: true}));
   function resetDraft() {
+    element('connect-approval-required').checked = false;
     selectedCredential = ''; selectedApplication = ''; selectedRule = ''; review = null; checkpoint = null; savedCredential = '';
     includeDiagnostics = false;
     connectionMethod = null; savedChoice = ''; beforeGoogle = null;

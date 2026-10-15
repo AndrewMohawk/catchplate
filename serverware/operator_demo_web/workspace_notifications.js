@@ -29,11 +29,13 @@ const notificationAuditPresets = Object.freeze([
   {id: 'approval_history', label: 'Add approval history', events: [
     'approval.approved', 'approval.decision_recorded', 'approval.denied', 'approval.requested', 'approval.review_opened',
     'control_plane.approval.approved', 'control_plane.approval.consumed', 'control_plane.approval.denied',
-    'control_plane.approval.invalidated', 'control_plane.approval.requested']},
+    'control_plane.approval.invalidated', 'control_plane.approval.requested',
+    'operator.host_approval.approved', 'operator.host_approval.claimed', 'operator.host_approval.denied',
+    'operator.host_approval.expired', 'operator.host_approval.requested', 'operator.host_approval.reviewed']},
 ].map(preset => Object.freeze({...preset, events: Object.freeze(preset.events)})));
 function notificationPresetSelection(channel, presetId, advertised, selected) {
   const preset = notificationAuditPresets.find(item => item.id === presetId);
-  if (channel !== 'audit_log' || !preset || !notificationTypes(advertised, 71) || !notificationTypes(selected) ||
+  if (channel !== 'audit_log' || !preset || !notificationTypes(advertised, 77) || !notificationTypes(selected) ||
       selected.some(type => !advertised.includes(type))) return null;
   const available = preset.events.filter(type => advertised.includes(type));
   if (!available.length) return null;
@@ -168,7 +170,7 @@ function projectNotificationStatus(value) {
       !notificationNativeValid(caps.native_hardware) ||
       !['source_note', 'test_note'].every(key => typeof caps[key] === 'string' && caps[key].length <= 512) ||
       !['action_required', 'audit_log'].every(channel => notificationObject(caps[channel], ['source_available', 'event_types']) &&
-        typeof caps[channel].source_available === 'boolean' && notificationTypes(caps[channel].event_types, channel === 'audit_log' ? 71 : 64)) ||
+        typeof caps[channel].source_available === 'boolean' && notificationTypes(caps[channel].event_types, channel === 'audit_log' ? 77 : 64)) ||
       !value.available && (caps.action_required.source_available || caps.native_hardware.source_available) ||
       caps.native_hardware.source_available && !caps.action_required.source_available || caps.audit_log.source_available !== value.available ||
       !value.slots.every(slot => slot.event_types.every(type => caps[slot.channel].event_types.includes(type)))) bad();

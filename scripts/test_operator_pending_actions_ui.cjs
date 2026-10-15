@@ -11,6 +11,7 @@ const vm = require('node:vm');
 const SOURCE = resolve(__dirname, '../serverware/operator_demo_web/workspace_pending_actions.js');
 const CORE = resolve(__dirname, '../serverware/operator_demo_web/workspace_core.js');
 const CAP = '/api/approvals/capabilities', LIST = '/api/approvals?status=pending';
+const HOST = '/api/operator-demo/approvals';
 const NOW = Date.parse('2026-10-13T12:00:00Z');
 const ID = '11111111-1111-4111-8111-111111111111', OTHER = '22222222-2222-4222-8222-222222222222';
 const DETAIL = '/api/approvals/' + ID, OTHER_DETAIL = '/api/approvals/' + OTHER;
@@ -19,10 +20,19 @@ const INJECTED = '<img src="https://untrusted.example.test/x" onerror="globalThi
 const copy = value => JSON.parse(JSON.stringify(value));
 const capability = (changes = {}) => ({schema: 'serverware.approvalCapabilities/v1', can_list: true,
   can_open_native_review: false, can_decide: false, reason: 'protected_review_unavailable', ...changes});
+const hostCapability = (changes = {}) => ({schema: 'serverware.approvalCapabilities/v2', mode: 'host_trusted_v1',
+  can_list: true, can_review: true, can_decide: true, reason: null, ...changes});
 const approval = (changes = {}) => ({id: ID, status: 'pending', route_id: 'synthetic.status.read', method: 'GET',
   url: 'sha256:' + 'a'.repeat(64), requested_at: new Date(NOW - 1000).toISOString(), expires_at: new Date(NOW + 600000).toISOString(),
   principal_id: 'agent:synthetic-client', credential_id: 'synthetic-credential', credential_version: 1,
   policy_hash: 'sha256:' + 'b'.repeat(64), ...changes});
+const hostApproval = (changes = {}) => approval({assurance: 'host-trusted', reviewer_id: 'user:operator',
+  consumed_at: null, approved_until: null, ...changes});
+const hostReview = (changes = {}) => ({assurance: 'host-trusted', approval: hostApproval(),
+  document: {...Object.fromEntries(['method', 'url', 'principal_id', 'route_id', 'credential_id', 'credential_version', 'policy_hash']
+    .map(key => [key, hostApproval()[key]])), request_digest: 'sha256:' + 'c'.repeat(64), operation_digest: 'sha256:' + 'd'.repeat(64),
+    headers: {accept: 'application/json'}, query: {}, body_sha256: 'sha256:' + 'e'.repeat(64), operation: {name: 'synthetic.status.read'}},
+  review_receipt_id: OTHER, review_digest: 'sha256:' + 'f'.repeat(64), review_expires_at: new Date(NOW + 60000).toISOString(), ...changes});
 function deferred() { let release; const promise = new Promise(resolve => { release = resolve; }); return {promise, release}; }
 const flush = async () => { for (let i = 0; i < 24; i++) await Promise.resolve(); };
 const response = (body, status = 200, type = 'application/json') => ({ok: status >= 200 && status < 300, status,
@@ -51,24 +61,29 @@ function fixture(options = {}) {
     'pending-actions-list', 'pending-actions-selected'].map(id => [id, new Node()]));
   const node = id => { assert(nodes.has(id), 'known queue DOM target'); return nodes.get(id); };
   const calls = [], faults = [], replacements = [], storageReads = [], events = {}, storage = new Map(options.storage || []);
+  const allowedPaths = options.host ? [CAP, HOST, HOST + '/' + ID, HOST + '/' + OTHER,
+    HOST + '/' + ID + '/review', HOST + '/' + ID + '/decision'] : [CAP, LIST, DETAIL, OTHER_DETAIL];
   let authLost = 0;
   const api = load({document: {getElementById: node, createElement: tag => new Node(tag)}, AbortController,
     AbortSignal: {any: signals => AbortSignal.any(signals), timeout: value => {
-      assert.equal(value, 15000); return new AbortController().signal;
+      assert(options.host ? [15000, 30000].includes(value) : value === 15000); return new AbortController().signal;
     }}, setTimeout() { throw new Error('queue must not poll'); }, setInterval() { throw new Error('queue must not poll'); },
     window: {addEventListener: (name, callback) => { events[name] = callback; }},
     history: {replaceState: (state, title, path) => { assert.equal(state, null); assert.equal(title, ''); replacements.push(path); }},
     sessionStorage: {getItem: key => { storageReads.push(key); if (options.storageFailure) throw new Error('unavailable'); return storage.get(key) ?? null; },
-      setItem() { throw new Error('queue must not write recovery storage'); }, removeItem() { throw new Error('queue must not clear recovery storage'); }},
+      setItem(key, value) { if (!options.host || options.storageFailure) throw new Error('queue must not write recovery storage'); storage.set(key, value); },
+      removeItem(key) { if (!options.host || options.storageFailure) throw new Error('queue must not clear recovery storage'); storage.delete(key); }},
     fetch: async (path, init) => {
       const call = {path, init}; calls.push(call);
       try {
-        assert([CAP, LIST, DETAIL, OTHER_DETAIL].includes(path)); assert.equal(init.method, 'GET'); assert.equal(init.body, undefined);
+        assert(allowedPaths.includes(path));
+        const post = options.host && ['/review', '/decision'].some(suffix => path.endsWith(suffix));
+        assert.equal(init.method, post ? 'POST' : 'GET'); if (!post) assert.equal(init.body, undefined);
         assert.equal(init.credentials, 'same-origin'); assert.equal(init.cache, 'no-store'); assert.equal(init.redirect, 'error');
-        assert.deepEqual(copy(init.headers), {Accept: 'application/json'}); assert(init.signal instanceof AbortSignal);
+        assert.deepEqual(copy(init.headers), {Accept: 'application/json', ...(post ? {'Content-Type': 'application/json'} : {})}); assert(init.signal instanceof AbortSignal);
         if (options.handler) return await options.handler(call, calls.length);
-        if ([DETAIL, OTHER_DETAIL].includes(path)) return response(options.selected || {}, options.selected ? 200 : 404);
-        return path === CAP ? response(options.capability || capability(), options.capStatus || 200) :
+        if ([DETAIL, OTHER_DETAIL, HOST + '/' + ID, HOST + '/' + OTHER].includes(path)) return response(options.selected || {}, options.selected ? 200 : 404);
+        return path === CAP ? response(options.capability || (options.host ? hostCapability() : capability()), options.capStatus || 200) :
           response(options.rows || [], options.listStatus || 200);
       } catch (error) { faults.push(error.message); throw error; }
     }});
@@ -77,7 +92,7 @@ function fixture(options = {}) {
     get authLost() { return authLost; },
     async show(selection = {}) { view.show(true, selection); await flush(); },
     buttons(id = 'pending-actions-selected') { return descendants(node(id)).filter(value => value.tagName === 'button'); },
-    verify() { assert.deepEqual(faults, []); assert(calls.every(call => [CAP, LIST, DETAIL, OTHER_DETAIL].includes(call.path))); }};
+    verify() { assert.deepEqual(faults, []); assert(calls.every(call => allowedPaths.includes(call.path))); }};
 }
 function workspaceFixture(handler) {
   // Reuse the existing inert catalog DOM and literal public catalog fixture;
@@ -332,15 +347,148 @@ const tests = [
     assert.equal(f.workspace.ready('applications'), false); assert.deepEqual(f.calls.map(call => call.method), ['GET', 'POST', 'GET']); f.verify();
   }],
 ];
+const hostTests = [
+  ['host capability is distinct from native and rejects contradictory availability', () => {
+    const api = load(); assert.deepEqual(copy(api.projectApprovalCapabilities(hostCapability())), hostCapability());
+    for (const patch of [{mode: 'native'}, {can_open_native_review: true}, {can_review: false},
+      {can_list: false}, {reason: 'protected_review_unavailable'}, {can_decide: 1}])
+      assert.throws(() => api.projectApprovalCapabilities(hostCapability(patch)));
+    assert.equal(api.projectApprovalCapabilities(capability()).schema, 'serverware.approvalCapabilities/v1');
+  }],
+  ['host queue requires explicit review then one approval and explains the manual identical retry', async () => {
+    const document = {...hostReview().document, operation: {name: INJECTED}, private_unexpected: PRIVATE};
+    const f = fixture({host: true, handler: ({path, init}) => {
+      if (path === CAP) return response(hostCapability());
+      if (path === HOST) return response([hostApproval()]);
+      if (path.endsWith('/review')) { assert.deepEqual(JSON.parse(init.body), {}); return response(hostReview({document})); }
+      assert(path.endsWith('/decision'));
+      assert.deepEqual(JSON.parse(init.body), {decision: 'approve', review_receipt_id: OTHER,
+        review_digest: 'sha256:' + 'f'.repeat(64), note: null});
+      return response(hostApproval({status: 'approved', approved_until: new Date(NOW + 30000).toISOString()}));
+    }});
+    f.view.setReviewOpener(() => assert.fail('host must not open native review'));
+    await f.show({requestedId: ID}); assert.equal(f.calls.length, 2);
+    assert(f.node('pending-actions-access').textContent.includes('server administrator can bypass'));
+    assert.deepEqual(f.buttons().map(button => button.textContent), ['Review request']);
+    await f.buttons()[0].events.click(); await flush();
+    assert(!f.node('pending-actions-selected').textContent.includes(PRIVATE));
+    assert(f.node('pending-actions-selected').textContent.includes('untrusted.example.test/x'));
+    assert.deepEqual(f.buttons().map(button => button.textContent), ['Approve once', 'Deny']);
+    await f.buttons()[0].events.click(); await flush();
+    assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 2);
+    assert(f.node('pending-actions-selected').textContent.includes('Explicitly retry exactly the same request once'));
+    assert(!f.storage.has('serverware.hostApprovalDecisionUncertain.' + ID));
+    assert.equal(f.buttons().length, 0); f.verify();
+  }],
+  ['host denial submits one explicit decision and never forwards a provider request', async () => {
+    const f = fixture({host: true, handler: ({path, init}) => path === CAP ? response(hostCapability()) :
+      path === HOST ? response([hostApproval()]) : path.endsWith('/review') ? response(hostReview()) :
+      (assert.equal(JSON.parse(init.body).decision, 'deny'), response(hostApproval({status: 'denied'})))});
+    await f.show({requestedId: ID}); await f.buttons()[0].events.click(); await flush();
+    await f.buttons().find(button => button.textContent === 'Deny').events.click(); await flush();
+    assert(f.node('pending-actions-selected').textContent.includes('No retry is authorized'));
+    assert.equal(f.calls.filter(call => call.path.endsWith('/decision')).length, 1); f.verify();
+  }],
+  ['uncertain host decision allows status reads only, including after a tab reload', async () => {
+    let reads = 0;
+    const handler = ({path}) => path === CAP ? response(hostCapability()) :
+      path === HOST ? response([hostApproval()]) : path.endsWith('/review') ? response(hostReview()) :
+      path.endsWith('/decision') ? response({}, 503) : response(hostApproval(++reads === 1 ? {} :
+        {status: 'approved', approved_until: new Date(NOW + 30000).toISOString()}));
+    const f = fixture({host: true, handler}); await f.show({requestedId: ID});
+    await f.buttons()[0].events.click(); await flush(); await f.buttons()[0].events.click(); await flush();
+    assert.deepEqual(f.buttons().map(button => button.textContent), ['Check decision status']);
+    const reloaded = fixture({host: true, handler, storage: [...f.storage]}); await reloaded.show({requestedId: ID});
+    assert.deepEqual(reloaded.buttons().map(button => button.textContent), ['Check decision status']);
+    await reloaded.buttons()[0].events.click(); await flush();
+    assert.deepEqual(reloaded.buttons().map(button => button.textContent), ['Check decision status']);
+    await reloaded.buttons()[0].events.click(); await flush();
+    assert(reloaded.node('pending-actions-selected').textContent.includes('Approved once'));
+    assert(reloaded.calls.every(call => call.init.method === 'GET'));
+    f.verify(); reloaded.verify();
+  }],
+  ['host review scope and expiry are checked; leaving the view discards a late private reply', async () => {
+    const api = load();
+    for (const patch of [{assurance: 'native'}, {review_receipt_id: 'bad'}, {review_digest: 'bad'},
+      {review_expires_at: new Date(NOW).toISOString()}, {approval: hostApproval({id: OTHER})},
+      {document: {...hostReview().document, method: 'POST'}}])
+      assert.throws(() => api.projectHostApprovalReview(hostReview(patch), ID));
+    const pending = deferred();
+    const f = fixture({host: true, handler: ({path}) => path === CAP ? response(hostCapability()) :
+      path === HOST ? response([hostApproval()]) : pending.promise});
+    await f.show({requestedId: ID}); const opening = f.buttons()[0].events.click(); await flush();
+    f.view.show(false); pending.release(response(hostReview())); await opening; await flush();
+    assert.equal(f.buttons().length, 0); assert(!f.node('pending-actions-selected').textContent.includes('Request review')); f.verify();
+  }],
+  ['host permission capability gates exact recipes and never combines with an X daily quota', () => {
+    const f = require('./test_operator_npm_ui.cjs').context();
+    const cap = {schema: 'serverware.operatorHostApprovals/v1', mode: 'host_trusted_v1', available: true,
+      operation_bundles: ['x_text_post_v1', 'github_issues_write_v1'], generic_rules: true,
+      setting_path: '/api/operator-demo/access-rules/approval'};
+    f.value.hostCap = cap;
+    assert.equal(f.run('projectHostApprovalsCapability(hostCap).mode'), 'host_trusted_v1');
+    assert.equal(f.run('operatorHostApprovalAvailable({capabilities:{host_approvals:hostCap}}, {})'), true);
+    assert.equal(f.run('operatorHostApprovalAvailable({capabilities:{host_approvals:hostCap}}, {operation_bundle:"x_text_post_v1"})'), true);
+    assert.equal(f.run('operatorHostApprovalAvailable({capabilities:{host_approvals:hostCap}}, {operation_bundle:"x_text_post_v1",daily_post_attempt_limit:5})'), false);
+    assert.equal(f.run('operatorHostApprovalAvailable({capabilities:{host_approvals:hostCap}}, {operation_bundle:"unknown"})'), false);
+    assert.equal(f.run('operatorHostApprovalAvailable({capabilities:{host_approvals:{...hostCap,available:false}}}, {})'), false);
+    assert.throws(() => f.run('projectHostApprovalsCapability({...hostCap,setting_path:"https://untrusted.test"})'));
+  }],
+  ['guided creation carries the explicit approval setting into a provider permission', async () => {
+    const {context, rawCatalog, existingPair, IDS} = require('./test_operator_npm_ui.cjs');
+    const f = context(), raw = rawCatalog({rules: []}), posts = [];
+    raw.capabilities.host_approvals = {schema: 'serverware.operatorHostApprovals/v1', mode: 'host_trusted_v1', available: true,
+      operation_bundles: ['npm_metadata_read_v1'], generic_rules: true, setting_path: '/api/operator-demo/access-rules/approval'};
+    const workspace = {state: {catalog: f.run('projectCatalog(input)', raw), busy: false, uncertain: false},
+      ready: () => true, loaded: () => true, subscribe(callback) { this.render = callback; callback(); },
+      async mutate(path, body) { posts.push({path, body: copy(body)}); return false; }};
+    Object.assign(f.value, {workspaceFixture: workspace, applicationsFixture: {mount() {}, tokenFor() { return null; }}});
+    f.run('createConnectView(workspaceFixture, applicationsFixture, {mount(){},select(){}})');
+    const node = id => f.dom.getElementById(id);
+    const event = async (id, type = 'click') => { const target = node(id); await target.events[type]({preventDefault() {}, currentTarget: target}); };
+    await existingPair({node, event});
+    node('connect-operation').value = 'npm_metadata_read_v1'; await event('connect-operation', 'change');
+    node('connect-npm-packages').value = '@example/fixture\nexample-package'; node('connect-approval-required').checked = true;
+    await event('connect-access-form', 'submit');
+    assert(node('connect-review-details').children.some(item => item.textContent.includes('Host-trusted')));
+    await event('connect-grant');
+    assert.equal(posts.length, 1); assert.equal(posts[0].path, 'access-rules/npm-metadata');
+    assert.equal(posts[0].body.approval_mode, 'host_review_v1'); assert.equal(posts[0].body.application_id, IDS.application);
+  }],
+  ['existing permission toggle and confirmation bind only the reviewed rule and approval mode', async () => {
+    const {context, rawCatalog, IDS} = require('./test_operator_npm_ui.cjs');
+    const f = context(), raw = rawCatalog(), posts = [];
+    raw.capabilities.host_approvals = {schema: 'serverware.operatorHostApprovals/v1', mode: 'host_trusted_v1', available: true,
+      operation_bundles: ['npm_metadata_read_v1'], generic_rules: true, setting_path: '/api/operator-demo/access-rules/approval'};
+    const catalog = copy(f.run('projectCatalog(input)', raw));
+    const workspace = {state: {catalog, busy: false, uncertain: false}, ready: () => true, loaded: () => true,
+      subscribe(callback) { callback(); }, mutate(path, body) { posts.push({path, body: copy(body)}); }};
+    f.value.workspaceFixture = workspace; f.run('createAccessRulesView(workspaceFixture)');
+    const button = descendants(f.dom.getElementById('access-rules-list')).find(item => item.dataset.action === 'change-approval');
+    assert(button && !button.disabled); await button.events.click();
+    assert.deepEqual(posts, [{path: 'access-rules/approval', body: {id: IDS.rule, approval_mode: 'host_review_v1'}}]);
+    f.value.beforeApproval = catalog;
+    const item = {...catalog.access_rules[0], approval_mode: 'host_review_v1'};
+    const policy = {...catalog.policy, sequence: catalog.policy.sequence + 1, policy_hash: 'sha256:' + 'e'.repeat(64)};
+    const result = {revision: catalog.revision + 1, policy, access_rule: item};
+    const confirmation = f.run('operatorOrdinaryMutationConfirmation("access-rules/approval", {id:beforeApproval.access_rules[0].id,approval_mode:"host_review_v1"}, beforeApproval)');
+    confirmation.receive(result); confirmation.confirm({...catalog, revision: result.revision, policy, access_rules: [item]});
+    const mismatch = f.run('operatorOrdinaryMutationConfirmation("access-rules/approval", {id:beforeApproval.access_rules[0].id,approval_mode:"host_review_v1"}, beforeApproval)');
+    assert.throws(() => mismatch.receive({...result, access_rule: {...item, approval_mode: undefined}}));
+    assert.throws(() => mismatch.receive({...result, access_rule: {...item, name: 'unexpected change'}}));
+  }],
+];
 async function main() {
-  assert.equal(process.argv.length, 2, 'synthetic test accepts no target');
+  assert(process.argv.length === 2 || process.argv.length === 3 && process.argv[2] === '--host', 'synthetic test accepts only --host');
+  const selected = process.argv[2] === '--host' ? hostTests : [...tests, ...hostTests];
   const before = createHash('sha256').update(readFileSync(SOURCE)).digest('hex');
   const coreBefore = createHash('sha256').update(readFileSync(CORE)).digest('hex');
-  for (const [name, run] of tests) { await run(); console.log('PASS ' + name); }
+  for (const [name, run] of selected) { await run(); console.log('PASS ' + name); }
   assert.equal(createHash('sha256').update(readFileSync(SOURCE)).digest('hex'), before, 'source unchanged during test');
   assert.equal(createHash('sha256').update(readFileSync(CORE)).digest('hex'), coreBefore, 'workspace core unchanged during test');
-  console.log(JSON.stringify({ok: true, groups: tests.length, sourceSha256: before, backendAcceptance: false,
-    nativeReviewAcceptance: false, scope: 'public queue module with inert DOM and synthetic GET responses'}));
+  console.log(JSON.stringify({ok: true, groups: selected.length, sourceSha256: before, backendAcceptance: false,
+    nativeReviewAcceptance: false, scope: process.argv[2] === '--host' ? 'host-trusted UI with inert DOM and synthetic API replies' :
+      'pending-actions UI with inert DOM and synthetic API replies'}));
 }
 if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1; });
 module.exports = {capability, approval, CAP, LIST, NOW, ID, OTHER, PRIVATE, INJECTED, tests};

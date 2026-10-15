@@ -88,7 +88,7 @@ class GoogleEventTests(unittest.TestCase):
         return next(item for item in self.read()[0] if item.event_id == identifier)
 
     def test_current_audit_roster_and_unchanged_action_sources(self):
-        self.assertEqual(len(events.AUDIT_EVENT_TYPES), 71)
+        self.assertEqual(len(events.AUDIT_EVENT_TYPES), 77)
         renewal_events = {"operator_catalog.application.renewal_enrolled",
             "operator_catalog.application.renewal_cancelled", "operator_catalog.application.token_renewed"}
         self.assertTrue(renewal_events <= set(events.AUDIT_EVENT_TYPES))
@@ -96,7 +96,8 @@ class GoogleEventTests(unittest.TestCase):
         self.assertTrue(set(KINDS) <= set(events.AUDIT_EVENT_TYPES))
         self.assertFalse(set(KINDS) & set(events.ACTION_EVENT_TYPES))
         self.assertEqual(set(events.ACTION_EVENT_TYPES), {"approval.requested", "control_plane.approval.requested",
-            "native_pilot.prepare_available", "native_pilot.confirmation_available", "native_pilot.security_key_available"})
+            "native_pilot.prepare_available", "native_pilot.confirmation_available", "native_pilot.security_key_available",
+            "operator.host_approval.requested"})
         for suffix in ("intent_created", "exchange_claimed", "reauthorization_schema_admitted"):
             self.assertNotIn("operator_catalog.oauth." + suffix, events.AUDIT_EVENT_TYPES)
 

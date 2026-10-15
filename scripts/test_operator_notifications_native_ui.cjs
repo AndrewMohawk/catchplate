@@ -40,7 +40,9 @@ const PRESETS = {
     'credential.x_app_bearer_created'].map(type => 'operator_catalog.' + type),
   approval_history: ['approval.approved', 'approval.decision_recorded', 'approval.denied', 'approval.requested', 'approval.review_opened',
     'control_plane.approval.approved', 'control_plane.approval.consumed', 'control_plane.approval.denied',
-    'control_plane.approval.invalidated', 'control_plane.approval.requested'],
+    'control_plane.approval.invalidated', 'control_plane.approval.requested',
+    'operator.host_approval.approved', 'operator.host_approval.claimed', 'operator.host_approval.denied',
+    'operator.host_approval.expired', 'operator.host_approval.requested', 'operator.host_approval.reviewed'],
 };
 const AUDIT = [...Object.values(PRESETS).flat(), 'credential.oauth_refresh_failed'].sort();
 const plain = value => JSON.parse(JSON.stringify(value));
@@ -158,13 +160,19 @@ const tests = [
     assert(value.slots.every(slot => slot.event_types.length === 0));
     assert.equal(networkCalls, 0);
   }],
-  ['71 advertised audit types never widen the 64-filter destination limit or select anything', () => {
+  ['77 advertised audit types include host approval history without widening the 64-filter destination limit', () => {
     const value = status();
+    const hostEvents = PRESETS.approval_history.filter(type => type.startsWith('operator.host_approval.'));
+    assert.equal(hostEvents.length, 6);
     const types = [...Array.from({length: 64}, (_, index) => 'fixture.event_' + String(index).padStart(2, '0')),
       'operator_catalog.access_rule.npm_install_created', 'operator_catalog.credential.github_app_created',
       'operator_catalog.credential.github_app_key_replaced',
       'operator_catalog.x_oauth.configuration_saved', 'operator_catalog.application.renewal_cancelled',
-      'operator_catalog.application.renewal_enrolled', 'operator_catalog.application.token_renewed'].sort();
+      'operator_catalog.application.renewal_enrolled', 'operator_catalog.application.token_renewed', ...hostEvents].sort();
+    assert.equal(types.length, 77);
+    assert.deepEqual(plain(api.selectPreset('audit_log', 'approval_history', types, [])), hostEvents);
+    assert.equal(api.selectPreset('action_required', 'approval_history', types, []), null);
+    assert.equal(api.selectPreset('audit_log', 'approval_history', [...types, 'zz.extra'], []), null);
     value.capabilities.audit_log.event_types = types;
     const before = JSON.stringify(value);
     assert.equal(api.project(value), value); assert.equal(JSON.stringify(value), before);

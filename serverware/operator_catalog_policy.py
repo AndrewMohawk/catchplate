@@ -159,6 +159,8 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
         for item in emitted:
             if replacement is not None:
                 item['credentialHeader'] = dict(replacement)
+            from serverware import operator_catalog_approvals
+            operator_catalog_approvals.apply(rule, item)
             routes.append(item)
     bundle = generated
     bundle['principals'] = [principals[row['id']] for row in catalog['applications'] if row['id'] in principals]

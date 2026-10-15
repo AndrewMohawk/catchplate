@@ -50,6 +50,32 @@ To stop renewal, select the client and choose **Cancel renewal enrollment**, the
 
 After an uncertain renewal, preserve the helper's private journal and follow its exact-operation recovery instructions; do not delete state or automatically replay provider writes. Re-enrollment may require a new private helper directory. Saved state and the deployed read-only UI check are not a verified enrolled workload or real-provider job. [Renewal contract and acceptance boundary](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-workload-renewal.md).
 
+## Host-trusted request review
+
+This workflow is being implemented in the ordinary instance; these steps are not
+a claim that it is already deployed or verified. When the instance offers it:
+
+1. Explicitly enable `host_review_v1` on the intended permission and wait for the
+   matching policy to load. Do not combine it with the shared X daily quota.
+2. Run the intended client request. HTTP 428 means review is required; keep its
+   review link and exact request, rather than repeatedly sending it.
+3. Sign in as the existing administrator and open that exact pending request.
+   Review its client, permission, destination, operation and request details.
+   The page shows a body hash, not the request body contents; approve only a
+   request you recognize from the client that submitted it.
+4. Choose **Approve once** or **Deny**. A copied link, notification or page refresh
+   cannot approve. Do not repeat a decision after an uncertain result without
+   checking its saved state.
+5. After approval, explicitly retry the same client request before approval
+   expires. The approval is consumed once. Check the decision, consumption and
+   request outcome in **Audit log**.
+
+Approval does not mean the provider operation succeeded. After a dispatched write
+times out or its response is withheld, inspect the audit and provider state;
+never automatically replay it. This is administrator review without per-action
+YubiKey/WebAuthn, and the host administrator can bypass its local controls.
+Future TEE enforcement has a different trust boundary.
+
 ## Stop access at the right scope
 
 | You want to stop… | Action | What remains |

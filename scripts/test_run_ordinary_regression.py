@@ -177,8 +177,8 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(shards["python-2"][0][0].script, "test_managed_client.py")
         self.assertEqual(shards["python-2"][0][-1].script, "test_native_jit_prepare.py")
         self.assertEqual(shards["python-3"][0][0].script, "test_authority_complete_read_write.py")
-        self.assertEqual(tuple(len(selected) for selected, _ in shards.values()), (12, 41, 43, 1, 17))
-        self.assertEqual((len(runner.SUITES), len(python)), (114, 97))
+        self.assertEqual(tuple(len(selected) for selected, _ in shards.values()), (15, 41, 43, 1, 17))
+        self.assertEqual((len(runner.SUITES), len(python)), (117, 100))
         self.assertEqual(shards["node"][0], tuple(suite for suite in runner.SUITES if suite.runtime == "node"))
         for partition, (selected, budget) in shards.items():
             self.assertTrue(selected)
@@ -239,7 +239,7 @@ class RunnerTests(unittest.TestCase):
                         str(runner.ROOT / "scripts" / native.script)])
                 receipt = json.loads((output / "result.json").read_text())
                 self.assertEqual((receipt["partition"], receipt["maximumSeconds"], receipt["totalSuiteCount"]),
-                    ("native-review", 600, 114))
+                    ("native-review", 600, 117))
                 self.assertEqual([suite["script"] for suite in receipt["suites"]], [native.script])
                 self.assertEqual(receipt["suites"][0]["status"],
                     "not_run_budget" if expected_seconds is None else "passed")
@@ -251,7 +251,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(len(proof), 1)
         self.assertEqual(proof[0].seconds, 180)
         self.assertEqual(proof[0].arguments, ())
-        self.assertEqual(len(runner.SUITES), 114)
+        self.assertEqual(len(runner.SUITES), 117)
         self.assertEqual(budget, 600)
         self.assertEqual(runner.MAX_PARTITION_SECONDS, 600)
 
@@ -504,7 +504,7 @@ class RunnerTests(unittest.TestCase):
                 "source": "closed renewal DTO and inert DOM only"}, "PASS fixture\n"),
             "test_operator_pending_actions_ui.cjs": ({"ok": True, "backendAcceptance": False,
                 "nativeReviewAcceptance": False,
-                "scope": "public queue module with inert DOM and synthetic GET responses",
+                "scope": "pending-actions UI with inert DOM and synthetic API replies",
                 "sourceSha256": hashlib.sha256((runner.ROOT /
                     "serverware/operator_demo_web/workspace_pending_actions.js").read_bytes()).hexdigest()}, "PASS fixture\n"),
             "test_native_jit_review_portal.cjs": ({"ok": True, "synthetic": True,

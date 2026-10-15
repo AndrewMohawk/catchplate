@@ -31,7 +31,8 @@ Use the [project tracker](https://github.com/AndrewMohawk/serverware/blob/main/d
 | AWS credentials | Encrypted credential storage | Storage only for this operator workflow: no working AWS/ECR publication path. Signing/planning components are not end-to-end publication. |
 | Audit logging and selected delivery | Stored request/outcome records, search, local chain verification and selected notification delivery | Use the actual outcome, not just a saved credential or healthy process. External audit delivery needs its own configured destination and verification; it is not a complete verified archive. |
 | Slack and webhook notifications | Separate action-required and audit destinations, with independent Slack/webhook slots | Delivery configuration is separate from authority. Real receiver delivery remains to be verified; a receiver acknowledgement is not human approval. |
-| Protected approve/deny workflows | Supporting authority/review components exist | Not working end to end in the ordinary workspace. Required authority, review and continuation remain unfinished; there is no weaker demo approval substitute. |
+| Ordinary host-trusted approve/deny | Optional per-permission `host_review_v1`; exact-request review, expiring one-use approval and explicit client retry | Implementation in progress, not yet deployed/verified. Uses the existing authenticated administrator in the same app. Full host control can bypass it; no per-action YubiKey/WebAuthn claim. Initially incompatible with shared X daily quota. |
+| Future hardware-backed approval enforcement | Supporting native authority/review components exist | Separate, unfinished TEE/hardware assurance target. Ordinary host-review decisions do not satisfy it. |
 
 Provider contracts: [GitHub](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-github-client-compatibility.md), [Gmail](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-gmail-job-verification.md), [npm installation](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-npm-install.md), [Alchemy](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-alchemy-verification.md), [X posting](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-x-posting.md), [AWS](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-aws-client-compatibility.md), [notifications](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-notifications.md).
 
@@ -68,6 +69,7 @@ The Alchemy Node recipe now uses Viem instead of the archived Alchemy SDK. The n
 | Rotation / key replacement | Explicitly replace a Serverware client token or a stored provider key, depending on the selected action. These affect different credentials; neither substitutes for required provider consent. |
 | Revocation | Remove a client's or permission's authority. Confirm the updated policy is enforced; already-dispatched requests cannot be recalled. |
 | Action-required alert | A notification that an operator needs to act. It neither performs that action nor grants approval authority. |
+| Host-trusted review | Administrator review of an exact request in the ordinary instance. Expiry and one-use enforcement trust that host; this is not TEE custody or a per-action hardware assertion. |
 | Audit notification | Delivery of recorded activity/outcomes to a separately configured destination; independent of action-required alerts. |
 
 ## Where to go next

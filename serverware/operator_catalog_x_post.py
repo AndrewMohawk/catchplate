@@ -21,7 +21,7 @@ _GATE_DESCRIPTOR = {"schema": "serverware.operatorXPostGate/v1",
 _RULE_FIELDS = frozenset({"name", "application_id", "credential_id", "operation_bundle",
     "upstream_url", "methods", "request_fields", "response_fields", "query_keys",
     "allowed_headers", "response_mode", "credential_input", "placeholder",
-    "id", "route_id", "created_at", "status", "ordinal", "version", "revoked_at", QUOTA_FIELD})
+    "id", "route_id", "created_at", "status", "ordinal", "version", "revoked_at", QUOTA_FIELD, "approval_mode"})
 
 
 def selected(rule: dict) -> bool:

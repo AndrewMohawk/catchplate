@@ -3,7 +3,7 @@
 The integration owns profile admission, a fresh read-only connection/snapshot,
 and the separate cursor/outbox commit. No database, configuration, key, network
 or runtime owner is imported here. Native/measured event sources need their own
-owner; existing JIT producers require PostgreSQL and are not demo ceremonies.
+owner; host-trusted approval metadata is a separate, explicitly labelled source.
 Stored hashes bind the cursor, not an independent audit-chain verification.
 """
 from __future__ import annotations
@@ -33,6 +33,18 @@ _NATIVE_SUMMARIES = {
     "security_key_available": "Use your security key for the native pilot",
     "confirmation_available": "Confirm the native pilot action",
 }
+HOST_REQUESTED = "operator.host_approval.requested"
+_HOST_SUMMARIES = {
+    HOST_REQUESTED: "Host-trusted approval requested",
+    "operator.host_approval.reviewed": "Host-trusted approval reviewed",
+    "operator.host_approval.approved": "Host-trusted approval recorded",
+    "operator.host_approval.denied": "Host-trusted approval denied",
+    "operator.host_approval.expired": "Host-trusted approval expired",
+    "operator.host_approval.claimed": "Host-trusted approval used once",
+}
+_HOST_COMMON = {"assurance", "approval_request_id", "principal_id", "route_id", "credential_id",
+    "credential_version", "policy_hash", "request_digest", "operation_digest"}
+_HOST_REQUEST = _HOST_COMMON | {"method", "requested_at", "expires_at", "reviewer_id", "approver_policy_digest", "url_commitment"}
 _SUMMARIES = {
     "proxy.request_decision": "Proxy request decision recorded",
     "data_plane.credential.release_started": "Authorized credential use started",
@@ -91,6 +103,7 @@ _CATALOG = {
     "google_setup.activated": "Google provider configuration activated",
 }
 _SUMMARIES.update({"operator_catalog." + key: value for key, value in _CATALOG.items()})
+_SUMMARIES.update(_HOST_SUMMARIES)
 _GITHUB_APP_CREATED = "operator_catalog.credential.github_app_created"
 _GITHUB_APP_KEY_REPLACED = "operator_catalog.credential.github_app_key_replaced"
 _GITHUB_APP_EVENTS = {_GITHUB_APP_CREATED, _GITHUB_APP_KEY_REPLACED}
@@ -127,7 +140,7 @@ _SETUP_IDS = {"operator_catalog." + kind + "." + action: (prefix, ":" + action)
     for kind, prefix in (("upstream_setup", "operator-upstream-setup:"),
                          ("google_setup", "operator-google-setup:"))
     for action in ("prepared", "cancelled", "activated")}
-ACTION_EVENT_TYPES = tuple(sorted(("approval.requested", "control_plane.approval.requested", *NATIVE_EVENT_TYPES)))
+ACTION_EVENT_TYPES = tuple(sorted(("approval.requested", "control_plane.approval.requested", HOST_REQUESTED, *NATIVE_EVENT_TYPES)))
 AUDIT_EVENT_TYPES = tuple(sorted((*_SUMMARIES, *NATIVE_EVENT_TYPES)))
 _LEGACY = {"approval_request_id", "route_id", "method", "url_commitment", "expires_at"}
 _JIT = _LEGACY | {"principal_id", "credential_id", "credential_version", "policy_hash",
@@ -612,6 +625,103 @@ before dispatch. A matching historical audit row alone cannot establish liveness
         return False
 
 
+def _host_details(row, event):
+    """Closed host-trusted audit metadata; never a private request or note."""
+    kind = row["event_type"]
+    fields = set(_HOST_COMMON)
+    if kind == HOST_REQUESTED:
+        fields = _HOST_REQUEST
+    elif kind in {"operator.host_approval.reviewed", "operator.host_approval.approved", "operator.host_approval.denied"}:
+        fields |= {"review_receipt_id", "review_digest"}
+        if kind != "operator.host_approval.reviewed":
+            fields |= {"note"}
+    elif kind == "operator.host_approval.claimed":
+        fields |= {"attempt_id"}
+    _require(kind in _HOST_SUMMARIES and type(event) is dict and set(event) == fields
+        and event["assurance"] == "host-trusted" and _uuid(row["event_id"])
+        and row["actor_type"] == ("proxy" if kind in {HOST_REQUESTED, "operator.host_approval.claimed"} else "admin")
+        and _text(row["actor_id"], 256) and _uuid(event["approval_request_id"])
+        and _uuid(event["credential_id"]) and _integer(event["credential_version"], 1)
+        and _text(event["principal_id"], 256) and _text(event["route_id"], 256)
+        and all(_hash(event[key]) for key in ("policy_hash", "request_digest", "operation_digest")))
+    if row["actor_type"] == "proxy":
+        _require(row["actor_id"] == event["principal_id"])
+    if kind == HOST_REQUESTED:
+        _require(event["method"] in _METHODS and _text(event["reviewer_id"], 256)
+            and _hash(event["approver_policy_digest"]) and _hash(event["url_commitment"]))
+        _epoch(event["expires_at"])
+        _epoch(event["requested_at"])
+    elif "review_receipt_id" in fields:
+        _require(_uuid(event["review_receipt_id"]) and _hash(event["review_digest"]))
+    elif "attempt_id" in fields:
+        _require(_hash(event["attempt_id"]))
+    return {key: event[key] for key in sorted(fields - {"note"})}
+
+
+def _host_projection(row, event):
+    _require(row["event_type"] == HOST_REQUESTED)
+    details = _host_details(row, event)
+    result = _envelope(row, "action_required", "Review host-trusted approval request", {"host_approval": details})
+    result.update(review_path="/approvals/" + event["approval_request_id"] + "#pending-actions",
+        approval_ref={"kind": "host_approval_request", "id": event["approval_request_id"],
+            "source_digest": event["request_digest"]}, expires_at=event["expires_at"])
+    return result
+
+
+def host_action_payload(payload) -> bool:
+    """Typed recognition only; configured reviewer and current row are separate."""
+    try:
+        _require(type(payload) is dict and type(payload.get("source")) is dict)
+        source = payload["source"]
+        _require(set(source) == {"event_id", "event_hash", "event_type", "created_at"}
+            and _uuid(source["event_id"]) and _hash(source["event_hash"]))
+        _epoch(source["created_at"])
+        event = payload["details"]["host_approval"]
+        row = dict(source, actor_type="proxy", actor_id=event["principal_id"])
+        return _same_projection(payload, _host_projection(row, event))
+    except (ValueError, TypeError, OverflowError, KeyError, AttributeError):
+        return False
+
+
+def _host_pending(conn, row, event, now):
+    _host_details(row, event)
+    if _epoch(row["created_at"]) > now or _epoch(event["expires_at"]) <= now:
+        return False
+    fields = ("route_id", "method", "expires_at", "principal_id", "credential_id", "credential_version",
+        "policy_hash", "request_digest", "operation_digest", "approver_policy_digest")
+    columns = [_bounded("status", 32), _bounded("requested_at", 40)] + [
+        _bounded_integer(key) if key == "credential_version" else _bounded(key, 512) for key in fields]
+    columns += [_bounded("url", 71), _bounded("approver_policy_json", 1024),
+        _bounded_integer("grant_ttl_seconds"), _bounded_integer("grant_max_uses")]
+    current = conn.execute("SELECT " + ",".join(columns) + " FROM approval_requests WHERE id=?",
+        (event["approval_request_id"],)).fetchone()
+    # Match the producer's exact closed host-reviewer policy, not any legacy or
+    # native approval that happens to share its public request digests.
+    policy = {"schema": "serverware.hostTrustedApprovalReviewer/v1", "assurance": "host-trusted",
+        "reviewerId": event["reviewer_id"], "maxUses": 1, "pendingTtlSeconds": 300, "approvalTtlSeconds": 60}
+    encoded = json.dumps(policy, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return (current is not None and current[0] == "pending" and current[1] == event["requested_at"]
+        and _epoch(current[1]) <= _epoch(row["created_at"])
+        and all(current[index + 2] == event[key] for index, key in enumerate(fields))
+        and tuple(current[-4:]) == (event["url_commitment"], encoded, 60, 1)
+        and "sha256:" + hashlib.sha256(encoded.encode("ascii")).hexdigest() == event["approver_policy_digest"])
+
+
+def host_action_matches_source(conn, payload, *, reviewer_id, now_epoch_ms) -> bool:
+    """Fresh committed metadata only; runtime availability is owned by the store."""
+    try:
+        _snapshot(conn)
+        _require(_integer(now_epoch_ms) and host_action_payload(payload))
+        _require(payload["details"]["host_approval"]["reviewer_id"] == reviewer_id)
+        row = _metadata(conn.execute("SELECT " + _COLUMNS + " FROM audit_events WHERE id=?",
+            (payload["source"]["event_id"],)).fetchone())
+        event = _payload(conn, row["rowid"])
+        return (_same_projection(payload, _host_projection(row, event))
+            and _host_pending(conn, row, event, now_epoch_ms))
+    except (sqlite3.Error, ValueError, TypeError, OverflowError, KeyError, AttributeError):
+        return False
+
+
 def _approval(conn, row, event, now):
     """Read only selected metadata; never decrypt a request/review/challenge."""
     if event is None or row["event_type"] not in ACTION_EVENT_TYPES:
@@ -667,7 +777,9 @@ def _approval(conn, row, event, now):
 
 
 def _audit_projection(row, event):
-    if row["event_type"] in _GITHUB_APP_EVENTS | {_X_CONFIGURATION_SAVED}:
+    if row["event_type"] in _HOST_SUMMARIES:
+        details = _host_details(row, event)
+    elif row["event_type"] in _GITHUB_APP_EVENTS | {_X_CONFIGURATION_SAVED}:
         details = _provider_configuration_details(row, event)
     else:
         details = _google_details(row, event) if row["event_type"] in _GOOGLE_SUMMARIES else _details(row, event)
@@ -698,7 +810,10 @@ def _project(conn, row, now):
     except (ValueError, TypeError, OverflowError):
         return None
     try:
-        action = _approval(conn, row, event, now)
+        if row["event_type"] == HOST_REQUESTED:
+            action = _host_projection(row, event) if _host_pending(conn, row, event, now) else None
+        else:
+            action = _approval(conn, row, event, now)
     except (ValueError, TypeError, OverflowError, sqlite3.Error):
         action = None  # No source owner/schema means no action claim.
     return SourceEvent(row["event_id"], row["event_hash"], row["created_at"], row["event_type"], audit, action)

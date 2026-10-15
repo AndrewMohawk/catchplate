@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Annotated, Literal
 import uuid
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator, model_serializer
 
 MIN_TOKEN_LIFETIME_SECONDS = 3600
 MAX_TOKEN_LIFETIME_SECONDS = 90 * 24 * 3600
@@ -34,6 +34,25 @@ class NamedInput(RevisionInput):
         if value != value.strip() or any(ord(c) < 32 or ord(c) == 127 for c in value):
             raise ValueError("invalid resource name")
         return value
+
+
+class ApprovalRuleInput(NamedInput):
+    """Omission preserves existing automatic permissions byte-for-byte."""
+    approval_mode: Literal["host_review_v1"] | None = None
+
+    @field_validator("approval_mode", mode="before")
+    @classmethod
+    def explicit_approval_mode(cls, value):
+        if value != "host_review_v1":
+            raise ValueError("approval mode must be host_review_v1 when supplied")
+        return value
+
+    @model_serializer(mode="wrap")
+    def omit_unselected_approval(self, handler):
+        result = handler(self)
+        if self.approval_mode is None:
+            result.pop("approval_mode", None)
+        return result
 
 
 class CredentialInput(NamedInput):
@@ -77,7 +96,7 @@ class XAppBearerInput(NamedInput):
         return validate_token(value)
 
 
-class XUsernameRuleInput(NamedInput):
+class XUsernameRuleInput(ApprovalRuleInput):
     application_id: str = Field(min_length=36, max_length=36)
     credential_id: str = Field(min_length=36, max_length=36)
     operation_bundle: Literal["x_username_read_v1"]
@@ -91,7 +110,7 @@ class XUsernameRuleInput(NamedInput):
         return validate_username(value)
 
 
-class XPostRuleInput(NamedInput):
+class XPostRuleInput(ApprovalRuleInput):
     """One fixed posting permission, optionally limited per verified account."""
     application_id: str = Field(min_length=36, max_length=36)
     credential_id: str = Field(min_length=36, max_length=36)
@@ -119,7 +138,7 @@ class AlchemyKeyInput(NamedInput):
         return validate_token(value)
 
 
-class AlchemyChainStatusRuleInput(NamedInput):
+class AlchemyChainStatusRuleInput(ApprovalRuleInput):
     application_id: str = Field(min_length=36, max_length=36)
     credential_id: str = Field(min_length=36, max_length=36)
     operation_bundle: Literal["alchemy_chain_status_read_v1"]
@@ -138,7 +157,7 @@ class NpmTokenInput(NamedInput):
         return validate_token(value)
 
 
-class NpmMetadataRuleInput(NamedInput):
+class NpmMetadataRuleInput(ApprovalRuleInput):
     application_id: str = Field(min_length=36, max_length=36)
     credential_id: str = Field(min_length=36, max_length=36)
     operation_bundle: Literal["npm_metadata_read_v1"]
@@ -168,7 +187,7 @@ class NpmPublishingWindow(BaseModel):
         return self
 
 
-class NpmPublishRuleInput(NamedInput):
+class NpmPublishRuleInput(ApprovalRuleInput):
     application_id: str = Field(min_length=36, max_length=36)
     credential_id: str = Field(min_length=36, max_length=36)
     operation_bundle: Literal["npm_publish_v1"]
@@ -228,7 +247,7 @@ class GithubAppInput(NamedInput):
         return value
 
 
-class GithubRuleInput(NamedInput):
+class GithubRuleInput(ApprovalRuleInput):
     application_id: str = Field(min_length=36, max_length=36)
     credential_id: str = Field(min_length=36, max_length=36)
     operation_bundle: Literal["github_issues_read_v1", "github_issues_write_v1"]
@@ -324,7 +343,11 @@ class ApplicationProxyAuthenticationInput(TargetInput):
     proxy_authentication: Literal["bearer", "basic_and_bearer_v1"]
 
 
-class RuleInput(NamedInput):
+class RuleApprovalInput(TargetInput):
+    approval_mode: Literal["automatic", "host_review_v1"]
+
+
+class RuleInput(ApprovalRuleInput):
     application_id: str = Field(min_length=36, max_length=36)
     credential_id: str = Field(min_length=36, max_length=36)
     upstream_url: str = Field(min_length=1, max_length=2048)
@@ -390,7 +413,7 @@ class GmailReadAgePolicy(BaseModel):
     mode: Literal["unrestricted"]
 
 
-class GmailReadRuleInput(NamedInput):
+class GmailReadRuleInput(ApprovalRuleInput):
     """A typed operation bundle, not caller-defined URL or content authority."""
     application_id: str = Field(min_length=36, max_length=36)
     credential_id: str = Field(min_length=36, max_length=36)

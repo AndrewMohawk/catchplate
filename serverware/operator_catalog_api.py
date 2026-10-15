@@ -26,7 +26,7 @@ MUTATION_PATHS = frozenset(PREFIX + path for path in (
     "/credentials/aws-sigv4", "/credentials/aws-sigv4/replace",
     "/applications/rotate-token", "/applications/proxy-authentication",
     "/applications/renewal/enroll", "/applications/renewal/cancel",
-    "/access-rules", "/access-rules/revoke", "/access-rules/gmail-read", "/access-rules/github", "/access-rules/npm-metadata", "/access-rules/npm-publish", "/access-rules/x-username", "/access-rules/x-post",
+    "/access-rules", "/access-rules/revoke", "/access-rules/approval", "/access-rules/gmail-read", "/access-rules/github", "/access-rules/npm-metadata", "/access-rules/npm-publish", "/access-rules/x-username", "/access-rules/x-post",
     "/access-rules/alchemy-chain-status", "/access-rules/npm-install",
     "/oauth/google/disconnect", "/oauth/google/reauthorize", "/oauth/google/reauthorization-storage",
     "/oauth/google/setup", "/oauth/google/setup/cancel",
@@ -335,6 +335,11 @@ async def create_rule(request: Request, identity: auth.AdminIdentity = Depends(_
 @router.post("/access-rules/revoke")
 async def revoke_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
     return await _mutate(request, identity, "TargetInput", "revoke_rule", 1024)
+
+
+@router.post("/access-rules/approval")
+async def rule_approval(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "RuleApprovalInput", "set_rule_approval", 2048)
 
 
 @router.post("/access-rules/gmail-read")

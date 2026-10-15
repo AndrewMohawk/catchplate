@@ -1,0 +1,10 @@
+# Optional ordinary host-trusted approval capability. Requires the matching
+# application and proxy binary; this never enables native/TEE approval authority.
+# Existing permissions remain automatic until an operator explicitly changes one.
+services:
+  serverware:
+    environment:
+      SERVERWARE_HOST_TRUSTED_APPROVALS_ENABLED: "1"
+  decision-gate-rs:
+    environment:
+      SERVERWARE_HOST_TRUSTED_APPROVALS_ENABLED: "1"

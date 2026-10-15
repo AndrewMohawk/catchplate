@@ -32,7 +32,7 @@ MAX_QUEUE = 256
 MAX_HISTORY = 10000
 MAX_CONFIGURATIONS = 1024
 # Legacy approval/JIT producers are not admitted operator-development sources.
-# Separately admitted native observations use their own typed source boundary;
+# Native observations and host-trusted requests have separate typed boundaries;
 # never turn this into a blanket action-source or operator-editable bypass.
 ACTION_SOURCE_AVAILABLE = False
 _PREFIX = "operator_notification_"
@@ -266,7 +266,7 @@ def _delivery(row):
     if row is None:
         return None
     from serverware.operator_notification_transport import DELIVERY_CODES
-    allowed_codes = DELIVERY_CODES | {"configuration_changed", "action_no_longer_current", "action_expired", "action_source_unavailable", "native_source_unavailable"}
+    allowed_codes = DELIVERY_CODES | {"configuration_changed", "action_no_longer_current", "action_expired", "action_source_unavailable", "native_source_unavailable", "host_source_unavailable"}
     _require(row["status"] in STATES and (row["last_code"] is None or row["last_code"] in allowed_codes)
         and _identifier(row["delivery_id"]) == row["delivery_id"] and type(row["attempts"]) is int and 0 <= row["attempts"] <= 3
         and (row["http_status"] is None or type(row["http_status"]) is int and 200 <= row["http_status"] <= 599))
@@ -523,8 +523,21 @@ is a no-op, while any ID reuse with different retained content fails closed.
         return {"recorded": not exists, "event_id": identifier}
 
 
-def _action_admitted(payload):
+def host_source_available() -> bool:
+    """Fresh host gate observation, only outside store/publication transactions."""
+    from serverware import operator_host_approvals as host
+    return host.enabled() and host.available()
+
+
+def _host_owned(payload):
+    from serverware import config
+    return (events.host_action_payload(payload)
+        and payload["details"]["host_approval"]["reviewer_id"] == config.ADMIN_USER_ID)
+
+
+def _action_admitted(payload, *, host_available=False):
     return (payload.get("test") is True or events.native_action_payload(payload)
+        or host_available and _host_owned(payload)
         or ACTION_SOURCE_AVAILABLE is True)
 
 
@@ -532,6 +545,7 @@ def _action_admitted(payload):
 def consume_events(now_epoch_ms):
     now = _time(now_epoch_ms)
     path = _admit()
+    host_available = host_source_available()
     with _read() as conn:
         meta, _ = _key(conn, path)
         if not meta:
@@ -552,12 +566,12 @@ def consume_events(now_epoch_ms):
                 selection = source.filter_event_type or source.event_type
                 if notice is not None and selection in configuration["event_types"]:
                     additions.append((slot, configuration["revision"], source.event_id, notice))
-        active = sum(not slot.startswith("action_required.") or _action_admitted(notice)
+        active = sum(not slot.startswith("action_required.") or _action_admitted(notice, host_available=host_available)
             for slot, _, _, notice in additions)
         _capacity(conn, active, len(additions))
         for slot, revision, source_event_id, notice in additions:
             identifier = _enqueue(conn, slot, revision, source_event_id, notice, now)
-            if slot.startswith("action_required.") and not _action_admitted(notice):
+            if slot.startswith("action_required.") and not _action_admitted(notice, host_available=host_available):
                 conn.execute("UPDATE operator_notification_deliveries SET status='suppressed',last_code='action_source_unavailable' WHERE delivery_id=?", (identifier,))
         conn.execute("UPDATE operator_notification_meta SET cursor_json=? WHERE singleton=1", (_cursor_json(cursor),))
         return {"consumed": cursor.rowid - _cursor(old_cursor).rowid, "queued": active, "suppressed": len(additions) - active}
@@ -583,6 +597,7 @@ def _recover_sending(conn, now):
 def claim_next(now_epoch_ms):
     now = _time(now_epoch_ms)
     path = _admit()
+    host_available = host_source_available()
     with _write() as conn:
         meta, key = _key(conn, path)
         if not meta:
@@ -594,7 +609,7 @@ def claim_next(now_epoch_ms):
         for row in pending:
             payload = json.loads(row["payload_json"])
             _require(type(payload) is dict)
-            if row["slot"].startswith("action_required.") and not _action_admitted(payload):
+            if row["slot"].startswith("action_required.") and not _action_admitted(payload, host_available=host_available):
                 _terminal(conn, row, "suppressed", "action_source_unavailable", now)
                 continue
             configuration = _config(conn, row["slot"])
@@ -632,6 +647,13 @@ def is_native_action(claim) -> bool:
         and events.native_action_payload(claim.payload))
 
 
+def is_host_action(claim) -> bool:
+    """Closed host action recognition; not permission to decide or dispatch."""
+    return (type(claim) is DeliveryClaim and claim.channel == "action_required"
+        and claim.slot in {"action_required.slack", "action_required.webhook"}
+        and events.host_action_payload(claim.payload))
+
+
 @_safe_errors
 def suppress_native_claim(claim, now_epoch_ms):
     """Retain a fixed refusal after the worker's outside-lock relay recheck."""
@@ -651,6 +673,7 @@ def current(claim, now_epoch_ms):
     now = _time(now_epoch_ms)
     path = _admit()
     reason = None
+    host_available = host_source_available() if is_host_action(claim) else False
     with _read() as conn:
         meta, _ = _key(conn, path)
         _require(meta is not None)
@@ -673,6 +696,16 @@ def current(claim, now_epoch_ms):
                     reason = "action_expired"
                 elif not events.native_action_matches_source(conn, claim.payload, now_unix_nanos=current_nanos):
                     reason = "native_source_unavailable"
+            elif is_host_action(claim):
+                from serverware import config
+                current_ms = max(now, _now())
+                if current_ms >= events._epoch(claim.payload["expires_at"]):
+                    reason = "action_expired"
+                elif not host_available or not _host_owned(claim.payload):
+                    reason = "host_source_unavailable"
+                elif not events.host_action_matches_source(conn, claim.payload,
+                        reviewer_id=config.ADMIN_USER_ID, now_epoch_ms=current_ms):
+                    reason = "action_no_longer_current"
             elif not ACTION_SOURCE_AVAILABLE:
                 reason = "action_source_unavailable"
             elif not events.action_is_current(conn, claim.payload, now_epoch_ms=now):
@@ -686,6 +719,8 @@ def current(claim, now_epoch_ms):
         final_expiry = events.native_expiry_unix_nanos(claim.payload)
         if time.time_ns() >= final_expiry:
             reason = "action_expired"
+    if reason is None and is_host_action(claim) and _now() >= events._epoch(claim.payload["expires_at"]):
+        reason = "action_expired"
     if reason:
         with _write() as conn:
             _key(conn, path)

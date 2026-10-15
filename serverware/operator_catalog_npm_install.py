@@ -17,7 +17,7 @@ _GATE = {"schema": "serverware.operatorNpmInstallGate/v1", "adapter": "npm.insta
 _FIELDS = {"name", "application_id", "credential_id", "operation_bundle", "packages",
     "upstream_url", "methods", "request_fields", "response_fields", "query_keys",
     "allowed_headers", "response_mode", "credential_input", "placeholder"}
-_RETAINED = {"id", "route_id", "created_at", "status", "ordinal", "version", "revoked_at"}
+_RETAINED = {"id", "route_id", "created_at", "status", "ordinal", "version", "revoked_at", "approval_mode"}
 
 
 def selected(rule: dict) -> bool:

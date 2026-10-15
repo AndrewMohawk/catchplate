@@ -17,7 +17,7 @@ RESPONSE_MODE = "npm_publish_json_v1"
 _FIELDS = {"name", "application_id", "credential_id", "operation_bundle", "package", "tag",
     "publishing_window", "upstream_url", "methods", "request_fields", "response_fields",
     "query_keys", "allowed_headers", "response_mode", "credential_input", "placeholder"}
-_RETAINED = {"id", "ordinal", "version", "route_id", "created_at", "status", "revoked_at"}
+_RETAINED = {"id", "ordinal", "version", "route_id", "created_at", "status", "revoked_at", "approval_mode"}
 
 
 def selected(rule: dict) -> bool:

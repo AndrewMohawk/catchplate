@@ -1,7 +1,19 @@
-// A public-metadata queue, not a review-opening or decision authority. Merely
-// visiting this view never opens private material, issues a receipt or decides.
+// Opening this queue only reads public metadata. Host-trusted review and
+// decisions require separate explicit gestures; native review stays separate.
 const pendingApprovalUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const hostApprovalWarning = 'Host-trusted approvals: a server administrator can bypass this control. Hardware-backed protection is not enabled.';
+const hostApprovalPrefix = '/api/operator-demo/approvals';
 function projectApprovalCapabilities(value) {
+  if (value?.schema === 'serverware.approvalCapabilities/v2') {
+    const fields = ['schema', 'mode', 'can_list', 'can_review', 'can_decide', 'reason'];
+    if (Array.isArray(value) || Object.keys(value).length !== fields.length || !fields.every(key => Object.hasOwn(value, key)) ||
+        value.mode !== 'host_trusted_v1' || !fields.slice(2, 5).every(key => typeof value[key] === 'boolean') ||
+        ![null, 'host_trusted_approvals_unavailable', 'role_required'].includes(value.reason) ||
+        value.can_decide && !value.can_review || value.can_review && !value.can_list ||
+        value.can_decide && value.reason !== null || !value.can_review && value.reason === null ||
+        value.reason === 'role_required' && value.can_decide) throw new Error('Invalid host-trusted approval capability');
+    return Object.fromEntries(fields.map(key => [key, value[key]]));
+  }
   const fields = ['schema', 'can_list', 'can_open_native_review', 'can_decide', 'reason'];
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
       Object.keys(value).length !== fields.length || !fields.every(key => Object.hasOwn(value, key)) ||
@@ -22,7 +34,7 @@ function projectApprovalMetadata(item) {
     item.credential_id === '' && item.credential_version === 0 ||
     text(item.credential_id, 512) && Number.isSafeInteger(item.credential_version) && item.credential_version >= 1);
   if (!item || typeof item.id !== 'string' || !pendingApprovalUUID.test(item.id) ||
-      !['pending', 'approved', 'denied', 'expired'].includes(item.status) ||
+      !(item.assurance === 'host-trusted' ? ['pending', 'approved', 'denied', 'expired', 'consumed'] : ['pending', 'approved', 'denied', 'expired']).includes(item.status) ||
       !text(item.route_id, 256) || typeof item.method !== 'string' || !/^[A-Z]{1,16}$/.test(item.method) || !text(item.url, 4096) ||
       !date(item.requested_at) || !date(item.expires_at) || !optionalText(item.principal_id, 512) ||
       !credential ||
@@ -30,8 +42,34 @@ function projectApprovalMetadata(item) {
     throw new Error('Invalid pending-action metadata');
   // Explicitly discard all other fields, even if an unexpected server sends
   // private review material. Nothing from the raw response enters DOM/state.
-  return Object.fromEntries(['id', 'status', 'route_id', 'method', 'url', 'requested_at', 'expires_at',
+  const result = Object.fromEntries(['id', 'status', 'route_id', 'method', 'url', 'requested_at', 'expires_at',
     'principal_id', 'credential_id', 'credential_version', 'policy_hash'].map(key => [key, item[key]]));
+  if (item.assurance === 'host-trusted') {
+    if (!optionalText(item.reviewer_id, 512) || !(item.consumed_at === null || date(item.consumed_at)) ||
+        !(item.approved_until === null || date(item.approved_until))) throw new Error('Invalid host-trusted approval metadata');
+    Object.assign(result, {assurance: 'host-trusted', reviewer_id: item.reviewer_id,
+      consumed_at: item.consumed_at, approved_until: item.approved_until});
+  }
+  return result;
+}
+function projectHostApprovalReview(value, id) {
+  const digest = item => typeof item === 'string' && /^sha256:[0-9a-f]{64}$/.test(item);
+  if (!value || value.assurance !== 'host-trusted' || !pendingApprovalUUID.test(value.review_receipt_id || '') ||
+      !digest(value.review_digest) || typeof value.review_expires_at !== 'string' ||
+      !Number.isFinite(Date.parse(value.review_expires_at)) || Date.parse(value.review_expires_at) <= Date.now())
+    throw new Error('Invalid host-trusted review');
+  const approval = projectApprovalMetadata(value.approval);
+  const source = value.document;
+  if (approval.id !== id || approval.assurance !== 'host-trusted' || approval.status !== 'pending' ||
+      !source || typeof source !== 'object' || Array.isArray(source) || JSON.stringify(source).length > 65536 ||
+      !['method', 'url', 'principal_id', 'route_id', 'credential_id', 'credential_version', 'policy_hash']
+        .every(key => source[key] === approval[key]) || !digest(source.request_digest) || !digest(source.operation_digest))
+    throw new Error('Invalid host-trusted review document');
+  const document = Object.fromEntries(['method', 'url', 'principal_id', 'route_id', 'credential_id', 'credential_version',
+    'policy_hash', 'request_digest', 'operation_digest', 'headers', 'query', 'body_sha256', 'operation']
+    .filter(key => Object.hasOwn(source, key)).map(key => [key, source[key]]));
+  return {approval, document, review_receipt_id: value.review_receipt_id,
+    review_digest: value.review_digest, review_expires_at: value.review_expires_at};
 }
 function projectPendingApprovals(value) {
   if (!Array.isArray(value) || value.length > 100 || new Set(value.map(item => item?.id)).size !== value.length)
@@ -59,10 +97,15 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
   };
   let visible = false, generation = 0, controller = null, loading = false;
   let capability = null, rows = null, requestedId = null, invalidLink = false, opener = null, opening = false;
-  let selectedRecord;
+  let selectedRecord, hostReview = null;
+  const hostMode = () => capability?.mode === 'host_trusted_v1';
   const status = message => { el('pending-actions-status').textContent = message; };
   const hold = id => {
     try {
+      if (hostMode()) {
+        const marker = sessionStorage.getItem('serverware.hostApprovalDecisionUncertain.' + id);
+        return marker === null ? '' : 'A decision needs status recovery. Check its status; do not submit it again.';
+      }
       const reviewMarker = sessionStorage.getItem('serverware.nativeJitReviewUncertain.' + id);
       if (reviewMarker !== null) return reviewMarker === id ?
         'A protected opening has an uncertain outcome. No new review or decision will be attempted here.' :
@@ -71,9 +114,13 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
       return marker === null ? '' : marker === id ?
         'A submitted decision needs status recovery. No review or decision will be retried here.' :
         'The decision recovery marker is invalid. Protected review is unavailable.';
-    } catch (_) { return 'Browser decision recovery storage is unavailable. Protected review is unavailable.'; }
+    } catch (_) { return hostMode() ? 'Browser decision recovery storage is unavailable. No decision can be sent.' :
+      'Browser decision recovery storage is unavailable. Protected review is unavailable.'; }
   };
   function openingReason() {
+    if (hostMode()) return hostApprovalWarning + (capability.can_review ?
+      ' Review an exact request before approving it once or denying it. The original HTTP 428 request has stopped.' :
+      ' Reviews and decisions are currently unavailable for this session.');
     if (!capability) return 'Protected review availability has not been established.';
     if (!capability.can_list) return capability.reason === 'role_required' ?
       'Your Serverware role does not allow access to this queue.' : 'The approval authority is unavailable.';
@@ -111,6 +158,13 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
     selected.append(node('p', 'Status: ' + item.status[0].toUpperCase() + item.status.slice(1), 'badge'));
     selected.append(metadata(item));
     if (item.status !== 'pending') {
+      if (hostMode()) {
+        selected.append(node('p', item.status === 'approved' ?
+          'Approved once. The original request stopped with HTTP 428. Explicitly retry exactly the same request once before ' + item.approved_until + '. Serverware will not replay it automatically.' :
+          item.status === 'consumed' ? 'This approval has been consumed. Do not resend automatically; check the audit log for the provider outcome.' :
+          item.status === 'denied' ? 'This request was denied. No retry is authorized.' : 'This request expired. No retry is authorized.', 'notice'));
+        return;
+      }
       selected.append(node('p', item.status === 'approved' ?
         'Approval was recorded. This does not confirm that the provider request completed; check audit logging for its outcome.' :
         item.status === 'denied' ? 'This request was denied.' : 'This request expired.', 'small muted'));
@@ -118,6 +172,7 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
       if (recovery) selected.append(node('p', recovery, 'small muted'));
       return;
     }
+    if (hostMode()) { renderHostReview(selected, item); return; }
     const reason = hold(item.id) || (Date.parse(item.expires_at) <= Date.now() ? 'This request has expired; refresh its metadata.' : openingReason());
     selected.append(node('p', reason, 'small muted'));
     if (!capability?.can_open_native_review || !opener) return;
@@ -135,6 +190,85 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
     });
     selected.append(button);
   }
+  async function hostPost(id, action, body, version) {
+    const response = await fetch(hostApprovalPrefix + '/' + id + '/' + action, {method: 'POST', credentials: 'same-origin',
+      cache: 'no-store', redirect: 'error', headers: {'Accept': 'application/json', 'Content-Type': 'application/json'},
+      signal: AbortSignal.timeout(30000), body: JSON.stringify(body)});
+    if (!visible || version !== generation) throw new Error('discarded');
+    if ([401, 403].includes(response.status)) { onAuthenticationLost(); throw new Error('authentication'); }
+    if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('unavailable');
+    const raw = await response.text();
+    if (raw.length > 1048576) throw new Error('unavailable');
+    return JSON.parse(raw);
+  }
+  function retireHostDecision(item) {
+    if (item.assurance !== 'host-trusted' || item.status === 'pending') return;
+    try { sessionStorage.removeItem('serverware.hostApprovalDecisionUncertain.' + item.id); } catch (_) { /* terminal status is still readable */ }
+  }
+  function renderHostReview(selected, item) {
+    const recovery = hold(item.id);
+    if (recovery) {
+      selected.append(node('p', recovery, 'notice'));
+      const check = node('button', 'Check decision status', 'secondary'); check.dataset.hostStatus = item.id;
+      check.disabled = opening || loading;
+      check.addEventListener('click', async () => {
+        if (!visible || opening || loading || requestedId !== item.id) return;
+        const version = generation; opening = true; render();
+        try {
+          const value = projectApprovalMetadata(await request(hostApprovalPrefix + '/' + item.id, AbortSignal.timeout(15000)));
+          if (version !== generation || !visible) return;
+          if (value.id !== item.id || value.assurance !== 'host-trusted') throw new Error('unavailable');
+          retireHostDecision(value); selectedRecord = value; rows = (rows || []).filter(row => row.id !== item.id);
+          status(value.status === 'pending' ? 'The request is still pending. The interrupted decision is not being resubmitted.' : 'Decision status: ' + value.status + '.');
+        } catch (_) { if (version === generation) status('Decision status is unavailable. No decision was retried.'); }
+        finally { if (version === generation) { opening = false; render(); } }
+      }); selected.append(check); return;
+    }
+    if (Date.parse(item.expires_at) <= Date.now()) { selected.append(node('p', 'This request expired. Refresh its status.')); return; }
+    if (!capability.can_review) { selected.append(node('p', openingReason())); return; }
+    if (hostReview?.approval.id !== item.id || Date.parse(hostReview.review_expires_at) <= Date.now()) {
+      const button = node('button', 'Review request'); button.dataset.hostReview = item.id;
+      button.disabled = opening || loading;
+      button.addEventListener('click', async () => {
+        if (!visible || opening || loading || !hostMode() || !capability.can_review || requestedId !== item.id || hold(item.id)) return;
+        const version = generation; opening = true; hostReview = null; render();
+        try {
+          const review = projectHostApprovalReview(await hostPost(item.id, 'review', {}, version), item.id);
+          if (version !== generation || !visible) return;
+          hostReview = review; status('Review the exact request below. No decision has been submitted.');
+        } catch (_) { if (version === generation) status('Review could not be opened. Refresh the request before explicitly reviewing it again. No decision was submitted.'); }
+        finally { if (version === generation) { opening = false; render(); } }
+      }); selected.append(button); return;
+    }
+    selected.append(node('h3', 'Request review'), node('p', hostApprovalWarning, 'notice'),
+      node('pre', JSON.stringify(hostReview.document, null, 2)),
+      node('p', 'Request body contents are not displayed; the body hash binds this approval to the exact submitted bytes. Approve only if you recognize the request.', 'notice'),
+      node('p', 'Approval permits one explicit retry of exactly this request; it does not execute it. Never automatically replay an uncertain provider operation.', 'small muted'));
+    for (const [decision, label] of [['approve', 'Approve once'], ['deny', 'Deny']]) {
+      const button = node('button', label, decision === 'deny' ? 'secondary' : undefined); button.dataset.hostDecision = decision;
+      button.disabled = opening || loading || !capability.can_decide;
+      button.addEventListener('click', async () => {
+        if (!visible || opening || loading || !hostMode() || !capability.can_decide || requestedId !== item.id ||
+            hostReview?.approval.id !== item.id || Date.parse(hostReview.review_expires_at) <= Date.now() ||
+            Date.parse(item.expires_at) <= Date.now() || hold(item.id)) return;
+        const version = generation, review = hostReview;
+        const key = 'serverware.hostApprovalDecisionUncertain.' + item.id;
+        try { sessionStorage.setItem(key, item.id); if (sessionStorage.getItem(key) !== item.id) throw new Error(); }
+        catch (_) { status('Decision recovery storage is unavailable. No decision was sent.'); return; }
+        opening = true; hostReview = null; render();
+        try {
+          const value = projectApprovalMetadata(await hostPost(item.id, 'decision', {decision,
+            review_receipt_id: review.review_receipt_id, review_digest: review.review_digest, note: null}, version));
+          if (version !== generation || !visible) return;
+          if (value.id !== item.id || value.assurance !== 'host-trusted' ||
+              !(decision === 'approve' ? ['approved', 'consumed'] : ['denied']).includes(value.status)) throw new Error('unavailable');
+          retireHostDecision(value); selectedRecord = value; rows = (rows || []).filter(row => row.id !== item.id);
+          status('Decision recorded: ' + value.status + '. No provider request was sent by this page.');
+        } catch (_) { if (version === generation) status('The decision outcome is unknown. Check decision status; do not submit it again.'); }
+        finally { if (version === generation) { opening = false; render(); } }
+      }); selected.append(button);
+    }
+  }
   function render() {
     el('pending-actions-refresh').disabled = loading || opening;
     el('pending-actions').setAttribute('aria-busy', String(loading));
@@ -149,6 +283,7 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
       button.addEventListener('click', () => {
         if (!visible || loading || opening || !rows?.some(row => row === item)) return;
         requestedId = item.id; invalidLink = false; selectedRecord = undefined;
+        hostReview = null;
         history.replaceState(null, '', '/approvals/' + item.id + '#pending-actions');
         renderSelected(); el('pending-actions-selected').focus({preventScroll: true});
       });
@@ -175,20 +310,26 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
     const version = ++generation;
     controller?.abort(); controller = new AbortController();
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]);
-    loading = true; capability = null; rows = null; selectedRecord = undefined;
+    loading = true; capability = null; rows = null; selectedRecord = undefined; hostReview = null;
     status('Loading pending actions…'); render();
     try {
       const nextCapability = projectApprovalCapabilities(await request('/api/approvals/capabilities', signal));
       if (version !== generation || !visible) return false;
       capability = nextCapability;
       if (!capability.can_list) { status('Pending actions are unavailable for this session.'); return false; }
-      const nextRows = projectPendingApprovals(await request('/api/approvals?status=pending', signal));
+      const prefix = hostMode() ? hostApprovalPrefix : '/api/approvals';
+      const nextRows = projectPendingApprovals(await request(hostMode() ? prefix : prefix + '?status=pending', signal));
+      if (hostMode() && nextRows.some(row => row.assurance !== 'host-trusted')) throw new Error('unavailable');
       if (version !== generation || !visible) return false;
       if (requestedId && !nextRows.some(row => row.id === requestedId)) {
-        const result = await request('/api/approvals/' + requestedId, signal, true);
+        const result = await request(prefix + '/' + requestedId, signal, true);
         if (version !== generation || !visible) return false;
         selectedRecord = result === null ? null : projectApprovalMetadata(result);
         if (selectedRecord && selectedRecord.id !== requestedId) throw new Error('unavailable');
+        if (hostMode() && selectedRecord) {
+          if (selectedRecord.assurance !== 'host-trusted') throw new Error('unavailable');
+          retireHostDecision(selectedRecord);
+        }
       }
       rows = nextRows;
       status(rows.length ? rows.length + ' pending action' + (rows.length === 1 ? '' : 's') + ' visible to you. Showing at most the first 100.' :
@@ -208,6 +349,7 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
     const changed = visible !== Boolean(value);
     const previousId = requestedId;
     visible = Boolean(value);
+    if (!visible || previousId !== selection.requestedId) hostReview = null;
     requestedId = typeof selection.requestedId === 'string' && pendingApprovalUUID.test(selection.requestedId) ? selection.requestedId : null;
     invalidLink = selection.invalidLink === true || Boolean(selection.requestedId && !requestedId);
     if (!visible) {
@@ -221,7 +363,7 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
   }
   function authenticationLost() {
     ++generation; controller?.abort(); controller = null; loading = false; opening = false;
-    capability = null; rows = null; selectedRecord = undefined;
+    capability = null; rows = null; selectedRecord = undefined; hostReview = null;
     status('Your Serverware session could not be verified. Reload and sign in again.'); render();
   }
   el('pending-actions-refresh').addEventListener('click', () => { void refresh(); });
@@ -233,4 +375,5 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
   }};
 }
 if (typeof module !== 'undefined' && module.exports) module.exports = {
-  projectApprovalCapabilities, projectApprovalMetadata, projectPendingApprovals, pendingApprovalLocation, createPendingActionsView};
+  projectApprovalCapabilities, projectApprovalMetadata, projectPendingApprovals, projectHostApprovalReview,
+  pendingApprovalLocation, createPendingActionsView};

@@ -147,6 +147,8 @@ function operatorRuleCredentialValid(rule, credential) {
   } catch (_) { return false; }
 }
 function operatorRuleSupported(rule, catalog) {
+  if (Object.hasOwn(rule || {}, 'approval_mode') &&
+      (rule.approval_mode !== 'host_review_v1' || !operatorHostApprovalAvailable(catalog, rule))) return false;
   const credential = catalog?.credentials.find(item => item.id === rule?.credential_id && item.status === 'active');
   const application = catalog?.applications.find(item => item.id === rule?.application_id && item.status === 'active');
   if (isXPostRule(rule)) return Boolean(credential && application && applicationProxyAuthenticationSupported(catalog, application) &&
@@ -169,6 +171,27 @@ function operatorRuleSupported(rule, catalog) {
     operatorRuleContentValid(rule, credential) && operatorRuleCredentialValid(rule, credential) &&
     (isGmailRule(rule) ? gmailAvailable(catalog, credential) : availableResponseModes(catalog).includes(rule.response_mode)) && availableCredentialInputModes(catalog).includes(rule.credential_input) &&
     (!Object.hasOwn(rule, 'request_body_mode') || availableRequestBodyChoices(catalog, credential).includes(rule.request_body_mode)));
+}
+function projectHostApprovalsCapability(value) {
+  if (value == null) return null;
+  const fields = ['schema', 'mode', 'available', 'operation_bundles', 'generic_rules', 'setting_path'];
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== fields.length ||
+      !fields.every(key => Object.hasOwn(value, key)) || value.schema !== 'serverware.operatorHostApprovals/v1' ||
+      value.mode !== 'host_trusted_v1' || typeof value.available !== 'boolean' || value.generic_rules !== true ||
+      value.setting_path !== '/api/operator-demo/access-rules/approval' || !Array.isArray(value.operation_bundles) ||
+      value.operation_bundles.length > 32 || value.operation_bundles.some(item => typeof item !== 'string' || !/^[a-z0-9_]{1,80}$/.test(item)) ||
+      new Set(value.operation_bundles).size !== value.operation_bundles.length)
+    throw operatorError('Host-trusted approval capability is invalid. Refresh before changing permissions.');
+  return {...value, operation_bundles: [...value.operation_bundles]};
+}
+function operatorHostApprovalAvailable(catalog, rule = {}) {
+  const capability = catalog?.capabilities?.host_approvals;
+  return Boolean(capability?.available && !Object.hasOwn(rule, 'daily_post_attempt_limit') &&
+    (rule.operation_bundle ? capability.operation_bundles.includes(rule.operation_bundle) : capability.generic_rules));
+}
+function operatorApprovalRows(rule) {
+  return rule.approval_mode === 'host_review_v1' ? [['Human approval',
+    'Required for each exact request. Host-trusted; server administrators can bypass it. HTTP 428 stops the first request; approval permits one explicit identical retry.']] : [];
 }
 function chooseModeOptions(id, items, placeholder) {
   const select = element(id); const previous = select.value;
@@ -446,8 +469,10 @@ function projectCatalog(value) {
   const accessRules = project(value.access_rules, ['application_id', 'credential_id', 'route_id', 'upstream_url', 'methods',
     'request_fields', 'response_fields', 'query_keys', 'allowed_headers', 'response_mode', 'credential_input', 'enforcement']);
   accessRules.forEach((rule, index) => {
-    for (const name of ['request_body_mode', 'placeholder', 'operation_bundle', 'age_policy', 'query_mode', 'repository', 'packages', 'package', 'tag', 'publishing_window', 'username', 'chain', 'quota', 'daily_quota', 'daily_post_attempt_limit'])
+    for (const name of ['request_body_mode', 'placeholder', 'operation_bundle', 'age_policy', 'query_mode', 'repository', 'packages', 'package', 'tag', 'publishing_window', 'username', 'chain', 'quota', 'daily_quota', 'daily_post_attempt_limit', 'approval_mode'])
       if (Object.hasOwn(value.access_rules[index], name)) rule[name] = value.access_rules[index][name];
+    if (Object.hasOwn(rule, 'approval_mode') && rule.approval_mode !== 'host_review_v1')
+      throw operatorError('Saved approval mode is unsupported. Refresh before changing permissions.');
   });
   for (const rule of accessRules) if (rule.credential_input === undefined) rule.credential_input = 'insert';
   for (const rule of accessRules) for (const name of ['methods', 'request_fields', 'response_fields', 'query_keys', 'allowed_headers']) {
@@ -471,6 +496,7 @@ function projectCatalog(value) {
     throw operatorError('Saved Google account and access-rule states disagree. Changes are disabled.');
   const capabilities = pick(value.capabilities || {}, ['credential_types', 'response_modes', 'request_body_modes',
     'credential_input_modes', 'token_lifetime_seconds', 'oauth']);
+  capabilities.host_approvals = projectHostApprovalsCapability(value.capabilities?.host_approvals);
   capabilities.static_key_replacement = projectStaticKeyReplacementCapability(value.capabilities?.static_key_replacement);
   capabilities.application_proxy_authentication = projectApplicationProxyAuthenticationCapability(value.capabilities?.application_proxy_authentication);
   capabilities.workload_renewal = value.capabilities?.workload_renewal == null ? null :
@@ -541,10 +567,11 @@ function createOperatorMutationRecovery() {
 function operatorOrdinaryMutationConfirmation(path, body, before) {
   const contract = {'credentials/revoke': ['credentials', 'credential'],
     'applications/revoke': ['applications', 'application'], 'access-rules': ['access_rules', 'access_rule'],
+    'access-rules/approval': ['access_rules', 'access_rule'],
     'access-rules/revoke': ['access_rules', 'access_rule']}[path];
   const invalid = () => operatorError('The exact saved change could not be confirmed. Review refreshed state; do not repeat the request.');
   if (!contract) throw invalid();
-  const [collection, key] = contract, creating = path === 'access-rules';
+  const [collection, key] = contract, creating = path === 'access-rules', changingApproval = path === 'access-rules/approval';
   const submitted = JSON.parse(JSON.stringify(body));
   const affected = path === 'applications/revoke' ? before.access_rules.filter(item =>
     item.status === 'active' && item.application_id === body.id).map(item => item.id).sort() : [];
@@ -567,11 +594,16 @@ function operatorOrdinaryMutationConfirmation(path, body, before) {
           (policy.policy_hash !== before.policy.policy_hash) !== changesPolicy ||
           !['active', 'pending'].includes(policy.activation) || !item ||
           !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(item.id || '') ||
-          item.status !== (creating ? 'active' : 'revoked') ||
+          item.status !== (creating || changingApproval ? 'active' : 'revoked') ||
           (creating ? before[collection].some(row => row.id === item.id) || item.route_id !== 'operator.' + item.id ||
             !Object.entries(submitted).every(([name, value]) => operatorExact(item[name], value)) :
             item.id !== submitted.id || !before[collection].some(row => row.id === item.id && row.status === 'active')) ||
           Object.hasOwn(result, 'affected_rule_ids') && !operatorExact([...result.affected_rule_ids].sort(), affected)) throw invalid();
+      if (changingApproval && (item.approval_mode ?? 'automatic') !== submitted.approval_mode) throw invalid();
+      if (changingApproval) {
+        const unchanged = value => Object.fromEntries(Object.entries(stable(value)).filter(([name]) => name !== 'approval_mode'));
+        if (!operatorExact(unchanged(item), unchanged(before.access_rules.find(row => row.id === submitted.id)))) throw invalid();
+      }
       received = {item: stable(item), revision: result.revision, hash: policy.policy_hash, sequence: policy.sequence};
     },
     confirm(after) {

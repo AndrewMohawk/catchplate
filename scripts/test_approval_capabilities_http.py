@@ -18,6 +18,7 @@ import sqlite3
 import sys
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 from urllib.parse import unquote, urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -29,6 +30,9 @@ ROOT = Path(__file__).resolve().parents[1]
 PATH = "/api/approvals/capabilities"
 EXPECTED = {"schema": "serverware.approvalCapabilities/v1", "can_list": True,
     "can_open_native_review": False, "can_decide": False, "reason": "protected_review_unavailable"}
+HOST_EXPECTED = {"schema": "serverware.approvalCapabilities/v2", "mode": "host_trusted_v1",
+    "can_list": True, "can_review": False, "can_decide": False,
+    "reason": "host_trusted_approvals_unavailable"}
 SOURCE = ast.parse((ROOT / "serverware/app.py").read_text())
 ROUTE = next(node for node in SOURCE.body if isinstance(node, ast.FunctionDef)
     and node.name == "approval_capabilities")
@@ -51,6 +55,7 @@ class Identity:
 class CapabilityRouteTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.identity, self.error, self.auth_calls = Identity({"admin"}), None, 0
+        self.operator_active = self.enterContext(patch("serverware.operator_demo.active", return_value=False))
         self.app = FastAPI()
 
         def authenticate():
@@ -149,13 +154,26 @@ class CapabilityRouteTests(unittest.IsolatedAsyncioTestCase):
         # private reads, authorization, receipt issuance or authority dispatch.
         calls = {ast.unparse(node.func) for node in ast.walk(ROUTE) if isinstance(node, ast.Call)}
         self.assertEqual(calls, {"app.get", "Depends", "request.scope.get", "request.headers.get",
-            "HTTPException", "identity.has_any_role", "native_review.available", "JSONResponse"})
+            "HTTPException", "identity.has_any_role", "native_review.available", "JSONResponse",
+            "operator_demo.active", "operator_host_approvals.capabilities"})
         imports = [node for node in ast.walk(ROUTE) if isinstance(node, ast.ImportFrom)]
-        self.assertEqual(len(imports), 1)
+        self.assertEqual(len(imports), 2)
         self.assertEqual((imports[0].level, imports[0].module), (0, "serverware"))
         self.assertEqual([(alias.name, alias.asname) for alias in imports[0].names],
+            [("operator_demo", None), ("operator_host_approvals", None)])
+        self.assertEqual([(alias.name, alias.asname) for alias in imports[1].names],
             [("control_plane_native_jit_review", "native_review")])
         self.assertFalse(any(isinstance(node, (ast.Import, ast.Await)) for node in ast.walk(ROUTE)))
+
+    async def test_operator_profile_selects_explicit_host_capabilities_only(self):
+        self.operator_active.return_value = True
+        expected = {"schema": "serverware.approvalCapabilities/v2", "mode": "host_trusted_v1",
+            "can_list": True, "can_review": False, "can_decide": False,
+            "reason": "host_trusted_approvals_unavailable"}
+        with patch("serverware.operator_host_approvals.capabilities", return_value=expected) as host:
+            result = await self.request("GET", PATH)
+        self.assertEqual(result.json(), expected)
+        host.assert_called_once_with(self.identity)
 
 
 class ApprovalMetadataRouteTests(unittest.IsolatedAsyncioTestCase):
@@ -250,7 +268,7 @@ class OrdinaryCapabilityHTTPTests(unittest.TestCase):
                 self.assertNotIn(self.admin.encode(), body)
                 self.assertNotIn(b"private-body-canary", body)
                 if status == 200:
-                    self.assertEqual(json.loads(body), EXPECTED)
+                    self.assertEqual(json.loads(body), HOST_EXPECTED)
             code, body, headers = self.request("GET", PATH + "?native=true")
             self.assertEqual(code, 400, body)
             self.assertEqual(headers.get("cache-control"), "no-store")
@@ -264,7 +282,7 @@ class OrdinaryCapabilityHTTPTests(unittest.TestCase):
             before = self.snapshot()
             code, body, headers = self.request("GET", PATH)
             self.assertEqual(code, 200, body)
-            self.assertEqual(json.loads(body), {**EXPECTED, "can_list": False, "reason": "role_required"})
+            self.assertEqual(json.loads(body), {**HOST_EXPECTED, "can_list": False, "reason": "role_required"})
             self.assertEqual(headers.get("cache-control"), "no-store")
             code, _, _ = self.request("GET", "/api/approvals?status=pending")
             self.assertEqual(code, 403)

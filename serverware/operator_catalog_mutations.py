@@ -18,7 +18,7 @@ from serverware import operator_catalog_timing as _catalog_timing
 from serverware import operator_demo_store as store
 from serverware.operator_catalog_inputs import (
     ApplicationInput, CredentialInput, RuleInput, TargetInput, RotateApplicationInput, GmailReadRuleInput,
-    ReplaceCredentialKeyInput, ApplicationProxyAuthenticationInput,
+    ReplaceCredentialKeyInput, ApplicationProxyAuthenticationInput, RuleApprovalInput,
     GithubTokenInput, GithubAppInput, ReplaceGithubAppKeyInput, GithubRuleInput, NpmTokenInput, NpmMetadataRuleInput, NpmPublishRuleInput, NpmInstallRuleInput,
     XAppBearerInput, XUsernameRuleInput, XPostRuleInput,
     AlchemyKeyInput, AlchemyChainStatusRuleInput,
@@ -236,6 +236,8 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
             result["placeholder"] = record["placeholder"]
         if "request_body_mode" in record:
             result["request_body_mode"] = record["request_body_mode"]
+        if "approval_mode" in record:
+            result["approval_mode"] = record["approval_mode"]
         from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy
         from serverware import operator_catalog_npm_install
         from serverware import operator_catalog_x_post
@@ -259,6 +261,9 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
 
 
 def _mutate(payload, actor_id: str, collection: str, event: str, change) -> dict:
+    if collection == "access_rules" and getattr(payload, "approval_mode", None) == "host_review_v1":
+        from serverware import operator_catalog_approvals
+        operator_catalog_approvals.require_available()
     db = store._require()
     timing = _catalog_timing.current()
     _catalog_timing.mark(timing, "publication_wait")
@@ -294,6 +299,8 @@ def _mutate(payload, actor_id: str, collection: str, event: str, change) -> dict
                         enrollment_expires_at_epoch_ms=enrollment["expires_at_epoch_ms"])
             if collection == "access_rules":
                 audit.update(application_id=changed.resource["application_id"], credential_id=changed.resource["credential_id"])
+                if "approval_mode" in changed.resource or event == "access_rule.approval_changed":
+                    audit["approval_mode"] = changed.resource.get("approval_mode", "automatic")
             if changed.affected_rule_ids:
                 audit["affected_rule_ids"] = changed.affected_rule_ids
             if changed.key_replacement is not None:
@@ -887,6 +894,21 @@ def set_application_proxy_authentication(payload: ApplicationProxyAuthentication
     return _mutate(payload, actor_id, "applications", "application.proxy_authentication_changed", change)
 
 
+def set_rule_approval(payload: RuleApprovalInput, actor_id: str) -> dict:
+    def change(db, conn, catalog):
+        record = _target(catalog, "access_rules", payload.id)
+        if record.get("approval_mode", "automatic") == payload.approval_mode:
+            raise CatalogConflict()
+        if payload.approval_mode == "automatic":
+            record.pop("approval_mode", None)
+        else:
+            record["approval_mode"] = payload.approval_mode
+        from serverware import operator_catalog_approvals
+        operator_catalog_approvals.validate(record)
+        return _Change(schema.save_resource(conn, "access_rules", record), authority_changed=True)
+    return _mutate(payload, actor_id, "access_rules", "access_rule.approval_changed", change)
+
+
 def revoke_rule(payload: TargetInput, actor_id: str) -> dict:
     def change(db, conn, catalog):
         record = _target(catalog, "access_rules", payload.id)
@@ -919,6 +941,7 @@ def catalog_status() -> dict:
     from serverware import operator_catalog_npm_install
     from serverware import operator_catalog_x_oauth, operator_catalog_x_post
     from serverware import operator_workload_renewal_store
+    from serverware import operator_catalog_approvals
     return {"schema": "serverware.operatorCatalog/v1", "mode": "operator-development",
         "productionReady": False, "hardwareVerified": False, "revision": catalog["revision"],
         "policy": observation, "proxy_url": settings["proxy_url"], "allowed_upstreams": settings["allowed_upstreams"],
@@ -929,6 +952,7 @@ def catalog_status() -> dict:
         # V2 metadata discard and explicit Basic transport); never downgrade.
         "capabilities": {"credential_types": ["bearer", "header"] + (["google_oauth"] if google_oauth else [])
                 + (["x_oauth"] if x_post_available else []),
+            "host_approvals": operator_catalog_approvals.capability(),
             "application_proxy_authentication": {"schema": "serverware.operatorProxyAuthentication/v1",
                 "modes": ["bearer", "basic_and_bearer_v1"],
                 "path": "/api/operator-demo/applications/proxy-authentication"},

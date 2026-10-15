@@ -227,6 +227,9 @@ def settings() -> dict:
 
 def request_allowed(method: str, path: str) -> bool:
     from serverware import operator_catalog_oauth_profile as google_profile
+    from serverware import operator_host_approvals as host_approvals
+    if host_approvals.owns_post(path):
+        return method.upper() == "POST"
     x_accounts = "/api/operator-demo/oauth/x"
     if path == "/api/oauth/callback/x" or path in {x_accounts + "/start", x_accounts + "/disconnect"}:
         from serverware import operator_x_admission
@@ -281,6 +284,7 @@ def request_allowed(method: str, path: str) -> bool:
         "/api/operator-demo/workloads/renew",
         "/api/operator-demo/applications/rotate-token", "/api/operator-demo/access-rules",
         "/api/operator-demo/access-rules/revoke", "/api/operator-demo/access-rules/gmail-read",
+        "/api/operator-demo/access-rules/approval",
         "/api/operator-demo/access-rules/github",
         "/api/operator-demo/access-rules/npm-metadata",
         "/api/operator-demo/access-rules/npm-publish",

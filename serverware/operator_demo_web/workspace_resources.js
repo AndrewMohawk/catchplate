@@ -485,7 +485,12 @@ function createAccessRulesView(workspace) {
       response_mode: element('rule-response-mode').value, response_fields: fieldLines('rule-response-fields')};
     const requestMode = element('rule-request-body-mode').value;
     if (requestMode && requestMode !== 'legacy_fields') draft.request_body_mode = requestMode;
-    const rows = operatorRuleRestrictions(draft);
+    if (element('rule-approval-required').checked) draft.approval_mode = 'host_review_v1';
+    const rows = [...operatorRuleRestrictions(draft), ...operatorApprovalRows(draft)];
+    element('rule-approval-required').disabled = !operatorHostApprovalAvailable(catalog, draft) && !element('rule-approval-required').checked;
+    element('rule-approval-help').textContent = operatorHostApprovalAvailable(catalog, draft) ?
+      'Host-trusted: a server administrator can bypass this control. The first request stops with HTTP 428; approval permits one explicit retry of exactly the same request. No automatic replay.' :
+      'Host-trusted approvals are unavailable until the app and proxy advertise matching support. Existing permissions are unchanged.';
     list.replaceChildren(...rows.flatMap(([label, value]) => [textNode('dt', label), textNode('dd', value)]));
     renderOperatorCompatibility('rule-compatibility-content', draft);
     renderBasicCompatibility('rule', catalog, credential);
@@ -559,6 +564,7 @@ function createAccessRulesView(workspace) {
       response_mode: responseMode, response_fields: responseFields,
       credential_input: credentialInput, query_keys: fieldLines('rule-query-keys'), allowed_headers: fieldLines('rule-allowed-headers')};
     if (credentialInput === 'replace_exact') body.placeholder = placeholder;
+    if (element('rule-approval-required').checked) body.approval_mode = 'host_review_v1';
     try { Object.assign(body, operatorRequestBodyInput(element('rule-request-body-mode').value, fieldLines('rule-request-fields'), catalog, credential)); }
     catch (error) { element('access-rule-form-status').textContent = operatorMessage(error); return; }
     if (!operatorRuleSupported(body, catalog)) {
@@ -589,8 +595,21 @@ function createAccessRulesView(workspace) {
       const enforced = workspace.loaded() && rule.enforcement === (rule.status === 'revoked' ? 'revoked' : 'active');
       const badge = rule.status === 'revoked' ? enforced ? 'Revoked · enforced' : 'Revoked · enforcement pending' : enforced ? 'Active' : 'Saved · activation pending';
       const card = resourceCard(rule, badge, [['Application', application?.name || rule.application_id], ['Credential', credential?.name || rule.credential_id],
-        ...operatorRuleCredentialRows(rule, credential), ...operatorRuleRestrictions(rule), ['Rule ID', rule.id]]);
+        ...operatorRuleCredentialRows(rule, credential), ...operatorRuleRestrictions(rule), ...operatorApprovalRows(rule), ['Rule ID', rule.id]]);
       if (rule.status === 'active') {
+        const approval = textNode('button', rule.approval_mode === 'host_review_v1' ? 'Remove human approval requirement' : 'Require human approval', 'secondary');
+        approval.dataset.action = 'change-approval';
+        approval.disabled = workspace.state.busy || workspace.state.uncertain || !operatorHostApprovalAvailable(catalog, rule);
+        approval.addEventListener('click', () => {
+          const current = workspace.state.catalog?.access_rules.find(item => item.id === rule.id && item.status === 'active');
+          if (!current || workspace.state.busy || workspace.state.uncertain || !operatorHostApprovalAvailable(workspace.state.catalog, current)) return;
+          const mode = current.approval_mode === 'host_review_v1' ? 'automatic' : 'host_review_v1';
+          if (!window.confirm(mode === 'automatic' ? 'Remove human approval from this permission? Matching requests will proceed without a decision after the proxy loads the change.' :
+            'Require a human decision for each exact request? This is host-trusted: server administrators can bypass it. The first request stops with HTTP 428 and must be explicitly retried once after approval.')) return;
+          workspace.mutate('access-rules/approval', {id: current.id, approval_mode: mode}, 'rule-action-status');
+        }); card.append(approval);
+        if (Object.hasOwn(rule, 'daily_post_attempt_limit')) card.append(textNode('p',
+          'Human approval cannot currently be combined with an X daily posting-attempt limit. The saved quota remains in force.', 'small muted'));
         const button = textNode('button', 'Revoke access rule', 'secondary'); button.dataset.action = 'revoke-rule';
         button.disabled = workspace.state.busy || workspace.state.uncertain;
         button.addEventListener('click', () => {

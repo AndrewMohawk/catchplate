@@ -61,6 +61,8 @@ pub(crate) fn quota(maximum: u64) -> Value {
 }
 
 fn quota_selection(constraints: &[Value]) -> Result<Option<u64>, String> {
+    let ordinary = crate::operator_host_approvals::provider_constraints(constraints)?;
+    let constraints = ordinary.as_ref();
     let mut selected = None;
     let mut envelope_seen = false;
     if !(1..=2).contains(&constraints.len()) { return Err("X post constraint roster invalid".into()); }

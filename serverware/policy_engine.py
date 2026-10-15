@@ -2997,6 +2997,13 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
 
     route = match.route
     params = match.params
+    if any(item.get("type") == "hostTrustedApproval" for item in route.constraints):
+        # This path cannot retain/consume the Rust-owned request approval. Deny
+        # before any credential lookup, lease, reservation or upstream work.
+        return RequestEvaluation(PolicyDecision(False,
+            "host-trusted approvals require the Rust decision gate", 503,
+            {"error": "python_host_trusted_approval_unsupported"}),
+            snapshot=snapshot, principal=principal, route=route, params=params)
     try:
         ordered_query = validate_ordered_form_route(route)
         # A candidate parse above cannot opt a legacy route into new semantics.

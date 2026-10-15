@@ -638,6 +638,17 @@
         "onMissingEvidence": {"const": "deny"}
       }
     },
+    "hostTrustedApproval": {
+      "type": "object",
+      "required": ["type", "schema", "pendingTtlSeconds", "approvalTtlSeconds"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "hostTrustedApproval"},
+        "schema": {"const": "serverware.hostTrustedApprovalPolicy/v1"},
+        "pendingTtlSeconds": {"type": "integer", "minimum": 30, "maximum": 3600},
+        "approvalTtlSeconds": {"type": "integer", "minimum": 1, "maximum": 300}
+      }
+    },
     "credentialConstraint": {
       "type": "object",
       "required": ["id", "type"],
@@ -1573,7 +1584,9 @@
             "type": "array",
             "maxItems": 128,
             "uniqueItems": true,
-            "items": {"$ref": "#/$defs/credentialConstraint"}
+            "items": {"oneOf": [{"$ref": "#/$defs/credentialConstraint"}, {"$ref": "#/$defs/hostTrustedApproval"}]},
+            "contains": {"required": ["type"], "properties": {"type": {"const": "hostTrustedApproval"}}},
+            "minContains": 0, "maxContains": 1
           },
           "jit": {
             "type": "object",
@@ -1692,6 +1705,24 @@
         },
         "allOf": [
           {
+            "if": {"required": ["constraints"], "properties": {"constraints": {
+              "contains": {"required": ["type"], "properties": {"type": {"const": "hostTrustedApproval"}}}
+            }}},
+            "then": {
+              "required": ["credentialRef"],
+              "not": {"required": ["responseObservation"]},
+              "properties": {
+                "jit": {"properties": {"required": {"const": false}}},
+                "adapter": {"properties": {"type": {"enum": ["generic.rest", "gmail.read.v1",
+                  "npm.metadata.v1", "npm.install.v1", "npm.publish.v1", "x.app_read.v1", "x.post.v1", "alchemy.rpc_read.v1"]}}},
+                "constraints": {"items": {"not": {"anyOf": [
+                  {"required": ["type"], "properties": {"type": {"enum": ["slidingWindowLimit", "weightedBudget", "traversalBudget", "responseBinding"]}}},
+                  {"required": ["type", "store"], "properties": {"type": {"const": "rateLimit"}, "store": {"const": "shared"}}}
+                ]}}}
+              }
+            }
+          },
+          {
             "if": {
               "required": ["adapter"],
               "properties": {"adapter": {
@@ -1702,7 +1733,11 @@
             "then": {
               "not": {"anyOf": [{"required": ["jit"]}, {"required": ["responseObservation"]}]},
               "required": ["constraints"],
-              "properties": {"constraints": {"minItems": 1, "maxItems": 1}}
+              "properties": {"constraints": {"minItems": 1, "maxItems": 2,
+                "contains": {"required": ["type"], "properties": {"type": {"const": "responseEnvelope"}}},
+                "minContains": 1, "maxContains": 1,
+                "items": {"anyOf": [{"$ref": "#/$defs/hostTrustedApproval"},
+                  {"required": ["type"], "properties": {"type": {"const": "responseEnvelope"}}}]}}}
             }
           },
           {
@@ -1831,81 +1866,96 @@
             "then": {
               "required": ["constraints"],
               "properties": {"constraints": {
-                "minItems": 1, "maxItems": 1,
-                "items": {
+                "minItems": 1, "maxItems": 2,
+                "contains": {"required": ["type"], "properties": {"type": {"const": "responseEnvelope"}}},
+                "minContains": 1, "maxContains": 1,
+                "items": {"anyOf": [{"$ref": "#/$defs/hostTrustedApproval"}, {
                   "required": ["type", "contentTypePolicy"],
                   "properties": {
                     "type": {"const": "responseEnvelope"},
                     "contentTypePolicy": {"const": "githubJsonUtf8V1"}
                   }
-                }
+                }]}
               }}
             },
             "else": {
               "if": {"properties": {"adapter": {"properties": {
                 "type": {"const": "npm.metadata.v1"}
               }, "required": ["type"]}}, "required": ["adapter"]},
-              "then": {"properties": {"constraints": {"minItems": 1, "maxItems": 1,
-                "items": {"required": ["type", "contentTypePolicy"], "properties": {
+              "then": {"properties": {"constraints": {"minItems": 1, "maxItems": 2,
+                "contains": {"required": ["type"], "properties": {"type": {"const": "responseEnvelope"}}},
+                "minContains": 1, "maxContains": 1,
+                "items": {"anyOf": [{"$ref": "#/$defs/hostTrustedApproval"}, {"required": ["type", "contentTypePolicy"], "properties": {
                   "type": {"const": "responseEnvelope"}, "contentTypePolicy": {"const": "npmJsonUtf8V1"}
-                }}
+                }}]}
               }}},
               "else": {
                 "if": {"properties": {"adapter": {"properties": {
                   "type": {"const": "npm.publish.v1"}
                 }, "required": ["type"]}}, "required": ["adapter"]},
                 "then": {"required": ["constraints"], "properties": {"constraints": {
-                  "minItems": 1, "maxItems": 2,
+                  "minItems": 1, "maxItems": 3,
                   "contains": {"required": ["type", "contentTypePolicy"], "properties": {
                     "type": {"const": "responseEnvelope"}, "contentTypePolicy": {"const": "npmJsonUtf8V1"}
                   }}, "minContains": 1, "maxContains": 1,
+                  "allOf": [{"contains": {"required": ["type"], "properties": {"type": {"const": "requestTimeWindow"}}},
+                    "minContains": 0, "maxContains": 1}],
                   "items": {"if": {"required": ["type"], "properties": {"type": {"const": "responseEnvelope"}}},
                     "then": {"required": ["contentTypePolicy"], "properties": {"contentTypePolicy": {"const": "npmJsonUtf8V1"}}},
-                    "else": {"required": ["type"], "properties": {"type": {"const": "requestTimeWindow"}},
-                      "not": {"required": ["contentTypePolicy"]}}}
+                    "else": {"anyOf": [{"$ref": "#/$defs/hostTrustedApproval"},
+                      {"required": ["type"], "properties": {"type": {"const": "requestTimeWindow"}},
+                      "not": {"required": ["contentTypePolicy"]}}]}}
                 }}},
                 "else": {
                   "if": {"required": ["adapter"], "properties": {"adapter": {
                     "required": ["type"], "properties": {"type": {"const": "x.app_read.v1"}}
                   }}},
                   "then": {"required": ["constraints"], "properties": {"constraints": {
-                    "minItems": 1, "maxItems": 1,
-                    "items": {"required": ["type", "contentTypePolicy"], "properties": {
+                    "minItems": 1, "maxItems": 2,
+                    "contains": {"required": ["type"], "properties": {"type": {"const": "responseEnvelope"}}},
+                    "minContains": 1, "maxContains": 1,
+                    "items": {"anyOf": [{"$ref": "#/$defs/hostTrustedApproval"}, {"required": ["type", "contentTypePolicy"], "properties": {
                       "type": {"const": "responseEnvelope"}, "contentTypePolicy": {"const": "xAppReadJsonUtf8V1"}
-                    }}
+                    }}]}
                   }}},
                   "else": {
                     "if": {"required": ["adapter"], "properties": {"adapter": {
                       "required": ["type"], "properties": {"type": {"const": "alchemy.rpc_read.v1"}}
                     }}},
                     "then": {"required": ["constraints"], "properties": {"constraints": {
-                      "minItems": 1, "maxItems": 1,
-                      "items": {"required": ["type", "contentTypePolicy"], "properties": {
+                      "minItems": 1, "maxItems": 2,
+                      "contains": {"required": ["type"], "properties": {"type": {"const": "responseEnvelope"}}},
+                      "minContains": 1, "maxContains": 1,
+                      "items": {"anyOf": [{"$ref": "#/$defs/hostTrustedApproval"}, {"required": ["type", "contentTypePolicy"], "properties": {
                         "type": {"const": "responseEnvelope"}, "contentTypePolicy": {"const": "alchemyRpcReadJsonUtf8V1"}
-                      }}
+                      }}]}
                     }}},
                     "else": {
                       "if": {"required": ["adapter"], "properties": {"adapter": {
                         "required": ["type"], "properties": {"type": {"const": "npm.install.v1"}}
                       }}},
                       "then": {"required": ["constraints"], "properties": {"constraints": {
-                        "minItems": 1, "maxItems": 1,
-                        "items": {"required": ["type", "contentTypePolicy"], "properties": {
+                        "minItems": 1, "maxItems": 2,
+                        "contains": {"required": ["type"], "properties": {"type": {"const": "responseEnvelope"}}},
+                        "minContains": 1, "maxContains": 1,
+                        "items": {"anyOf": [{"$ref": "#/$defs/hostTrustedApproval"}, {"required": ["type", "contentTypePolicy"], "properties": {
                           "type": {"const": "responseEnvelope"}, "contentTypePolicy": {"const": "npmInstallContentV1"}
-                        }}
+                        }}]}
                       }}},
                       "else": {
                         "if": {"required": ["adapter"], "properties": {"adapter": {
                           "required": ["type"], "properties": {"type": {"const": "x.post.v1"}}
                         }}},
                         "then": {"required": ["constraints"], "properties": {"constraints": {
-                          "minItems": 1, "maxItems": 2,
+                          "minItems": 1, "maxItems": 3,
                           "contains": {"required": ["type", "contentTypePolicy"], "properties": {
                             "type": {"const": "responseEnvelope"}, "contentTypePolicy": {"const": "xPostJsonUtf8V1"}
                           }}, "minContains": 1, "maxContains": 1,
+                          "allOf": [{"contains": {"required": ["type"], "properties": {"type": {"const": "rateLimit"}}},
+                            "minContains": 0, "maxContains": 1}],
                           "items": {"if": {"required": ["type"], "properties": {"type": {"const": "responseEnvelope"}}},
                             "then": {"required": ["contentTypePolicy"], "properties": {"contentTypePolicy": {"const": "xPostJsonUtf8V1"}}},
-                            "else": {"$ref": "#/$defs/xPostAccountQuota"}}
+                            "else": {"anyOf": [{"$ref": "#/$defs/hostTrustedApproval"}, {"$ref": "#/$defs/xPostAccountQuota"}]}}
                         }}},
                         "else": {"properties": {"constraints": {"items": {
                           "not": {"required": ["contentTypePolicy"]}

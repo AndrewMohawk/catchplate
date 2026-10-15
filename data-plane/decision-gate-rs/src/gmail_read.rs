@@ -48,6 +48,8 @@ pub(crate) fn response_profile(error: bool) -> Value {
 }
 
 pub(crate) fn validate_envelope(mode: Option<&str>, constraints: &[Value]) -> Result<(), String> {
+    let ordinary = crate::operator_host_approvals::provider_constraints(constraints)?;
+    let constraints = ordinary.as_ref();
     if mode != Some(MODE) || constraints.len() != 1 {
         return Err("gmail.read.v1 requires its one explicit response envelope".into());
     }

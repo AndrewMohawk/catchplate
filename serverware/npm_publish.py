@@ -12,6 +12,7 @@ import math
 import re
 
 from serverware import npm_metadata
+from serverware.host_trusted_approval_policy import provider_constraints
 
 ADAPTER = "npm.publish.v1"
 MODE = "npmPublishJsonV1"
@@ -105,7 +106,7 @@ def validate_response_profile(response, constraints=None):
         and type(response["error"]["maxBodyBytes"]) is int)
     if constraints is None:
         return
-    constraints = tuple(constraints)
+    constraints = provider_constraints(constraints)
     _require(1 <= len(constraints) <= 2 and all(isinstance(item, dict) for item in constraints))
     envelopes = [item for item in constraints if item.get("type") == "responseEnvelope"]
     windows = [item for item in constraints if item.get("type") == "requestTimeWindow"]

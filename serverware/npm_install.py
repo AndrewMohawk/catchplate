@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 import zlib
 
 from serverware import npm_metadata, npm_publish
+from serverware.host_trusted_approval_policy import provider_constraints
 
 ADAPTER = "npm.install.v1"
 MODES = ("metadata", "tarball", "audit")
@@ -89,7 +90,7 @@ def validate_response_profile(response, constraints=None, *, mode):
     _require(response == response_profile(mode) and type(response["maxBodyBytes"]) is int
         and type(response["error"]["maxBodyBytes"]) is int)
     if constraints is not None:
-        rows = tuple(constraints)
+        rows = provider_constraints(constraints)
         _require(len(rows) == 1 and isinstance(rows[0], dict)
             and isinstance(rows[0].get("id"), str) and bool(rows[0]["id"])
             and rows[0] == response_envelope(rows[0]["id"], mode)

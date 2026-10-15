@@ -109,6 +109,8 @@ pub(crate) fn envelope(mode: &str, id: &str) -> Result<Value, String> {
 }
 
 pub(crate) fn validate_envelope(response_mode: Option<&str>, constraints: &[Value]) -> Result<(), String> {
+    let ordinary = crate::operator_host_approvals::provider_constraints(constraints)?;
+    let constraints = ordinary.as_ref();
     let mode = match response_mode {
         Some(METADATA_MODE) => "metadata", Some(TARBALL_MODE) => "tarball", Some(AUDIT_MODE) => "audit",
         _ => return Err("npm install response mode refused".into()),

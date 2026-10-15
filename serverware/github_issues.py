@@ -7,6 +7,7 @@ from datetime import date, datetime
 import re
 from urllib.parse import urlsplit
 
+from serverware.host_trusted_approval_policy import provider_constraints
 from serverware.request_query_compat import parse_query
 
 
@@ -112,7 +113,7 @@ def validate_config(config):
 
 def validate_authority(config, *, adapter, host, credential_ref, jit, methods, paths, constraints):
     validate_config(config)
-    constraints = tuple(constraints)
+    constraints = provider_constraints(constraints)
     _require(adapter == "generic.rest" and host == "api.github.com" and bool(credential_ref)
         and not jit and methods == frozenset({"GET"} if config["operationBundle"] == READ else {"GET", "POST"})
         and tuple(paths) == tuple(route_paths(config["githubRepository"]))

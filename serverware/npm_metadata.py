@@ -8,6 +8,8 @@ from __future__ import annotations
 import re
 from urllib.parse import urlsplit
 
+from serverware.host_trusted_approval_policy import provider_constraints
+
 ADAPTER = "npm.metadata.v1"
 MODE = "npmMetadataJsonV1"
 CONTENT_TYPE_POLICY = "npmJsonUtf8V1"
@@ -63,7 +65,7 @@ def validate_response_profile(response, constraints=None):
         and type(response["maxBodyBytes"]) is int
         and type(response["error"]["maxBodyBytes"]) is int)
     if constraints is not None:
-        constraints = tuple(constraints)
+        constraints = provider_constraints(constraints)
         _require(len(constraints) == 1 and isinstance(constraints[0], dict)
             and isinstance(constraints[0].get("id"), str) and bool(constraints[0]["id"])
             and constraints[0] == response_envelope(constraints[0]["id"])

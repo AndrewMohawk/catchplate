@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from urllib.parse import urlsplit
 
+from serverware.host_trusted_approval_policy import provider_constraints
+
 ADAPTER = "x.post.v1"
 MODE = "xPostJsonV1"
 CONTENT_TYPE_POLICY = "xPostJsonUtf8V1"
@@ -73,7 +75,7 @@ def validate_response_profile(response, constraints=None):
         and type(response["error"]["maxBodyBytes"]) is int)
     if constraints is None:
         return
-    rows = tuple(constraints)
+    rows = provider_constraints(constraints)
     _require(1 <= len(rows) <= 2 and all(isinstance(row, dict) for row in rows))
     envelopes = [row for row in rows if row.get("type") == "responseEnvelope"]
     _require(len(envelopes) == 1)

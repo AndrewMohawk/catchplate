@@ -180,6 +180,8 @@ pub(crate) fn paths(config: &Value) -> Result<Vec<String>, String> {
 }
 
 pub(crate) fn validate_config(config: &Value, constraints: &[Value]) -> Result<(), String> {
+    let ordinary = crate::operator_host_approvals::provider_constraints(constraints)?;
+    let constraints = ordinary.as_ref();
     let object = config
         .as_object()
         .ok_or("GitHub profile must be an object")?;

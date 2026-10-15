@@ -25,7 +25,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
-from serverware import alchemy_rpc_read, github_issues, npm_install, npm_metadata, npm_publish, x_app_read, x_post
+from serverware import alchemy_rpc_read, github_issues, host_trusted_approval_policy, npm_install, npm_metadata, npm_publish, x_app_read, x_post
 from serverware import operator_audit_timing as _audit_timing
 from serverware.config import (
     POLICY_BUNDLE_PATH,
@@ -479,6 +479,7 @@ def adapter_operation_query_fields(
         return frozenset()
     return None
 SUPPORTED_CONSTRAINTS = {
+    "hostTrustedApproval",
     "rateLimit",
     "slidingWindowLimit",
     "weightedBudget",
@@ -727,6 +728,7 @@ FIELD_RULE_FIELDS = {
 FIELD_RULE_TYPES = {"string", "number", "integer", "boolean", "object", "array", "null"}
 CONSTRAINT_COMMON_FIELDS = {"id", "description", "type", "phase", "statusCode", "extensions"}
 CONSTRAINT_TYPE_FIELDS = {
+    "hostTrustedApproval": {"schema", "pendingTtlSeconds", "approvalTtlSeconds"},
     "rateLimit": {
         "store",
         "max",
@@ -4243,9 +4245,20 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
         raise PolicyBundleError(f"route {route_id} constraints must be an array")
     compiled: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
+    host_approval_seen = False
     for index, constraint in enumerate(constraints):
         if not isinstance(constraint, dict):
             raise PolicyBundleError(f"route {route_id} constraint {index} must be an object")
+        if constraint.get("type") == host_trusted_approval_policy.TYPE:
+            try:
+                host_trusted_approval_policy.validate(constraint)
+                if host_approval_seen:
+                    raise ValueError("one host-trusted approval policy is allowed per route")
+            except ValueError as exc:
+                raise PolicyBundleError(f"route {route_id}: {exc}") from None
+            host_approval_seen = True
+            compiled.append(copy.deepcopy(constraint))
+            continue
         constraint_id = str(constraint.get("id") or "")
         if not constraint_id:
             raise PolicyBundleError(f"route {route_id} constraint {index} must define id")
@@ -6273,6 +6286,10 @@ def validate_gmail_read_response(route_id: str, response: Any,
         raise PolicyBundleError(f"route {route_id} Gmail read response profile is invalid")
     if constraints is None:
         return
+    try:
+        constraints = host_trusted_approval_policy.provider_constraints(constraints)
+    except ValueError:
+        raise PolicyBundleError(f"route {route_id} Gmail host-trusted approval policy is invalid") from None
     if (len(constraints) != 1 or not isinstance(constraints[0], dict)
             or not isinstance(constraints[0].get("id"), str) or not constraints[0]["id"]
             or constraints[0] != gmail_read_response_envelope(constraints[0]["id"])):
@@ -7488,6 +7505,12 @@ def compile_policy_bundle(
                 }
             )
         constraints = _validate_constraints(route_id, raw_constraints)
+        try:
+            host_trusted_approval_policy.validate_route(adapter=adapter_type,
+                credential_ref=credential_ref, jit=jit, constraints=constraints,
+                response_observation="responseObservation" in item)
+        except ValueError as exc:
+            raise PolicyBundleError(f"route {route_id}: {exc}") from None
         validate_buffered_json_passthrough_request(
             route_id, adapter_type, adapter_config.get("request"), constraints
         )

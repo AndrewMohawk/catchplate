@@ -158,6 +158,7 @@ impl GateStateInputs {
             audit_client: runtime.audit_client,
             operator_audit_publication: None,
             operator_x_quota_enabled: false,
+            host_trusted_approvals_enabled: false,
             measured_audit: None,
             measured_canary_delivery: None,
             credential_lease_client: runtime.credential_lease_client,

@@ -48,6 +48,7 @@ mod operator_google_reconciliation;
 mod operator_google_preparation;
 mod operator_x_profile;
 mod operator_x_quota;
+mod operator_host_approvals;
 mod operator_workload_renewal;
 mod operator_static_preparation;
 mod operator_background_renewal;
@@ -2774,6 +2775,7 @@ struct GateState {
     audit_client: Client,
     operator_audit_publication: Option<Arc<operator_audit_publication::Owner>>,
     operator_x_quota_enabled: bool,
+    host_trusted_approvals_enabled: bool,
     measured_audit: Option<Mutex<native_audit_owner::Owner>>,
     measured_canary_delivery: Option<Mutex<native_canary_delivery::Owner>>,
     credential_lease_client: Client,
@@ -13099,6 +13101,10 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     .ok_or_else(|| {
                         format!("route {route_id} constraint {constraint_id} type missing")
                     })?;
+            if constraint_type == "hostTrustedApproval" {
+                operator_host_approvals::validate_policy_route(route)?;
+                continue;
+            }
             let supported_phase = match constraint_type {
                 "rateLimit" | "slidingWindowLimit" | "weightedBudget" | "operationPolicy"
                 | "queryDateWindow" | "queryNumericBounds" | "requestTimeWindow"
@@ -32398,6 +32404,7 @@ fn supported_constraint_type(kind: &str) -> bool {
     matches!(
         kind,
         "rateLimit"
+            | "hostTrustedApproval"
             | "slidingWindowLimit"
             | "weightedBudget"
             | "traversalBudget"
@@ -34995,6 +35002,8 @@ fn evaluate_request_constraints(
             continue;
         }
         match kind {
+            "hostTrustedApproval" => operator_host_approvals::validate_marker(constraint)
+                .map_err(|_| unsupported_runtime_constraint(constraint, 503))?,
             "rateLimit" => enforce_rate_limit(
                 state,
                 constraint,
@@ -35103,6 +35112,10 @@ fn evaluate_request_semantic_constraints_at_ms(
             continue;
         }
         match kind {
+            // Actual claim is mandatory at the central decision entrance;
+            // semantic admission only checks this signed marker's grammar.
+            "hostTrustedApproval" => operator_host_approvals::validate_marker(constraint)
+                .map_err(|_| unsupported_runtime_constraint(constraint, 503))?,
             "operationPolicy" => enforce_operation_policy(constraint, operation)?,
             "queryDateWindow" => {
                 enforce_query_date_window_at_ms(constraint, url, observed_at_epoch_ms)?
@@ -36805,6 +36818,11 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let atomic_release = state.atomic_release_authorization_enabled && !preview;
+    let host_approval_required = match operator_host_approvals::admit(state, route) {
+        Ok(required) => required,
+        Err(_) => return deny_for_route(503, "Host-trusted approval is unavailable",
+            json!({"error":"host_trusted_approval_unavailable"}), route, started),
+    };
     let ordinary_quota = !preview && !atomic_release && credential_scope.as_ref()
         .is_some_and(|scope| operator_x_quota::admitted(state, snapshot, scope).unwrap_or(false));
     if ordinary_quota && (quota_preparation.is_none() || proof_requested || req.client_request_digest.is_some()) {
@@ -36958,12 +36976,13 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
     if preview {
         return with_enrollment_session_id(
             json!({
-                "action": if jit_required {"jit_required"} else {"allow"},
+                "action": if host_approval_required {"approval_required"} else if jit_required {"jit_required"} else {"allow"},
                 "allowed": false,
-                "would_allow": !jit_required,
+                "would_allow": !jit_required && !host_approval_required,
                 "preview": true,
                 "authorizes_forwarding": false,
-                "status_code": if jit_required {428} else {200},
+                "status_code": if jit_required || host_approval_required {428} else {200},
+                "host_trusted_approval_required":host_approval_required,
                 "principal_id": principal.id,
                 "route_id": route.id,
                 "adapter": route.adapter_type,
@@ -37004,6 +37023,23 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
             enrollment_session_id.as_deref(),
         );
     }
+
+    // The trusted proxy may acquire/refresh credentials above. Every matching
+    // request, including cache hits, must now claim approval before the protected
+    // provider request is sent; this does not withhold secrets from the host.
+    let host_approval = if host_approval_required {
+        match operator_host_approvals::claim(state, snapshot, route, &principal.id,
+            credential_version, &canonical, &request_digest, &operation_digest) {
+            Ok(receipt) if receipt.claimed() => Some(receipt),
+            Ok(receipt) => return add_decision_correlation(receipt.denial(route, started),
+                &principal.id, &snapshot.hash, &request_digest, &operation_digest,
+                &receipt.attempt_id, &operation),
+            Err(_) => return deny_for_route(503,
+                "Approval outcome is unavailable; inspect approvals before retrying",
+                json!({"error":"host_trusted_approval_outcome_unknown",
+                    "host_trusted_approval":{"mode":"host_trusted","status":"unknown"}}), route, started),
+        }
+    } else { None };
 
     if atomic_release {
         let connect_release = if streaming_response_policy(&response_policy_for_route(route)).is_some() {
@@ -38014,6 +38050,9 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
         "decision_us": u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
         "hot_path": {"sqlite_calls": 0, "filesystem_calls": 0},
     });
+    if let Some(receipt) = host_approval.as_ref() {
+        decision["host_trusted_approval"] = receipt.public();
+    }
     if let (Some(object), Some(approval_url)) = (decision.as_object_mut(), pending_approval_url) {
         object.insert("approval_url".to_string(), Value::String(approval_url));
     }
@@ -50570,6 +50609,12 @@ fn request_streaming_preflight(
     if body_mode == "stream" {
         return RequestStreamingPreflight::Buffer;
     }
+    if operator_host_approvals::selected(route) {
+        return RequestStreamingPreflight::Reject(json_status_response(
+            StatusCode::FORBIDDEN,
+            json!({"error":"streaming_request_host_approval_unsupported","route_id":route.id}),
+        ));
+    }
     if route
         .jit
         .get("required")
@@ -51042,6 +51087,7 @@ fn build_runtime_manifest(
         "response_proof_attestation_command_measurement":command_artifact_measurements(state.response_proof_attestation_command.as_ref()),
         "server_instance_id":state.server_instance_id,
         "jit_grant_store": if state.atomic_release_authorization_enabled {"atomic_release_authorization"} else if state.grant_consume_url.is_some() {"shared"} else {"local"},
+        "host_trusted_approvals":operator_host_approvals::capability(state),
         "shared_rate_limit_store": state.atomic_release_authorization_enabled || state.rate_limit_consume_url.is_some(),
         "release_authorization_mode": if state.atomic_release_authorization_enabled {"reserve_dispatch_complete"} else {"legacy"},
         "proxy_ingress":state.proxy_ingress_attestation.value(),
@@ -51852,6 +51898,7 @@ fn health_response(state: &GateState) -> Vec<u8> {
                 "queue_full":state.credential_lease_renewal_queue_full.load(Ordering::Relaxed),
             },
             "jit_grant_store":if state.atomic_release_authorization_enabled {"atomic_release_authorization"} else if state.grant_consume_url.is_some() {"shared"} else {"local"},
+            "host_trusted_approvals":operator_host_approvals::capability(state),
             "shared_rate_limit_store":state.atomic_release_authorization_enabled || state.rate_limit_consume_url.is_some(),
             "release_authorization":{
                 "enabled":state.atomic_release_authorization_enabled,
@@ -54460,6 +54507,7 @@ fn main() -> Result<(), String> {
     }
     require_operator_token_runtime(&initialized_state, &current_snapshot(&initialized_state))?;
     operator_x_quota::configure(&mut initialized_state)?;
+    operator_host_approvals::configure(&mut initialized_state)?;
     drop(operator_startup_guard);
     let state = Arc::new(initialized_state);
     if let Some(control) =
@@ -55895,6 +55943,7 @@ mod tests {
             audit_client: client.clone(),
             operator_audit_publication: None,
             operator_x_quota_enabled: false,
+            host_trusted_approvals_enabled: false,
             measured_audit: None,
             credential_lease_client: client,
             measured_canary_delivery: None,

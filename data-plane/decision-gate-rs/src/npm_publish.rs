@@ -102,6 +102,8 @@ fn validate_window(value: &Value) -> Result<(), String> {
 }
 
 pub(crate) fn validate_envelope(mode: Option<&str>, constraints: &[Value]) -> Result<(), String> {
+    let ordinary = crate::operator_host_approvals::provider_constraints(constraints)?;
+    let constraints = ordinary.as_ref();
     if mode != Some(MODE) || !(1..=2).contains(&constraints.len()) {
         return Err("npm publish requires its response envelope and optional daily window".into());
     }

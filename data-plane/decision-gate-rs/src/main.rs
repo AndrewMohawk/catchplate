@@ -13102,7 +13102,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                         format!("route {route_id} constraint {constraint_id} type missing")
                     })?;
             if constraint_type == "hostTrustedApproval" {
-                operator_host_approvals::validate_policy_route(route)?;
+                operator_host_approvals::validate_policy_route(&Value::Object(route.clone()))?;
                 continue;
             }
             let supported_phase = match constraint_type {
@@ -37735,7 +37735,8 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
         );
     }
 
-    let flow_id = match random_request_attempt_id() {
+    let flow_id = match host_approval.as_ref().map_or_else(random_request_attempt_id,
+        |receipt| Ok(receipt.attempt_id.clone())) {
         Ok(flow_id) => flow_id,
         Err(_) => {
             return deny(
@@ -38051,7 +38052,9 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
         "hot_path": {"sqlite_calls": 0, "filesystem_calls": 0},
     });
     if let Some(receipt) = host_approval.as_ref() {
-        decision["host_trusted_approval"] = receipt.public();
+        let approval = receipt.public();
+        decision["approval_id"] = approval["approval_id"].clone();
+        decision["host_trusted_approval"] = approval;
     }
     if let (Some(object), Some(approval_url)) = (decision.as_object_mut(), pending_approval_url) {
         object.insert("approval_url".to_string(), Value::String(approval_url));

@@ -92,6 +92,8 @@ class HostApprovalCheck(OperatorCatalogCheck):
         try:
             document = json.loads(wire.partition(b"\r\n\r\n")[2])
             code_value = document.get("error") if isinstance(document, dict) else None
+            if code_value is None and isinstance(document, dict) and isinstance(document.get("payload"), dict):
+                code_value = document["payload"].get("error")
             if code_value is not None:
                 self.failure_observation["errorCode"] = code_value if code_value in ERROR_CODES else "other"
         except (ValueError, TypeError):
@@ -112,10 +114,19 @@ class HostApprovalCheck(OperatorCatalogCheck):
             result = check_response("json", 200, headers, body, wire, self.policy_hash, response_mode=V2_RESPONSE_MODE)
             return {key: value for key, value in result.items() if key != "capturedWireBytes"}
         result = json.loads(body)
-        identifier = result.get("approval_id")
-        require(result.get("error") == "host_trusted_approval_required"
+        require(isinstance(result, dict) and isinstance(result.get("payload"), dict), "approval envelope differs")
+        payload, identifier = result["payload"], result.get("approval_id")
+        state = "pending" if expected_status == 428 else "denied"
+        public = result.get("host_trusted_approval", {})
+        require(result.get("allowed") is False and result.get("action") == "approval_required"
+            and result.get("status_code") == expected_status
+            and payload.get("error") == "host_trusted_approval_required"
             and isinstance(identifier, str) and str(uuid.UUID(identifier)) == identifier
-            and result.get("approval_status") == ("pending" if expected_status == 428 else "denied"),
+            and payload.get("approval_id") == identifier and payload.get("approval_status") == state
+            and result.get("approval_url") == payload.get("approval_url") == "/approvals/" + identifier
+            and payload.get("retry_semantics") == "explicit_identical_request_after_approval"
+            and public.get("mode") == "host_trusted" and public.get("status") == state
+            and public.get("approval_id") == identifier,
             "approval response differs")
         return identifier
 

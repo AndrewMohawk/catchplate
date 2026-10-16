@@ -1,6 +1,6 @@
 # Google and X OAuth setup
 
-[Home](https://github.com/AndrewMohawk/serverware/wiki/Home) · [Credentials](https://github.com/AndrewMohawk/serverware/wiki/Credentials-and-providers) · [Proxy setup](https://github.com/AndrewMohawk/serverware/wiki/Proxy-and-CA) · [Client recipes](https://github.com/AndrewMohawk/serverware/wiki/Clients-and-recipes)
+[Home](Home.md) · [Credentials](Credentials-and-providers.md) · [Proxy setup](Proxy-and-CA.md) · [Client recipes](Clients-and-recipes.md)
 
 OAuth setup has three separate steps:
 
@@ -47,7 +47,7 @@ For an existing account needing fresh consent, use its **Reauthorize Google** ac
 1. In **Proxy setup → X (Twitter) application**, select **Review X application settings**, then **Copy callback URL**. The exact path is `/api/oauth/callback/x` on the public console origin.
 2. In your X developer application's authentication settings, enable **OAuth 2.0** and use a confidential application type, such as **Web App** or **Automated App or bot**. Register the exact callback URL. Obtain the OAuth **Client ID** and **Client secret** from the application's keys/settings—not an API key/secret pair or app-only bearer token. Follow the official guide for the current developer-console controls. [X OAuth application setup](https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code#app-settings).
 3. Enter those two fields in Serverware and choose **Save X application** once. This saves settings immediately, without a restart. It does not contact X, add an approved proxy destination, connect an account or grant posting.
-4. Confirm `https://api.x.com` is approved under **Proxy destinations** and the matching loaded app/proxy policy is ready. Destination changes have their own reviewed activation procedure. Continue only when the account-consent capability is offered. [Proxy destinations](https://github.com/AndrewMohawk/serverware/wiki/Proxy-and-CA#let-the-proxy-reach-a-new-provider).
+4. Confirm `https://api.x.com` is approved under **Proxy destinations** and the matching loaded app/proxy policy is ready. Destination changes have their own reviewed activation procedure. Continue only when the account-consent capability is offered. [Proxy destinations](Proxy-and-CA.md#let-the-proxy-reach-a-new-provider).
 
 The fixed `x_text_post_v1` profile uses PKCE and a confidential client secret, with exactly:
 

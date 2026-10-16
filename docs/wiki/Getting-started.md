@@ -1,12 +1,12 @@
 # Get your first client working
 
-[Home](https://github.com/AndrewMohawk/serverware/wiki/Home) · [Provider choices](https://github.com/AndrewMohawk/serverware/wiki/Credentials-and-providers) · [Client recipes](https://github.com/AndrewMohawk/serverware/wiki/Clients-and-recipes)
+[Home](Home.md) · [Provider choices](Credentials-and-providers.md) · [Client recipes](Clients-and-recipes.md)
 
 Use a small, read-only job first: for example, a script that reads issues from one GitHub repository. You need console access, a provider credential with the required provider-side rights, and a client environment that can reach the advertised proxy.
 
 Do not enter secrets in chat, issue comments or checked-in example files. The provider secret goes into the authenticated **Credentials** form. The workload receives only its own Serverware proxy token.
 
-Need to create the provider integration first? Use the [GitHub App walkthrough](https://github.com/AndrewMohawk/serverware/wiki/GitHub-App-setup) or [Google/X OAuth setup](https://github.com/AndrewMohawk/serverware/wiki/OAuth-provider-setup). For your own JSON API, use the [custom Bearer/header example](https://github.com/AndrewMohawk/serverware/wiki/Custom-API-credentials).
+Need to create the provider integration first? Use the [GitHub App walkthrough](GitHub-App-setup.md) or [Google/X OAuth setup](OAuth-provider-setup.md). For your own JSON API, use the [custom Bearer/header example](Custom-API-credentials.md).
 
 ## 1. Save the provider credential
 
@@ -14,7 +14,7 @@ Need to create the provider integration first? Use the [GitHub App walkthrough](
 2. Paste the key or complete the provider's required details. The suggested credential name is already filled in; change it if you want.
 3. Choose **Save credential** and review the saved result. No client, proxy token or permission is created. Ordinary key forms also support Enter to save.
 
-For Google, use the offered consent flow instead of pasting access or refresh tokens into the manual-key form. If the provider is unavailable, follow [provider setup](https://github.com/AndrewMohawk/serverware/wiki/Proxy-and-CA); do not imitate a missing provider preset with a generic key.
+For Google, use the offered consent flow instead of pasting access or refresh tokens into the manual-key form. If the provider is unavailable, follow [provider setup](Proxy-and-CA.md); do not imitate a missing provider preset with a generic key.
 
 ## 2. Assign a client
 
@@ -32,7 +32,7 @@ Selecting a saved credential reuses its exact identity; you do not need to reent
 3. Review the credential, client and permitted action, then explicitly save the permission.
 4. Wait for the exact saved policy to be active. **Saved · activation pending** is not the same as **Active**; use **Refresh activation** if needed.
 
-For supported JSON jobs, you do not need request/response field lists unless you want optional content restrictions. The preset supplies its supported defaults. Existing restricted permissions are not silently broadened. See [Permissions](https://github.com/AndrewMohawk/serverware/wiki/Permissions-and-policies).
+For supported JSON jobs, you do not need request/response field lists unless you want optional content restrictions. The preset supplies its supported defaults. Existing restricted permissions are not silently broadened. See [Permissions](Permissions-and-policies.md).
 
 ## 4. Configure the actual client
 
@@ -51,7 +51,7 @@ Run the intended read from the environment where the client will actually run. C
 
 For an owned disposable test client, you can also verify removal of access: revoke its permission, wait for revocation to be enforced, and repeat the same read expecting refusal. Do not revoke a shared production permission just to test the interface. Already-dispatched requests cannot be recalled.
 
-If a save or provider write times out, use [uncertain-result recovery](https://github.com/AndrewMohawk/serverware/wiki/Troubleshooting) rather than repeating it automatically.
+If a save or provider write times out, use [uncertain-result recovery](Troubleshooting.md) rather than repeating it automatically.
 
 ## Optional synthetic check
 

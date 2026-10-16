@@ -23,29 +23,28 @@ hosted MCP URL.
    examples/mcp/.venv/bin/pip install -r examples/mcp/requirements.lock
    ```
 
-4. Check one downloaded configuration without contacting any provider:
+4. Generate your MCP client's launch configuration. This validates the downloaded
+   file locally without contacting a provider or starting MCP:
 
    ```sh
    examples/mcp/.venv/bin/python -I examples/mcp/server.py \
-     --config issues=/absolute/private/github-client.json --check
+     --config 'issues=./private files/github-client.json' \
+     --console-origin https://serverware.example.com \
+     --print-client-config
    ```
 
-5. Configure your MCP client to launch this command. Use absolute paths; place
-   this command/arguments object in the server entry required by your client:
+5. Copy the printed `mcpServers.serverware` entry into your MCP client's settings.
+   Clients that accept an `mcpServers` object can use the whole output. Other
+   clients need its `command` and `args` fields in their server configuration.
+   Interpreter, script and configuration paths are made absolute for you; spaces
+   are preserved as separate arguments. The output contains local paths and any
+   explicit action opt-ins/console origin—not the downloaded token or contents.
 
-   ```json
-   {
-     "command": "/absolute/serverware/examples/mcp/.venv/bin/python",
-     "args": [
-       "-I",
-       "/absolute/serverware/examples/mcp/server.py",
-       "--config", "issues=/absolute/private/github-client.json",
-       "--console-origin", "https://serverware.example.com"
-     ]
-   }
-   ```
+Use `--check` instead when you only want a validation summary. Omitting both
+flags starts the normal stdio server. `--print-client-config` does not install
+anything or modify your MCP client's settings.
 
-Repeat `--config alias=/absolute/file.json` for additional permissions, up to
+Repeat `--config alias=./private-file.json` before printing for additional permissions, up to
 32 configurations and 128 discovered operations. Aliases are local names: a lowercase letter followed by up
 to 47 lowercase letters, digits, underscores or hyphens. Discovery reads the
 current files and returns operation names, accepted arguments and scope, never
@@ -82,7 +81,9 @@ still controls the repository, model, channel, recipient or other resource.
 
 Actions are disabled by default. To allow a saved Slack permission named
 `release_notice`, add both `--config release_notice=/absolute/private/slack.json`
-and `--allow-actions release_notice` to the startup arguments. Then an explicit
+and `--allow-actions release_notice` when generating the launch configuration.
+The printed entry preserves that explicit opt-in; it never enables other aliases.
+Then an explicit
 `perform_action` call has this shape:
 
 ```json

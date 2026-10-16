@@ -95,11 +95,41 @@ function projectUpstreamReceipt(value, reference) {
   }
   return value;
 }
+const activationHandoffRunbook = 'https://github.com/AndrewMohawk/serverware/blob/main/docs/self-hosting.md#activate-a-prepared-configuration';
+const activationHandoffNotice = 'Informational snapshot only. Recheck this exact operation and current saved state before a separately controlled restart. Preparation is not activation or a working provider request.';
+function projectUpstreamActivationHandoff(value, reference, review) {
+  const receipt = projectUpstreamReceipt(value, reference);
+  const current = projectUpstreamReview(review);
+  if (reference.kind !== 'prepare' || receipt.status !== 'pending' || current.pending_operation_id !== receipt.operation_id ||
+      current.expected_revision !== receipt.staged_revision || current.expected_policy_hash !== receipt.policy_hash ||
+      current.expected_settings_digest !== receipt.expected_settings_digest || !operatorExact(current.old_settings, receipt.old_settings))
+    throw operatorError('Review the exact pending destination operation again before downloading its handoff.');
+  // Explicit projection: never serialize the receipt, fixture CIDRs or browser state.
+  return {schema: 'serverware.operatorActivationHandoff/v1', change_kind: 'proxy_destinations',
+    operation_id: receipt.operation_id, observed_status: 'pending', prepared_at: receipt.created_at,
+    reviewed_revision: receipt.reviewed_revision, prepared_revision: receipt.staged_revision,
+    policy_hash: receipt.policy_hash, expected_settings_digest: receipt.expected_settings_digest,
+    target_settings_digest: receipt.target_settings_digest,
+    current_origins: [...receipt.old_settings.allowed_upstreams], target_origins: [...receipt.target_settings.allowed_upstreams],
+    status_path: upstreamSetupPath + '/' + receipt.operation_id,
+    next_step: 'Configure the exact prepared destinations on both app and proxy, then perform the separately reviewed paired restart.',
+    runbook_url: activationHandoffRunbook, notice: activationHandoffNotice};
+}
+function downloadActivationHandoff(value) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2) + '\n'], {type: 'application/json'}));
+  const anchor = textNode('a');
+  try {
+    anchor.href = url; anchor.download = 'serverware-activation-handoff.public.json';
+    document.body.append(anchor); anchor.click();
+  } finally {
+    anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+}
 function createUpstreamsView(workspace) {
   // Deployment configuration must not follow the per-application setup panel
   // when Connect temporarily moves that panel into its final wizard step.
-  const panel = element('proxy-upstreams'); const home = element('proxy');
-  home.insertBefore(panel, element('proxy-setup-content'));
+  const panel = element('proxy-upstreams');
+  element('proxy-operator-settings').append(panel);
   let review = null; let receipt = null; let reference = null;
   let visible = false; let busy = false; let storageBlocked = false; let draftStarted = false;
   try {
@@ -112,6 +142,10 @@ function createUpstreamsView(workspace) {
     operatorExact(review.old_settings.allowed_upstreams, workspace.state.catalog.allowed_upstreams);
   const unresolved = () => reference !== null && (receipt === null || reference.kind === 'cancel' && receipt.status === 'pending');
   const ready = () => visible && !busy && !storageBlocked && !workspace.state.busy && !workspace.state.uncertain && current();
+  function handoff() {
+    if (!visible || busy || storageBlocked || workspace.state.busy || !current() || unresolved()) return null;
+    try { return projectUpstreamActivationHandoff(receipt, reference, review); } catch (_) { return null; }
+  }
   function draft() { try { return review ? upstreamDelta(review, element('upstreams-proposed').value) : null; } catch (_) { return null; } }
   function retain(next) {
     try { sessionStorage.setItem(upstreamOperationKey, JSON.stringify(next)); reference = next; receipt = null; return true; }
@@ -148,6 +182,7 @@ function createUpstreamsView(workspace) {
     element('upstreams-cancel').disabled = !ready() || receipt?.status !== 'pending' || unresolved() || reference?.kind !== 'prepare' ||
       review?.pending_operation_id !== reference?.operation_id;
     element('upstreams-copy').disabled = busy || receipt?.status !== 'pending' || unresolved();
+    element('upstreams-handoff').disabled = handoff() === null;
     element('upstreams-operation-status').textContent = operationText();
     element('upstreams-pending-note').hidden = receipt?.status !== 'pending';
     element('upstreams-operation').hidden = !reference && !storageBlocked;
@@ -240,6 +275,11 @@ function createUpstreamsView(workspace) {
   element('upstreams-proposed').addEventListener('input', () => { draftStarted = true; render(); });
   element('upstreams-check').addEventListener('click', check);
   element('upstreams-cancel').addEventListener('click', () => submit('cancel'));
+  element('upstreams-handoff').addEventListener('click', () => {
+    const value = handoff(); render(); if (value === null) return;
+    try { downloadActivationHandoff(value); say('Downloaded public activation handoff. No settings were applied or services restarted; the deployment owner must recheck the operation.'); }
+    catch (_) { say('The public handoff could not be downloaded. Keep the operation reference and use the activation guide; no settings were changed.'); }
+  });
   element('upstreams-copy').addEventListener('click', async () => {
     if (busy || receipt?.status !== 'pending' || unresolved()) return;
     try { await navigator.clipboard.writeText(JSON.stringify(receipt.target_settings.allowed_upstreams));

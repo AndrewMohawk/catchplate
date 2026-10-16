@@ -2,7 +2,7 @@
 
 # Proxy setup and CA trust
 
-[Home](https://github.com/AndrewMohawk/serverware/wiki/Home) · [Client recipes](https://github.com/AndrewMohawk/serverware/wiki/Clients-and-recipes) · [Troubleshooting](https://github.com/AndrewMohawk/serverware/wiki/Troubleshooting)
+[Home](Home.md) · [Client recipes](Clients-and-recipes.md) · [Troubleshooting](Troubleshooting.md)
 
 ## Configure a client, not the console URL
 
@@ -10,7 +10,7 @@ Open **Proxy setup**, select the client and permission, and copy the displayed p
 
 For **standard client login**, the username is the Serverware client ID and the password is its expiring proxy token. Retained Bearer-only clients must use their advertised mode or be explicitly changed in **Clients**; a recipe does not silently migrate them. The token authenticates to Serverware, not to GitHub, Google or npm.
 
-Use the [provided client recipes](https://github.com/AndrewMohawk/serverware/wiki/Clients-and-recipes), which separate proxy authentication from the provider's public dummy header. Avoid hand-assembling credential-bearing URLs or echoing private configuration in logs. Some stock-client compatibility wrappers necessarily build such URLs internally; their documented isolation and redaction rules still apply.
+Use the [provided client recipes](Clients-and-recipes.md), which separate proxy authentication from the provider's public dummy header. Avoid hand-assembling credential-bearing URLs or echoing private configuration in logs. Some stock-client compatibility wrappers necessarily build such URLs internally; their documented isolation and redaction rules still apply.
 
 ## Download and scope the public CA
 

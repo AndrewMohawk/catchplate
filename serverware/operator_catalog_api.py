@@ -12,6 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 from serverware import auth, config, operator_demo
 from serverware import operator_catalog_timing as _catalog_timing
@@ -39,10 +40,51 @@ router = APIRouter(prefix=PREFIX)
 _HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache", "X-Content-Type-Options": "nosniff"}
 _ADMIN_ROLE = auth.require_role("admin")
 _WORKER_SLOTS = asyncio.BoundedSemaphore(4)
+_ERROR_CODES = {
+    "invalid_input": 422, "unsupported_policy": 422, "catalog_changed": 409,
+    "credential_in_use": 409, "provider_disconnect_required": 409,
+    "approval_required": 409, "already_configured": 409, "capacity_reached": 409,
+    "resource_not_found": 404, "github_app_verification_failed": 503,
+    "mutation_outcome_unknown": 503,
+}
+# Only these source-owned top-level names may leave validation. Neither error
+# messages nor arbitrary dictionary keys, nested locations or values are public.
+_ERROR_FIELDS = frozenset({
+    "name", "auth_type", "header_name", "secret", "app_preset", "app_id",
+    "installation_id", "private_key_pem", "repository", "issues_permission",
+    "credential_kind", "access_key_id", "secret_access_key", "session_token",
+    "expires_at", "expected_revision", "expected_policy_hash", "id",
+    "expected_credential_generation", "application_id", "credential_id",
+    "token_lifetime_seconds", "proxy_authentication", "operation_bundle",
+    "approval_mode", "upstream_url", "methods", "request_fields",
+    "request_body_mode", "response_fields", "query_keys", "allowed_headers",
+    "response_mode", "credential_input", "placeholder", "operation", "scope",
+    "username", "daily_post_attempt_limit", "chain", "packages", "package",
+    "tag", "publishing_window", "registry_id", "region", "repository_name",
+    "image_tag", "age_policy",
+})
 
 
-def _reject(status: int, detail: str) -> None:
-    raise HTTPException(status_code=status, detail=detail, headers=_HEADERS)
+def _reject(status: int, detail: str, *, code: str | None = None, fields=()) -> None:
+    # Additive headers preserve the existing JSON error contract. The browser
+    # maps these closed identities to its own text; no submitted text is echoed.
+    headers = dict(_HEADERS)
+    if _ERROR_CODES.get(code) == status:
+        headers["X-Serverware-Error-Code"] = code
+        if code == "invalid_input":
+            safe_fields = sorted({name for name in fields if type(name) is str and name in _ERROR_FIELDS})[:8]
+            if safe_fields:
+                headers["X-Serverware-Error-Fields"] = ",".join(safe_fields)
+    raise HTTPException(status_code=status, detail=detail, headers=headers)
+
+
+def _validation_fields(error: ValidationError, model) -> tuple[str, ...]:
+    fields = set()
+    for item in error.errors(include_input=False, include_context=False, include_url=False):
+        location = item.get("loc", ())
+        if location and type(location[0]) is str and location[0] in _ERROR_FIELDS and location[0] in model.model_fields:
+            fields.add(location[0])
+    return tuple(sorted(fields)[:8])
 
 
 def _profile() -> None:
@@ -154,9 +196,12 @@ async def _payload(request: Request, model, maximum: int):
             max_array_items=64, max_total_nodes=512, max_string_bytes=8192,
         ))
         return model.model_validate(_plain(value))
+    except ValidationError as error:
+        _reject(422, "invalid operator catalog input", code="invalid_input",
+            fields=_validation_fields(error, model))
     except (ValueError, TypeError, RecursionError):
         # Pydantic and parser exceptions can contain submitted secret material.
-        _reject(422, "invalid operator catalog input")
+        _reject(422, "invalid operator catalog input", code="invalid_input")
 
 
 async def _mutate(request: Request, identity: auth.AdminIdentity, model_name: str,
@@ -179,21 +224,28 @@ async def _mutate(request: Request, identity: auth.AdminIdentity, model_name: st
         result = await _blocking(getattr(mutations, operation_name), payload, identity.user_id,
             observation=observation)
     except mutations.CatalogNotFound:
-        _reject(404, "operator catalog resource not found")
-    except operator_catalog_schema.CatalogConflict:
-        _reject(409, "operator catalog or policy changed; refresh before trying again")
+        _reject(404, "operator catalog resource not found", code="resource_not_found")
+    except operator_catalog_schema.CatalogConflict as error:
+        code = {
+            mutations.CredentialInUse: "credential_in_use",
+            mutations.ProviderDisconnectRequired: "provider_disconnect_required",
+            mutations.ApprovalRequired: "approval_required",
+            mutations.CatalogSettingUnchanged: "already_configured",
+        }.get(type(error), "catalog_changed")
+        _reject(409, "operator catalog or policy changed; refresh before trying again", code=code)
     except mutations.CatalogLimitReached:
-        _reject(409, "operator catalog capacity reached; inspect workspace limits before trying again")
+        _reject(409, "operator catalog capacity reached; inspect workspace limits before trying again", code="capacity_reached")
     except GitHubAppUnavailable:
-        _reject(503, "GitHub App verification failed; check app, installation and repository permissions")
+        _reject(503, "GitHub App verification failed; check app, installation and repository permissions",
+            code="github_app_verification_failed")
     except ValueError:
-        _reject(422, "invalid operator catalog input or unsupported policy")
+        _reject(422, "invalid operator catalog input or unsupported policy", code="unsupported_policy")
     except Exception:
-        _reject(503, "operator catalog storage unavailable; inspect saved status before retrying")
+        _reject(503, "operator catalog storage unavailable; inspect saved status before retrying", code="mutation_outcome_unknown")
     try:
         return JSONResponse(result, status_code=201 if created else 200, headers=_HEADERS)
     except Exception:
-        _reject(503, "operator catalog result unavailable; inspect saved status before retrying")
+        _reject(503, "operator catalog result unavailable; inspect saved status before retrying", code="mutation_outcome_unknown")
 
 
 @router.get("/catalog")

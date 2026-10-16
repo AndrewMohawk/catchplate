@@ -1,6 +1,6 @@
 # Notifications and audit
 
-[Home](https://github.com/AndrewMohawk/serverware/wiki/Home) · [Troubleshooting](https://github.com/AndrewMohawk/serverware/wiki/Troubleshooting)
+[Home](Home.md) · [Troubleshooting](Troubleshooting.md)
 
 **Action-required alerts** ask a person to do something. **Audit-log delivery** reports something that happened. Configure them independently; sending an audit message is not asking for or granting approval.
 
@@ -60,7 +60,7 @@ ceremony. The
 client explicitly retries the same request after approval; the approval expires
 and is one-use. A saved unknown decision outcome or uncertain provider write is
 not automatically retried. Notification delivery grants no authority and does
-not change these rules. See [host-review operations](https://github.com/AndrewMohawk/serverware/wiki/Operations-and-maintenance#host-trusted-request-review).
+not change these rules. See [host-review operations](Operations-and-maintenance.md#host-trusted-request-review).
 
 ### Inspect audit history
 
@@ -73,7 +73,7 @@ A verification result is a point-in-time check. After refreshing, changing the
 search or filter, or loading older events, verify again before treating the
 current view as checked. Wait for the history request to finish first.
 
-A blocked response can follow an attempted provider request; it does not always mean the request was denied before dispatch. If a write may have reached the provider, do not automatically retry it. See [uncertain outcomes](https://github.com/AndrewMohawk/serverware/wiki/Troubleshooting).
+A blocked response can follow an attempted provider request; it does not always mean the request was denied before dispatch. If a write may have reached the provider, do not automatically retry it. See [uncertain outcomes](Troubleshooting.md).
 
 Local chain verification checks the stored chain, not an independent external witness or hardware attestation. Notifications contain selected safe summaries/references, not raw request/response bodies or a complete independently verified audit archive. Keep the original audit store as authoritative. [Audit UI](https://github.com/AndrewMohawk/serverware/blob/main/serverware/operator_demo_web/workspace_proxy_audit.js), [notification projections](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-notifications.md#what-messages-mean).
 

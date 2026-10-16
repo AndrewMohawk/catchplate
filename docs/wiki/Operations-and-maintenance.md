@@ -1,6 +1,6 @@
 # Operations and maintenance
 
-[Home](https://github.com/AndrewMohawk/serverware/wiki/Home) · [Credentials](https://github.com/AndrewMohawk/serverware/wiki/Credentials-and-providers) · [Troubleshooting](https://github.com/AndrewMohawk/serverware/wiki/Troubleshooting)
+[Home](Home.md) · [Credentials](Credentials-and-providers.md) · [Troubleshooting](Troubleshooting.md)
 
 Keep the credential, client and permission identities when changing only a secret. This avoids rebuilding assignments and makes the audit trail easier to follow.
 
@@ -42,7 +42,7 @@ Rotation preserves the client identity and assignments. It does not refresh an O
 
 ## Manage workload renewal
 
-Optional **Clients → Managed workload renewal** is deployed; clients remain manual-only until an administrator explicitly enrolls a workload public key. Use the [enrollment walkthrough](https://github.com/AndrewMohawk/serverware/wiki/Clients-and-recipes#optional-renewal-for-a-long-running-workload) and [managed-client README](https://github.com/AndrewMohawk/serverware/blob/main/examples/managed-client/README.md) for initialization, configuration and worker commands. Keep the private key local and use one client/renewal owner per workload or replica.
+Optional **Clients → Managed workload renewal** is deployed; clients remain manual-only until an administrator explicitly enrolls a workload public key. Use the [enrollment walkthrough](Clients-and-recipes.md#optional-renewal-for-a-long-running-workload) and [managed-client README](https://github.com/AndrewMohawk/serverware/blob/main/examples/managed-client/README.md) for initialization, configuration and worker commands. Keep the private key local and use one client/renewal owner per workload or replica.
 
 Choose a finite 1–90 day enrollment and 1–24 hour token lifetime. Neither renewal nor restart extends the grant. Old-token overlap ends at the earlier of its original expiry and five minutes after rotation; the worker must refresh its SDK connections within that window. Enrollment can shorten the current token's expiry, not extend it. Review grant expiry separately from token expiry and provider consent.
 

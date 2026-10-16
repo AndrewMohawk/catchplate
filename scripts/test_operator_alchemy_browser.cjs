@@ -77,8 +77,7 @@ async function recipe(page, chain = CHAINS[0], method = RPC[0]) {
     assert.equal(url.origin, 'https://github.com'); assert.equal(url.username + url.password + url.search + url.hash, '');
     for (const privateValue of [PRIVATE, APP_TOKEN, IDS.application, IDS.credential, IDS.rule]) assert(!url.href.includes(privateValue));
   }
-  const acceptance = 'Pinned Node.js and Go examples passed isolated SDK-through-proxy checks. ' +
-    'The prior Python acceptance used web3.py 7.13.0; SDK-through-proxy verification of web3.py 7.15.0 is pending. ' +
+  const acceptance = 'Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. ' +
     'This page has not tested your Alchemy credentials or provider entitlement. ' +
     'The GitHub Actions recipe is inactive and has not been run.';
   assert.equal(await page.locator('#client-example-note').innerText(),

@@ -258,6 +258,7 @@ function notificationDeliveryMessage(delivery) {
 function createNotificationsView(workspace) {
   const prefix = '/api/operator-demo/notifications';
   let status = null; let busy = false; let visible = false; let opened = false;
+  let selectedSlot = null;
   let nativeObservation = null;
   const nativeObservationClock = {key: null, latest: null, uncertain: false};
   let reference = null; let receipt = null; let storageBlocked = false;
@@ -274,7 +275,19 @@ function createNotificationsView(workspace) {
   const canWrite = () => visible && status?.available && !busy && !pending() && workspace.state.catalog && !workspace.state.busy && !workspace.state.uncertain;
   const say = message => { element('notifications-status').textContent = message; };
   function clearSecrets() { for (const form of forms.values()) form.elements.namedItem('url').value = ''; }
+  function selectEditor(slotName) {
+    if (busy) return;
+    const closing = selectedSlot === slotName;
+    const discardedSecret = [...forms.values()].some(form => form.elements.namedItem('url').value !== '');
+    clearSecrets(); selectedSlot = closing ? null : slotName; controls();
+    if (discardedSecret) say('The unsaved destination URL was cleared. Paste it again when you are ready to save. No settings changed.');
+    const form = forms.get(slotName);
+    (closing || !canWrite() ? form?.querySelector('[data-notification-edit]') : form?.elements.namedItem('label'))?.focus();
+  }
   function operationMessage(message) {
+    // An empty recovery card need not precede setup. Any retained reference or
+    // storage failure makes the existing recovery controls immediately visible.
+    element('notification-operation-status').closest('article').hidden = !storageBlocked && reference === null;
     element('notification-operation-status').textContent = message || (storageBlocked ?
       'The retained operation reference could not be read or stored. Notification changes are blocked to avoid an untraceable duplicate.' : reference ?
       (receipt ? notificationOutcome(receipt.status) : 'A previous request has an unconfirmed outcome. Check its result; refreshing settings does not prove whether it committed.') : 'No notification operation in this session.');
@@ -283,7 +296,7 @@ function createNotificationsView(workspace) {
   }
   function draftChanged(form, slot) {
     return form.elements.namedItem('label').value.trim() !== slot.label || form.elements.namedItem('enabled').checked !== slot.enabled ||
-      form.elements.namedItem('url_action').value !== 'keep' || form.elements.namedItem('url').value !== '' ||
+      form.elements.namedItem('url_action').value !== (slot.secret_present ? 'keep' : 'replace') || form.elements.namedItem('url').value !== '' ||
       Number(form.elements.namedItem('max_attempts').value) !== slot.max_attempts ||
       JSON.stringify([...form.querySelectorAll('[name="event_types"]:checked')].map(input => input.value).sort()) !== JSON.stringify(slot.event_types);
   }
@@ -292,7 +305,12 @@ function createNotificationsView(workspace) {
     element('notification-check-operation').disabled = busy || !reference || storageBlocked;
     for (const [slotName, form] of forms) {
       const slot = status?.slots.find(item => item.slot === slotName);
-      form.querySelector('[data-notification-fields]').disabled = !canWrite();
+      const fields = form.querySelector('[data-notification-fields]');
+      fields.disabled = !canWrite(); fields.hidden = selectedSlot !== slotName;
+      const edit = form.querySelector('[data-notification-edit]');
+      edit.disabled = busy; edit.setAttribute('aria-expanded', String(selectedSlot === slotName));
+      edit.textContent = selectedSlot === slotName ? 'Close editor' : slot?.revision ? 'Edit destination' : 'Configure destination';
+      form.querySelector('[data-notification-draft]').hidden = !slot || !draftChanged(form, slot);
       const action = form.elements.namedItem('url_action').value;
       const input = form.elements.namedItem('url'); input.disabled = !canWrite() || action !== 'replace'; input.required = action === 'replace';
       form.querySelector('[data-notification-url-group]').hidden = action !== 'replace';
@@ -340,23 +358,31 @@ function createNotificationsView(workspace) {
   function renderSlot(slot) {
     const form = textNode('form', undefined, 'card'); form.dataset.notificationSlot = slot.slot; form.autocomplete = 'off';
     form.append(textNode('h3', slot.adapter === 'slack' ? 'Slack' : 'Generic webhook'));
+    const destination = textNode('p', slot.label || 'No destination saved.'); destination.dataset.notificationDestination = ''; form.append(destination);
     const state = textNode('p', slot.revision === 0 ? 'Not configured.' :
       (slot.enabled ? slot.event_types.length ? 'Enabled for selected events.' : 'Enabled, but no source events are selected.' : 'Disabled.') +
       ' Destination URL ' + (slot.secret_present ? 'stored; never returned.' : 'not stored.'));
     state.dataset.slotStatus = ''; form.append(state);
-    const revision = textNode('p', 'Saved revision: ' + slot.revision, 'small muted'); revision.dataset.slotRevision = ''; form.append(revision);
     const delivery = textNode('p', notificationDeliveryMessage(slot.last_delivery), 'small');
-    delivery.dataset.notificationDelivery = ''; form.append(delivery);
-    const fields = textNode('fieldset'); fields.dataset.notificationFields = ''; form.append(fields);
+    delivery.dataset.notificationDelivery = ''; delivery.hidden = slot.last_delivery === null; form.append(delivery);
+    const draft = textNode('p', 'Unsaved changes in this editor. Save explicitly to apply them.', 'small muted');
+    draft.dataset.notificationDraft = ''; draft.hidden = true; form.append(draft);
+    const edit = textNode('button', slot.revision ? 'Edit destination' : 'Configure destination', 'secondary');
+    edit.type = 'button'; edit.dataset.notificationEdit = ''; edit.setAttribute('aria-expanded', 'false');
+    const editorId = 'notification-editor-' + slot.slot.replace('.', '-'); edit.setAttribute('aria-controls', editorId);
+    edit.addEventListener('click', () => selectEditor(slot.slot)); form.append(edit);
+    const fields = textNode('fieldset'); fields.id = editorId; fields.dataset.notificationFields = ''; fields.hidden = true; form.append(fields);
+    const legend = textNode('legend', slot.channel === 'action_required' ? 'Action alert destination' : 'Audit log destination'); fields.append(legend);
     const label = field(form, fields, 'label', 'Destination label'); label.maxLength = 80; label.required = true; label.value = slot.label;
     const enabledLabel = textNode('label'); const enabled = textNode('input'); enabled.type = 'checkbox'; enabled.name = 'enabled'; enabled.checked = slot.enabled;
     enabledLabel.append(enabled, document.createTextNode(' Enabled for selected events')); fields.append(enabledLabel);
-    const action = field(form, fields, 'url_action', 'URL action', 'select');
-    for (const [value, title] of [['keep', 'Keep the saved URL'], ['replace', 'Set or replace the URL'], ['clear', 'Remove the URL (requires disabled)']]) {
+    const action = field(form, fields, 'url_action', 'Destination URL', 'select');
+    for (const [value, title] of [['keep', 'Use the saved destination'], ['replace', 'Enter a new destination URL'], ['clear', 'Remove the saved destination (disable first)']]) {
       const option = textNode('option', title); option.value = value;
       option.disabled = value === 'keep' && !slot.secret_present || value === 'clear' && slot.revision === 0; action.append(option);
     }
     action.value = slot.secret_present ? 'keep' : 'replace';
+    if (slot.revision === 0) { action.hidden = true; action.previousElementSibling.hidden = true; }
     const group = textNode('div'); group.dataset.notificationUrlGroup = ''; fields.append(group);
     const url = field(form, group, 'url', 'Webhook URL'); url.type = 'password'; url.maxLength = 4096; url.autocomplete = 'new-password'; url.spellcheck = false;
     group.append(textNode('p', 'Write-only HTTPS destination. Never paste it into an application permission. Cleared on submission and when leaving this page.', 'small muted'));
@@ -385,9 +411,13 @@ function createNotificationsView(workspace) {
       checkbox.checked = slot.event_types.includes(type); item.append(checkbox, document.createTextNode(' ' + type)); events.append(item);
     }
     fields.append(events);
-    const attempts = field(form, fields, 'max_attempts', 'Maximum delivery attempts', 'select');
+    const advanced = textNode('details'); advanced.dataset.notificationAdvanced = '';
+    advanced.append(textNode('summary', 'Advanced delivery settings'));
+    const revision = textNode('p', 'Saved revision: ' + slot.revision, 'small muted'); revision.dataset.slotRevision = ''; advanced.append(revision);
+    const attempts = field(form, advanced, 'max_attempts', 'Maximum delivery attempts', 'select');
     for (const count of [1, 2, 3]) { const option = textNode('option', String(count)); option.value = String(count); attempts.append(option); } attempts.value = String(slot.max_attempts);
-    fields.append(textNode('p', 'Retries are bounded by this slot and the original action deadline. Unknown delivery outcomes are not automatically replayed.', 'small muted'));
+    advanced.append(textNode('p', 'Retries are bounded by this slot and the original action deadline. Unknown delivery outcomes are not automatically replayed.', 'small muted'));
+    fields.append(advanced);
     const buttons = textNode('div', undefined, 'actions'); const save = textNode('button', 'Save settings — no message sent'); save.type = 'submit'; save.dataset.notificationSave = '';
     const test = textNode('button', 'Send synthetic test', 'secondary'); test.type = 'button'; test.dataset.notificationTest = ''; buttons.append(save, test); fields.append(buttons);
     fields.append(textNode('p', 'Test uses only this slot’s saved URL and revision. Save or refresh draft changes first. Acknowledgement does not prove approval, hardware readiness, or audit-chain integrity.', 'small muted'));
@@ -408,27 +438,41 @@ function createNotificationsView(workspace) {
       '. Pending source events: ' + status.backlog.pending_source_events + '. Queue limit: ' + status.backlog.queue_capacity +
       '; retained delivery limit: ' + status.backlog.retained_capacity + '.' : '';
     if (status?.available) {
+      const jump = textNode('nav', undefined, 'actions'); jump.setAttribute('aria-label', 'Notification types');
+      for (const [channel, title] of [['action_required', 'Action alerts'], ['audit_log', 'Audit logs']]) {
+        const button = textNode('button', title, 'secondary'); button.type = 'button'; button.dataset.notificationJump = channel;
+        button.addEventListener('click', () => {
+          const heading = element('notification-channel-' + channel);
+          heading?.scrollIntoView({block: 'start'}); heading?.focus({preventScroll: true});
+        });
+        jump.append(button);
+      }
+      element('notifications-panels').append(jump);
       for (const [channel, title] of [['action_required', 'Action-required alerts'], ['audit_log', 'Audit-log delivery']]) {
         const section = textNode('section', undefined, 'card'); section.dataset.notificationChannel = channel;
-        section.append(textNode('h2', title), textNode('p', channel === 'action_required' ? status.capabilities.action_required.source_available ?
+        const heading = textNode('h2', title); heading.id = 'notification-channel-' + channel; heading.tabIndex = -1;
+        section.setAttribute('aria-labelledby', heading.id);
+        section.append(heading, textNode('p', channel === 'action_required' ? status.capabilities.action_required.source_available ?
           'Action-required delivery has source support. Native availability below describes only the last source read, not current gesture readiness.' :
           'Action-required source is not available according to the last recorded status. You may configure destinations and send a synthetic test, but a test does not establish native readiness.' :
           'Delivers safe summaries of newly committed selected audit events. This is not a verified audit archive or an application webhook.'));
-        if (channel === 'action_required') {
-          nativeObservation = createNotificationNativeObservation(status.capabilities.native_hardware, nativeObservationClock);
-          nativeObservation.update(visible); section.append(nativeObservation.panel);
-        }
         const cards = textNode('div', undefined, 'two-column');
         for (const slot of status.slots.filter(item => item.channel === channel)) cards.append(renderSlot(slot));
-        section.append(cards); element('notifications-panels').append(section);
+        section.append(cards);
+        if (channel === 'action_required') {
+          nativeObservation = createNotificationNativeObservation(status.capabilities.native_hardware, nativeObservationClock);
+          nativeObservation.update(visible);
+        }
+        element('notifications-panels').append(section);
       }
+      if (nativeObservation) { nativeObservation.panel.classList.add('card'); element('notifications-panels').append(nativeObservation.panel); }
     }
     operationMessage(); controls();
   }
   async function loadStatus() {
     try {
       status = projectNotificationStatus(await request(prefix));
-      say(status.available ? 'Four independent destinations. Save changes only configuration; sending a synthetic test is a separate action.' :
+      say(status.available ? 'Choose a destination to configure or edit. Action alerts and audit logs are separate. Save changes settings; Test sends a message.' :
         'Notifications are unavailable: disabled by deployment configuration. No destinations can be configured or tested here.');
     } catch (error) { status = null; say(operatorMessage(error)); }
     render();
@@ -492,5 +536,5 @@ function createNotificationsView(workspace) {
   element('notification-check-operation').addEventListener('click', checkOperation);
   workspace.onAuthenticationLost(clearSecrets);
   window.addEventListener('pagehide', () => { clearSecrets(); nativeObservation?.stop(); }); workspace.subscribe(controls); operationMessage(); controls();
-  return {show(active) { visible = active; if (!active) clearSecrets(); nativeObservation?.update(active); controls(); if (active && !opened) { opened = true; refresh(); } }};
+  return {show(active) { visible = active; if (!active) { clearSecrets(); selectedSlot = null; } nativeObservation?.update(active); controls(); if (active && !opened) { opened = true; refresh(); } }};
 }

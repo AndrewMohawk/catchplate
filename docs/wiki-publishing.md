@@ -2,9 +2,14 @@
 
 # Publish the operator guide to GitHub Wiki
 
-The [GitHub Wiki](https://github.com/AndrewMohawk/serverware/wiki) is the operator
-documentation home. `docs/wiki/` is its reviewed, versioned source in this
-repository. Publishing the application repository does **not** publish its Wiki:
+The [versioned operator and developer guide](wiki/Home.md) is usable now in this
+repository or a local checkout. Its relative page links do not depend on the
+separate GitHub Wiki, which has not been published. Wiki availability must not
+block reading or using the guide.
+
+The [GitHub Wiki](https://github.com/AndrewMohawk/serverware/wiki) remains an
+optional publication target for the reviewed `docs/wiki/` source. Publishing the
+application repository does **not** publish its Wiki:
 GitHub stores Wiki pages in a separate `serverware.wiki.git` repository. Its
 default branch supplies the live pages; the initial page must be created on
 GitHub before cloning. See [GitHub's publishing instructions](https://docs.github.com/en/communities/documenting-your-project-with-wikis/adding-or-editing-wiki-pages#adding-or-editing-wiki-pages-locally).
@@ -25,8 +30,10 @@ The October 16 authenticated `ls-remote` recheck again returned `Repository not
 found` (exit 128); no access-state change or Wiki publication was established.
 
 An authorized repository maintainer must open the Wiki while signed into
-GitHub. If it offers **Create the first page**, keep the title **Home**, paste
-the reviewed contents of `docs/wiki/Home.md`, and save it. This is a one-time
+GitHub. If it offers **Create the first page**, keep the title **Home** and link
+to the [versioned guide](wiki/Home.md) until the reviewed pages are published
+below. Do not paste the unrendered source: its relative `.md` links target the
+application repository, not Wiki routes. This is a one-time
 initialization action; do not repeat it if a Home page already exists. If the
 Wiki already contains pages or Git access still fails after initialization,
 investigate existing access rather than creating a new PAT, requesting a
@@ -75,10 +82,15 @@ Run each block only if the preceding checks succeeded. A clone failure is a
 stop, not permission to create a replacement repository or reuse another
 publisher's checkout. Preserve the fresh directory for diagnosis.
 
-## Copy and review exactly the maintained pages
+## Render and review exactly the maintained pages
 
 These thirteen guides plus `_Sidebar.md` are the publication allowlist. Do not use
 `rsync --delete`, remove other Wiki pages, or copy the whole application checkout.
+Source navigation uses `Page.md#section`. The bounded renderer below changes
+only known sibling-page links to Wiki URLs in the isolated checkout, preserving
+fragments, external links and repository/evidence links. The source stays
+unchanged. It needs Node.js (built-in modules only), not an application build or
+package installation. Render all pages successfully before staging any changes.
 
 ```bash
 wiki_pages=(
@@ -88,20 +100,46 @@ wiki_pages=(
   Operations-and-maintenance.md Troubleshooting.md Capability-matrix-and-glossary.md
   _Sidebar.md
 )
-for wiki_page in "${wiki_pages[@]}"; do
-  test -f "$wiki_source/docs/wiki/$wiki_page"
-  test ! -L "$wiki_source/docs/wiki/$wiki_page"
-  test ! -L "$wiki_checkout/$wiki_page"
-  cp -- "$wiki_source/docs/wiki/$wiki_page" "$wiki_checkout/$wiki_page"
-done
+node - "$wiki_source" "$wiki_checkout" "${wiki_pages[@]}" <<'JS'
+const fs = require('node:fs');
+const path = require('node:path');
+const [source, checkout, ...pages] = process.argv.slice(2);
+const known = new Set(pages);
+if (pages.length !== 14 || known.size !== 14 ||
+    pages.some(page => !/^[A-Za-z0-9_-]+\.md$/.test(page))) {
+  throw new Error('Unexpected publication page allowlist');
+}
+const rendered = pages.map(page => {
+  const input = path.join(source, 'docs/wiki', page);
+  const output = path.join(checkout, page);
+  const stat = fs.lstatSync(input);
+  let outputStat;
+  try { outputStat = fs.lstatSync(output); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 128 * 1024 ||
+      (outputStat && !outputStat.isFile())) {
+    throw new Error('Unsafe or oversized publication page: ' + page);
+  }
+  const text = fs.readFileSync(input, 'utf8').replace(
+    /\]\(([A-Za-z0-9_-]+\.md)(#[^\s)]*)?\)/g,
+    (_match, target, fragment = '') => {
+      if (!known.has(target)) throw new Error('Unknown guide page: ' + target);
+      return '](https://github.com/AndrewMohawk/serverware/wiki/' +
+        target.slice(0, -3) + fragment + ')';
+    }
+  );
+  return {output, text};
+});
+for (const {output, text} of rendered) fs.writeFileSync(output, text);
+JS
 git -C "$wiki_checkout" add -- "${wiki_pages[@]}"
 git -C "$wiki_checkout" diff --cached --check
 git -C "$wiki_checkout" diff --cached --stat
 git -C "$wiki_checkout" diff --cached -- "${wiki_pages[@]}"
 ```
 
-Inspect the complete diff before continuing. Wiki-only edits are not disposable:
-if copying replaces a newer explanation or another maintainer's work, stop,
+Inspect the complete diff before continuing, including converted navigation.
+Wiki-only edits are not disposable: if rendering replaces a newer explanation or another maintainer's work, stop,
 reconcile it into the reviewed source, and prepare a fresh publication checkout.
 If the staged diff is empty, no commit or push is necessary. Do not use a reset,
 force push, or automatic conflict resolution to make publication succeed.

@@ -231,6 +231,10 @@ async function screenshot(page, name) {
   await clean(page); await page.screenshot({path: join(artifacts, name + '.png'), fullPage: true});
 }
 const form = (page, name = 'audit_log.webhook') => page.locator('form[data-notification-slot="' + name + '"]');
+async function edit(page, target = form(page)) {
+  const button = target.locator('[data-notification-edit]');
+  if (await button.getAttribute('aria-expanded') !== 'true') await button.click();
+}
 async function settled(page) {
   await page.waitForLoadState('networkidle');
   await page.waitForFunction(() => !document.getElementById('notifications-refresh').disabled);
@@ -238,8 +242,12 @@ async function settled(page) {
 async function open(page) {
   await ready(page); await view(page, 'notifications'); await settled(page);
   assert.equal(await page.locator('form[data-notification-slot]').count(), 4);
+  // These protocol fixtures explicitly open their default editor. The focused
+  // summary suite separately verifies all four editors begin collapsed.
+  await edit(page);
 }
 async function submit(page, target = form(page), kind = 'save') {
+  await edit(page, target);
   await target.locator('[data-notification-' + kind + ']').click(); await settled(page); await clean(page);
 }
 async function checkOperation(page) {
@@ -259,7 +267,7 @@ async function writesDisabled(page) {
   for (const button of await buttons.all()) assert(await button.isDisabled());
 }
 async function savedRevision(page, name, revision) {
-  assert.match(await form(page, name).locator('[data-slot-revision]').innerText(), new RegExp('(?:^|\\D)' + revision + '(?:$|\\D)'));
+  assert.match(await form(page, name).locator('[data-slot-revision]').textContent(), new RegExp('(?:^|\\D)' + revision + '(?:$|\\D)'));
 }
 
 const tests = [
@@ -294,6 +302,7 @@ const tests = [
         await savedRevision(page, name, 1);
       }
       await form(page).locator('[name="label"]').fill('An unsaved label in one slot');
+      await form(page).locator('[data-notification-advanced] summary').click();
       await form(page).locator('[name="max_attempts"]').selectOption('3');
       for (const name of SLOTS.filter(name => name !== 'audit_log.webhook')) {
         assert.equal(await form(page, name).locator('[name="label"]').inputValue(), name + ' destination');
@@ -307,13 +316,14 @@ const tests = [
       await open(page); const before = clone(observed.snapshot.slots);
       for (const name of SLOTS) {
         const target = form(page, name);
+        await edit(page, target);
         assert.equal(await target.locator('[name="event_types"]:checked').count(), 0);
         assert.equal(await target.locator('[name="enabled"]').isChecked(), false);
-        assert.equal(await target.locator('details').getAttribute('open'), null);
+        assert.equal(await target.locator('[data-notification-events-summary]').locator('..').getAttribute('open'), null);
         assert(await target.locator('[data-notification-events-status]').isVisible());
         assert.match(await target.locator('[data-notification-events-status]').innerText(), /Disabled; no source events selected/);
         assert(await target.locator('[data-notification-test]').isDisabled());
-        assert.equal(await target.locator('[data-notification-preset]').count(), name.startsWith('audit_log.') ? 3 : 0);
+        assert.equal(await target.locator('[data-notification-preset]').count(), name.startsWith('audit_log.') ? Object.keys(AUDIT_PRESETS).length : 0);
       }
       const target = form(page);
       await target.locator('[data-notification-preset="proxy_blocks"]').click();
@@ -329,7 +339,8 @@ const tests = [
       await open(page); const before = clone(observed.snapshot.slots);
       for (const name of SLOTS) {
         const target = form(page, name);
-        assert.equal(await target.locator('details').getAttribute('open'), null);
+        await edit(page, target);
+        assert.equal(await target.locator('[data-notification-events-summary]').locator('..').getAttribute('open'), null);
         assert(await target.locator('[data-notification-events-status]').isVisible());
         assert.match(await target.locator('[data-slot-status]').innerText(), /Enabled, but no source events are selected/);
         assert.match(await target.locator('[data-notification-events-status]').innerText(), /No source events selected in this draft.*Empty saved filters deliver no source events/s);
@@ -356,7 +367,7 @@ const tests = [
       assert(await target.locator('[data-notification-save]').isDisabled());
       await target.evaluate(node => node.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})));
       assert.equal(observed.posts.length, 1);
-      await target.locator('details summary').click();
+      await target.locator('[data-notification-events-summary]').click();
       await target.locator('[name="event_types"][value="data_plane.request.denied"]').check();
       assert(await target.locator('[data-notification-save]').isEnabled());
       assert(await target.locator('[data-notification-test]').isDisabled());
@@ -411,7 +422,7 @@ const tests = [
       await open(page); const target = form(page); const before = clone(observed.snapshot.slots);
       assert.equal(await target.locator('[name="event_types"]').count(), 92);
       assert.equal(await target.locator('[name="event_types"]:checked').count(), 1);
-      await target.locator('details').locator('summary').click();
+      await target.locator('[data-notification-events-summary]').click();
       for (const checkbox of await target.locator('[name="event_types"]').all()) await checkbox.check();
       assert.match(await target.locator('[data-notification-events-summary]').innerText(), /92\/64 selected/);
       assert(await target.locator('[data-notification-save]').isDisabled());
@@ -441,8 +452,10 @@ const tests = [
       await open(page);
       for (const name of SLOTS) {
         const others = clone(observed.snapshot.slots.filter(item => item.slot !== name)); const target = form(page, name);
+        await edit(page, target);
         await target.locator('[name="label"]').fill('Saved ' + name);
         await target.locator('[name="url_action"]').selectOption('keep');
+        await target.locator('[data-notification-advanced] summary').click();
         await target.locator('[name="max_attempts"]').selectOption('2');
         await submit(page, target);
         const post = observed.posts.at(-1); assert.equal(post.kind, 'save'); assert.equal(post.body.slot, name);

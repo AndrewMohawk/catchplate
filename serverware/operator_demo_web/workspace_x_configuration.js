@@ -59,7 +59,7 @@ function projectXConfiguration(value) {
 
 function createXConfigurationView(workspace) {
   const panel = element('x-configuration-panel');
-  element('proxy').insertBefore(panel, element('proxy-setup-content'));
+  element('proxy-operator-settings').append(panel);
   let discovery = null; let receipt = null; let operationId = null;
   let visible = false; let busy = false; let storageBlocked = false;
   let available = null; let reviewedOnce = false;

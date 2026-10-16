@@ -273,6 +273,60 @@ function textNode(tag, text, className) {
 }
 function operatorError(message) { const error = new Error('Operator request failed'); error.uiMessage = message; return error; }
 function operatorMessage(error) { return error.uiMessage || 'The response was lost or unavailable. Review saved state before another attempt.'; }
+function operatorApiErrorMessage(response) {
+  const messages = {404: 'The resource was not found. Review refreshed saved state.',
+    409: 'Saved state changed, the resource is in use, or capacity was reached. Review refreshed state before trying again.',
+    413: 'The request was too large.', 422: 'Check the form fields. The service rejected this configuration.',
+    503: 'The service could not confirm the result. Do not assume the change failed.'};
+  const fallback = messages[response.status] || 'The service rejected the request. Refresh before trying again.';
+  const codes = {
+    invalid_input: [422, 'Some form fields were not accepted. Review the fields and saved state before another change.'],
+    unsupported_policy: [422, 'This configuration is not supported by the current policy. Review the selected operation and its limits.'],
+    catalog_changed: [409, 'Saved state changed since this form was reviewed. Refresh and review the current resources before another change.'],
+    credential_in_use: [409, 'This credential is still used by active permissions. Review those permissions before revoking it.'],
+    provider_disconnect_required: [409, 'This account needs its provider disconnect flow. Use the account controls in Credentials.'],
+    approval_required: [409, 'This permission requires human approval. Keep approval enabled and review its requirements.'],
+    already_configured: [409, 'This setting already matches the saved state. Refresh to review it; no replacement change is needed.'],
+    capacity_reached: [409, 'The workspace resource limit was reached. Review active and retained resource counts before adding more.'],
+    resource_not_found: [404, 'This resource is no longer available. Refresh and choose a current saved resource.'],
+    github_app_verification_failed: [503, 'GitHub App verification could not be completed. Check the app, installation, repository access and permissions, then review saved state.'],
+    mutation_outcome_unknown: [503, 'The save outcome could not be confirmed. Refresh and inspect saved state; do not resend the change automatically.']
+  };
+  const fields = {name: 'Name', auth_type: 'Authentication type', header_name: 'Header name', secret: 'Provider key or token',
+    app_preset: 'Provider', app_id: 'GitHub App ID', installation_id: 'Installation ID', private_key_pem: 'GitHub App private key',
+    repository: 'Repository', issues_permission: 'GitHub issue permissions', credential_kind: 'Credential type',
+    access_key_id: 'AWS access key ID', secret_access_key: 'AWS secret access key', session_token: 'AWS session token',
+    expires_at: 'Expiry', expected_revision: 'Saved state revision', expected_policy_hash: 'Saved policy', id: 'Selected resource',
+    expected_credential_generation: 'Credential generation', application_id: 'Client', credential_id: 'Credential',
+    token_lifetime_seconds: 'Client token lifetime', proxy_authentication: 'Proxy login', operation_bundle: 'Operation',
+    approval_mode: 'Human approval', upstream_url: 'Destination', methods: 'HTTP methods', request_fields: 'Request fields',
+    request_body_mode: 'Request body handling', response_fields: 'Response fields', query_keys: 'Query parameters',
+    allowed_headers: 'Allowed headers', response_mode: 'Response handling', credential_input: 'Credential replacement',
+    placeholder: 'Public placeholder', operation: 'Operation', scope: 'Operation limits', username: 'Username',
+    daily_post_attempt_limit: 'Daily posting limit', chain: 'Chain', packages: 'Package allowlist', package: 'Package',
+    tag: 'Tag', publishing_window: 'Publishing hours', registry_id: 'AWS account', region: 'AWS region',
+    repository_name: 'Repository', image_tag: 'Image tag', age_policy: 'Message age limit'};
+  const code = response.headers.get('X-Serverware-Error-Code');
+  if (!Object.hasOwn(codes, code) || codes[code][0] !== response.status) return fallback;
+  const hint = response.headers.get('X-Serverware-Error-Fields');
+  if (hint == null) return codes[code][1];
+  const selected = typeof hint === 'string' && hint.length <= 512 ? hint.split(',') : [];
+  if (code !== 'invalid_input' || !selected.length || selected.length > 8 || new Set(selected).size !== selected.length ||
+      !selected.every(name => Object.hasOwn(fields, name))) return fallback;
+  return codes[code][1] + ' Check: ' + selected.map(name => fields[name]).join(', ') + '.';
+}
+function operatorMutationReviewContext(path) {
+  if (typeof path !== 'string') return null;
+  if (path === 'applications' || path.startsWith('applications/')) return {
+    view: 'applications', label: 'Clients', action: path === 'applications' ? 'Create client' :
+      path === 'applications/rotate-token' ? 'Replace client token' : path === 'applications/revoke' ? 'Revoke client' : 'Update client settings',
+    oneTimeToken: path === 'applications' || path === 'applications/rotate-token'};
+  if (path === 'credentials' || path.startsWith('credentials/') || ['oauth/google/start', 'oauth/google/reauthorize'].includes(path)) return {
+    view: 'credentials', label: 'Credentials', action: path === 'credentials/revoke' ? 'Revoke credential' : 'Save or update credential', oneTimeToken: false};
+  if (path === 'access-rules' || path.startsWith('access-rules/')) return {
+    view: 'access-rules', label: 'Permissions', action: path === 'access-rules/revoke' ? 'Revoke permission' : 'Save or update permission', oneTimeToken: false};
+  return null;
+}
 function fieldLines(id) { return [...new Set(element(id).value.split(/\r?\n/).map(value => value.trim()).filter(Boolean))]; }
 function chooseOptions(id, items, placeholder) {
   const select = element(id); const previous = select.value;
@@ -663,6 +717,9 @@ function operatorOrdinaryMutationConfirmation(path, body, before) {
 function createOperatorWorkspace() {
   const recovery = createOperatorMutationRecovery();
   let writeInFlight = false, authenticationRequired = false, mutationLifetime = 0;
+  // Fixed public labels only, held in memory. The persisted recovery marker
+  // remains the same constant; no submitted values or resource IDs are stored.
+  let reviewContext = null, activeMutationContext = null;
   const consentOwners = new Set();
   const state = {catalog: null, consentHold: false, uncertain: false,
     get busy() { return writeInFlight || this.consentHold; }, set busy(value) { writeInFlight = value; }};
@@ -671,8 +728,13 @@ function createOperatorWorkspace() {
   const canAcknowledge = () => state.uncertain && state.catalog && !state.busy &&
     !recovery.blocked() && reviewedCatalogEpoch > reviewAfterEpoch;
   const emit = () => {
+    const reviewLink = element('mutation-review-resource');
+    reviewLink.hidden = !state.uncertain || !reviewContext;
+    reviewLink.href = reviewContext ? '#' + reviewContext.view : '#overview';
+    reviewLink.textContent = reviewContext ? 'Review ' + reviewContext.label : '';
     listeners.forEach(callback => callback());
     element('mutation-review-confirm').disabled = !canAcknowledge();
+    element('mutation-review-refresh').disabled = state.busy;
     if (!state.catalog) for (const id of ['credentials-list', 'applications-list', 'access-rules-list']) {
       const list = element(id);
       for (const control of list.querySelectorAll('[data-action], select')) control.disabled = true;
@@ -698,11 +760,7 @@ function createOperatorWorkspace() {
       authenticationLost(); throw operatorError('Your session or request origin could not be verified. Reload and sign in again.');
     }
     if (!response.ok) {
-      const messages = {404: 'The resource was not found. Review refreshed saved state.',
-        409: 'Saved state changed, the resource is in use, or capacity was reached. Review refreshed state before trying again.',
-        413: 'The request was too large.', 422: 'Check the form fields. The service rejected this configuration.',
-        503: 'The service could not confirm the result. Do not assume the change failed.'};
-      throw operatorError(messages[response.status] || 'The service rejected the request. Refresh before trying again.');
+      throw operatorError(operatorApiErrorMessage(response));
     }
     if (!response.headers.get('content-type')?.includes('application/json')) throw operatorError('The service did not return JSON. Reload and sign in again.');
     return response.json();
@@ -726,18 +784,23 @@ function createOperatorWorkspace() {
       element('mutation-review-confirm').disabled = true; emit(); return false;
     }
   }
-  function requireReview(message) {
+  function requireReview(message, context = reviewContext) {
     recovery.retain();
+    reviewContext = context;
     reviewAfterEpoch = epoch;
     state.uncertain = true; element('mutation-review').hidden = false;
     element('mutation-review-text').textContent = (recovery.blocked() ?
       'This tab cannot safely retain or clear its public save-review warning. No further change is allowed. Reload with working session storage, then inspect saved state. ' : '') +
-      message + ' No automatic retry was sent. Refresh and review the resource lists below before allowing another change. A lost one-time token cannot be recovered; replacing it requires explicit rotation.';
+      (reviewContext ? reviewContext.action + ': ' : '') + message + ' No automatic retry was sent. ' +
+      (reviewContext ? 'Refresh saved state, then review ' + reviewContext.label + ' before allowing another change.' :
+        'Refresh saved state and inspect the affected resources before allowing another change.') +
+      (reviewContext?.oneTimeToken ? ' A lost one-time token cannot be recovered; replacing it requires explicit rotation in Clients.' : '');
     element('mutation-review-confirm').disabled = true;
     emit();
   }
   async function mutate(path, body, statusId, onSuccess) {
     if (!state.catalog || state.busy || state.uncertain) return false;
+    const context = operatorMutationReviewContext(path);
     const clearPrivateBody = () => {
       for (const name of ['secret', 'private_key_pem', 'access_key_id', 'secret_access_key', 'session_token'])
         if (Object.hasOwn(body, name)) body[name] = '';
@@ -747,13 +810,14 @@ function createOperatorWorkspace() {
     if (!recovery.retain()) {
       clearPrivateBody();
       const message = 'The public save-review warning could not be retained. No change request was sent.';
-      requireReview(message); element(statusId).textContent = message; return false;
+      requireReview(message, context); element(statusId).textContent = message; return false;
     }
     let confirmation;
     try { confirmation = onSuccess === undefined ? operatorOrdinaryMutationConfirmation(path, body, state.catalog) : null; }
-    catch (error) { clearPrivateBody(); requireReview(operatorMessage(error)); element(statusId).textContent = operatorMessage(error); return false; }
+    catch (error) { clearPrivateBody(); requireReview(operatorMessage(error), context); element(statusId).textContent = operatorMessage(error); return false; }
     const reviewed = {expected_revision: state.catalog.revision, expected_policy_hash: state.catalog.policy.policy_hash};
     const lifetime = mutationLifetime;
+    activeMutationContext = context;
     state.busy = true; ++epoch; clearTimeout(poll); emit(); element(statusId).textContent = 'Saving...';
     let success = false;
     try {
@@ -766,33 +830,34 @@ function createOperatorWorkspace() {
       success = true;
       element(statusId).textContent = 'Saved. Refreshing the current state and proxy enforcement...';
     } catch (error) {
-      requireReview(operatorMessage(error));
+      requireReview(operatorMessage(error), context);
       element(statusId).textContent = operatorMessage(error);
     } finally { clearPrivateBody(); }
     const refreshed = await refresh();
     // A valid reply alone does not settle a failed catalog read. Known HTTP
     // rejections retain the same review boundary; none is retried implicitly.
     if (success && !state.uncertain) {
-      if (!refreshed) requireReview('The change was acknowledged, but refreshed saved state could not be confirmed.');
+      if (!refreshed) requireReview('The change was acknowledged, but refreshed saved state could not be confirmed.', context);
       else {
         try { if (confirmation) confirmation.confirm(state.catalog); }
-        catch (error) { success = false; requireReview(operatorMessage(error)); element(statusId).textContent = operatorMessage(error); }
-        if (!state.uncertain && !recovery.retire()) requireReview('The change was acknowledged, but its public save-review warning could not be cleared safely.');
+        catch (error) { success = false; requireReview(operatorMessage(error), context); element(statusId).textContent = operatorMessage(error); }
+        if (!state.uncertain && !recovery.retire()) requireReview('The change was acknowledged, but its public save-review warning could not be cleared safely.', context);
       }
     }
-    state.busy = false; emit(); return success;
+    state.busy = false; activeMutationContext = null; emit(); return success;
   }
+  element('mutation-review-refresh').addEventListener('click', () => !state.busy && refresh({manual: true}));
   element('mutation-review-confirm').addEventListener('click', () => {
     if (!canAcknowledge()) return;
     // This retires only our warning. Provider operation references and each
     // independent consent owner's hold remain under their existing controller.
     if (!recovery.retire()) { requireReview('The public save-review warning could not be cleared safely.'); return; }
-    state.uncertain = false; element('mutation-review').hidden = true; emit();
+    state.uncertain = false; reviewContext = null; element('mutation-review').hidden = true; emit();
   });
   window.addEventListener('pagehide', () => {
     ++mutationLifetime; ++epoch;
     clearTimeout(poll);
-    if (writeInFlight) requireReview('A save was in progress when this page was left. Its outcome must be reviewed.');
+    if (writeInFlight) requireReview('A save was in progress when this page was left. Its outcome must be reviewed.', activeMutationContext);
   });
   if (recovery.pending() || recovery.blocked())
     requireReview('An earlier save or saved-state review was not completed in this tab. Inspect the current resources; do not assume the change failed.');

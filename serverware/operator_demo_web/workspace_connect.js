@@ -1032,6 +1032,17 @@ function createConnectView(workspace, applications, proxy) {
     message('Saved credential selected. Choose a client; no token or permission was created.');
     location.hash = 'connect'; goto(1); return true;
   }
+  function selectApplication(id) {
+    const item = catalog()?.applications.find(value => value.id === id && value.status === 'active');
+    if (!item || !writable() || checkpoint || connectionMethod === 'google') return false;
+    if ((connectionMethod || step || selectedCredential || selectedApplication) && !(saveOnly && savedCredential) &&
+        !window.confirm('Replace the current setup draft to add permission for this client? Saved resources and any held one-time token remain unchanged.')) return false;
+    resetDraft(); saveOnly = false; selectedApplication = id;
+    includeDiagnostics = operatorDiagnosticResources(catalog()).applications.has(id);
+    renderInputs(); element('connect-application-choice').value = id;
+    message('Selected client: ' + item.name + '. Choose a credential, then review the permission. No token or access was changed.');
+    location.hash = 'connect'; goto(0); return true;
+  }
   element('connect-saved-use').addEventListener('click', () => {
     if (!selectCredential(savedCredential)) message('This exact saved credential is unavailable for setup. Review Credentials; no request was sent.');
   });
@@ -1060,7 +1071,19 @@ function createConnectView(workspace, applications, proxy) {
       resetDraft(); saveOnly = false; message('Choose a saved credential or add a new one, then select a client and review permissions.'); render();
     }
     return true;
-  }, selectCredential, openGoogle({returning = false, credentialOnly = false} = {}) {
+  }, continuation() {
+    // Public navigation metadata only. Reading this never clears a draft,
+    // reconciles a write, restarts consent or changes the selected resource.
+    if (connectionMethod === 'google') return {label: 'Continue account connection',
+      summary: 'Return to the existing consent or recovery step. No new connection is started.'};
+    if (checkpoint) return {label: 'Review pending setup save',
+      summary: 'A setup change still needs confirmation against saved state. Continue there; do not submit it again.'};
+    if (saveOnly && savedCredential) return null;
+    if (connectionMethod || step || selectedCredential || selectedApplication) return {
+      label: step === 4 ? 'Return to client setup' : saveOnly ? 'Continue adding your credential' : 'Continue access setup',
+      summary: 'Resume the choices already made in this tab. Saved resources and any held client token remain unchanged.'};
+    return null;
+  }, selectCredential, selectApplication, openGoogle({returning = false, credentialOnly = false} = {}) {
     if (connectionMethod === 'google') return true;
     if (!returning && (!writable() || checkpoint)) return false;
     element('connect-credential-secret').value = ''; element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; element('connect-github-private-key').value = '';

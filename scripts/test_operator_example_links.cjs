@@ -90,6 +90,35 @@ function alchemy(chain = 'eth-mainnet') {
   return value;
 }
 const tests = [
+  ['private-config handoffs select one prepared runtime without compiling during execution', () => {
+    for (const bundle of ['github_issues_read_v1', 'github_issues_write_v1', 'alchemy_chain_status_read_v1',
+      'x_username_read_v1', 'x_text_post_v1']) {
+      const profiles = clone(f.run('operatorFileProfiles(input)', {operation_bundle: bundle}));
+      assert.deepEqual(profiles.map(item => item.id), ['node', 'python', 'go']);
+      for (const profile of profiles) {
+        assert(statSync(resolve(ROOT, profile.directory, 'README.md')).isFile());
+        const handoff = clone(f.run('operatorFileHandoff(input.rule, input.runtime)',
+          {rule: {operation_bundle: bundle}, runtime: profile.id}));
+        assert.equal(handoff.commands, profile.command);
+        assert(!handoff.commands.includes('\n'));
+        assert(!/go run|go build|pip install|npm ci|--execute-write|--send|CONFIRM=/.test(handoff.commands));
+        assert(handoff.preparation.startsWith('cd ' + profile.directory + '\n'));
+        if (profile.id === 'python') assert(handoff.commands.startsWith('.venv/bin/python -I -B '));
+        if (profile.id === 'go') {
+          assert(handoff.commands.startsWith('./'));
+          assert(profile.preparation.includes('go build -o ' + profile.command.slice(2).split(' ')[0] + ' .'));
+        }
+      }
+    }
+    const profile = (app, operation) => clone(f.run('operatorFileProfiles(input)', {app_preset: app, app_operation: operation}));
+    assert.deepEqual(profile('openai', 'responses').map(item => item.id), ['ai', 'http']);
+    assert.deepEqual(profile('slack', 'post_message').map(item => item.id), ['services', 'http']);
+    assert.deepEqual(profile('cloudflare', 'dns_records').map(item => item.id), ['http']);
+    assert.deepEqual(profile('cloudflare', 'dns_records_sdk_v1').map(item => item.id), ['services', 'http']);
+    assert.deepEqual(profile('discord', 'post_message').map(item => item.id), ['http']);
+    assert.equal(f.run('operatorFileHandoff(input, "unknown")', {operation_bundle: 'github_issues_read_v1'}), null);
+    assert.equal(networkCalls, 0);
+  }],
   ['provider-first entry choices preserve the existing controls and forms', () => {
     for (const [id, label] of [['connect-use-github', 'GitHub'], ['connect-use-npm', 'npm'],
       ['connect-use-x', 'X · username lookup'], ['connect-use-alchemy', 'Alchemy · chain status'],
@@ -162,11 +191,10 @@ const tests = [
       render(value); assert.equal(node('client-example-links').children.length, 5);
       assert.equal(node('client-example-note').textContent,
         'Public source only, separate from your private client config. ' +
-        'Pinned Node.js and Go examples passed isolated SDK-through-proxy checks. ' +
-        'The prior Python acceptance used web3.py 7.13.0; SDK-through-proxy verification of web3.py 7.15.0 is pending. ' +
+        'Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. ' +
         'This page has not tested your Alchemy credentials or provider entitlement. ' +
         'The GitHub Actions recipe is inactive and has not been run.');
-      assert.match(node('client-example-note').textContent, /verification of web3\.py 7\.15\.0 is pending/);
+      assert(!node('client-example-note').textContent.includes('pending'));
       assert(!links(value).some(item => item.href.includes('/.github/workflows/')));
     }
     const workflow = 'examples/alchemy-chain-status-node/workflow.example.yml';
@@ -335,7 +363,7 @@ const tests = [
     assert.equal(node('client-example-note').textContent, '');
     render(null); assert.equal(node('client-examples').hidden, true);
     assert.equal(node('client-example-links').children.length, 0); assert.equal(node('client-example-note').textContent, '');
-    assert.match(PROXY, /function render\(\) \{\s*command = '';[^\n]*\n\s*renderOperatorExampleProjects\(null, null\)/);
+    assert.match(PROXY, /function render\(\) \{\s*command = '';[^\n]*\n\s*handoffCommand = '';[^\n]*\n\s*renderOperatorExampleProjects\(null, null\)/);
     assert.equal(networkCalls, 0);
   }],
   ['all advertised project directories contain a README in the source snapshot', () => {

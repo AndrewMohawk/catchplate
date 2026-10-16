@@ -13,7 +13,7 @@ function operatorExampleProjects(rule, catalog) {
   const branch = 'main/';
   const project = (label, directory) => ({label, kind: 'project', href: source + 'tree/' + branch + 'examples/' + directory});
   const guide = (label, filename) => ({label, kind: 'guide', href: source + 'blob/' + branch + 'docs/' + filename});
-  if (isCommonAppRule(rule)) return [project('Python HTTP and official AI SDK examples', 'common-apps'), guide('App scopes and compatibility', 'common-apps.md')];
+  if (isCommonAppRule(rule)) return [project('Python HTTP, service and AI SDK examples', 'common-apps'), guide('App scopes and compatibility', 'common-apps.md')];
   switch (rule.operation_bundle) {
     case 'aws_ecr_publish_v1': return [project('Python · Stage, review and publish an ECR image', 'ecr-publish-python')];
     case 'github_issues_read_v1':
@@ -24,7 +24,7 @@ function operatorExampleProjects(rule, catalog) {
       guide('npm metadata guide', 'operator-npm-metadata.md')];
     case 'npm_publish_v1': return [project('npm registry project', 'npm-registry'),
       guide('npm publishing guide', 'operator-npm-publish.md')];
-    case 'npm_install_v1': return [project('npm install/ci project (verification pending)', 'npm-registry')];
+    case 'npm_install_v1': return [project('npm install/ci project', 'npm-registry')];
     case 'x_username_read_v1': return [project('Node.js', 'x-username-node'),
       project('Python', 'x-username-python'), project('Go', 'x-username-go'),
       {label: 'GitHub Actions recipe (inactive)', kind: 'guide',
@@ -53,7 +53,7 @@ function renderOperatorExampleProjects(rule, catalog) {
   links.replaceChildren(); panel.hidden = projects.length === 0;
   element('client-example-note').textContent = !projects.length ? '' : isXPostRule(rule) ?
     'Public source only, separate from your private client config. See each README for verification status. This page has not run a posting SDK, tested your X account or verified provider entitlement.' : isAlchemyRule(rule) ?
-    'Public source only, separate from your private client config. Pinned Node.js and Go examples passed isolated SDK-through-proxy checks. The prior Python acceptance used web3.py 7.13.0; SDK-through-proxy verification of web3.py 7.15.0 is pending. This page has not tested your Alchemy credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.' : isXRule(rule) ?
+    'Public source only, separate from your private client config. Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your Alchemy credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.' : isXRule(rule) ?
     'Public source only, separate from your private client config. Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your X credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.' : projects[0].kind === 'project' ?
     'Public source only, separate from your private client config. Check each README for setup and verification status; opening an example does not run it or verify access.' :
     'This saved permission links to its setup and verification guide only. The Go SDK project requires ordered Gmail queries, the exact public dummy and this app’s standard username/password proxy login. Saved permissions and login modes are never changed here.';
@@ -63,27 +63,59 @@ function renderOperatorExampleProjects(rule, catalog) {
     links.append(link);
   }
 }
-function operatorFileHandoff(rule) {
-  if (isCommonAppRule(rule)) return {commands: 'python3 request.py --config ./serverware-client.private.json',
-    note: 'From examples/common-apps after installing its pinned dependencies. GET reads run directly. Writes require a reviewed local JSON file plus --body ./request.json --execute-write. The config example body is not automatic permission to send. AI SDK instructions are in the same README; keep retries and streaming disabled.'};
+function operatorFileProfiles(rule) {
+  const file = ' --config ./serverware-client.private.json';
+  const python = (id, name, directory, script, environment = '.venv', requirements = 'requirements.txt') => ({id, name, directory,
+    preparation: 'python3.12 -m venv ' + environment + '\n' + environment + '/bin/python -m pip install -r ' + requirements,
+    command: environment + '/bin/python -I -B ' + script + file});
+  if (isCommonAppRule(rule)) {
+    const directory = 'examples/common-apps';
+    const http = {...python('http', 'Python · Requests', directory, 'request.py'),
+      note: 'GET reads run directly. For POST, first review a local JSON body, then deliberately add --body ./request.json --execute-write. No example body is sent automatically. Run the same command with --check-config for local-only validation.'};
+    if (['openai', 'anthropic', 'gemini', 'openrouter'].includes(rule.app_preset)) return [
+      {...python('ai', 'Python · Provider AI SDK', directory, 'ai_python.py', '.venv-ai', 'requirements-ai.txt'),
+        note: 'Supply your own --prompt locally. Add --send only when you intend one potentially billable request; no automatic retries or streaming.'}, http];
+    if (['slack', 'notion', 'stripe'].includes(rule.app_preset) || rule.app_preset === 'cloudflare' &&
+        ['zones_sdk_v1', 'dns_records_sdk_v1'].includes(rule.app_operation)) return [
+      {...python('services', 'Python · Service SDK', directory, 'services_python.py', '.venv-services', 'requirements-services.txt'),
+        note: 'Reads return one explicit page. Slack needs a reviewed local JSON body and --body ./request.json --execute-write. No automatic pagination or retries. Notion uses the maintained third-party notion-client SDK.'}, http];
+    return [http];
+  }
   const profiles = {
-    alchemy_chain_status_read_v1: {python: 'chain_status.py', note: 'Reads chain ID and block number for the saved chain; no transactions.'},
-    x_username_read_v1: {python: 'username.py', note: 'Looks up only the saved username; no posting.'},
-    x_text_post_v1: {python: 'post.py', note: 'Before running, set your text and SERVERWARE_X_POST_CONFIRM=post-once locally. The file cannot supply either value. Never automatically retry an uncertain post.'},
-    npm_metadata_read_v1: {note: 'Reads the selected package metadata by default. No install or publication.'},
-    npm_publish_v1: {note: 'Reads package metadata by default. Publishing requires an explicit publish command plus your local version, reviewed tarball/hash and publish-publicly confirmation; see the example README.'},
-    npm_install_v1: {note: 'Choose an allowed package and exact version locally. To install, also choose a reviewed project and a new output directory, then append install or ci; see the example README.'},
+    github_issues_read_v1: {base: 'github-issues', python: 'issues.py', binary: 'github-issues', go: '1.23', note: 'Reads issues only. Python and Go are read-only; Node writes require the separate explicit create/comment commands in its README. The Python example needs a publicly trusted outer proxy.'},
+    github_issues_write_v1: {base: 'github-issues', python: 'issues.py', binary: 'github-issues', go: '1.23', note: 'Reads issues by default, even with a write permission. Node creation requires explicit local content and its separate create/comment command. Python and Go stay read-only; Python needs a publicly trusted outer proxy.'},
+    alchemy_chain_status_read_v1: {base: 'alchemy-chain-status', python: 'chain_status.py', binary: 'chain-status-example', go: '1.25', note: 'Reads chain ID and block number for the saved chain; no transactions.'},
+    x_username_read_v1: {base: 'x-username', python: 'username.py', binary: 'x-username-example', go: '1.23', note: 'Looks up only the saved username; no posting.'},
+    x_text_post_v1: {base: 'x-post', python: 'post.py', binary: 'x-post-example', go: '1.23', note: 'Before running, deliberately set SERVERWARE_X_POST_TEXT and SERVERWARE_X_POST_CONFIRM=post-once locally. The file cannot supply either. Never automatically retry an uncertain post.'},
   };
-  if (!rule || !Object.hasOwn(profiles, rule.operation_bundle)) return null;
+  if (['npm_metadata_read_v1', 'npm_publish_v1', 'npm_install_v1'].includes(rule?.operation_bundle)) return [{
+    id: 'node', name: 'Node.js · Stock npm', directory: 'examples/npm-registry',
+    preparation: '# Node.js 25.5.0\nnpm ci --ignore-scripts --no-audit --no-fund', command: 'node client.mjs' + file,
+    note: rule.operation_bundle === 'npm_install_v1' ?
+      'Choose an allowed package/version, reviewed project and new output directory, then deliberately append install or ci; follow the README. No installation runs by default.' :
+      'Reads package metadata by default. Publishing requires the explicit publish command, local version, reviewed tarball/hash and publish-publicly confirmation; see the README.'}];
+  if (!rule || !Object.hasOwn(profiles, rule.operation_bundle)) return [];
   const profile = profiles[rule.operation_bundle];
-  return {commands: 'node client.mjs --config ./serverware-client.private.json' + (profile.python ?
-    '\npython3 -I ' + profile.python + ' --config ./serverware-client.private.json\ngo run . --config ./serverware-client.private.json' : ''),
-    note: profile.note};
+  return [{id: 'node', name: 'Node.js · SDK', directory: 'examples/' + profile.base + '-node',
+    preparation: '# Node.js ' + (profile.base === 'alchemy-chain-status' ? '25.5.0' : '22.19 or newer') + '\nnpm ci --ignore-scripts --no-audit --no-fund',
+    command: 'node client.mjs' + file, note: profile.note},
+  {...python('python', 'Python · SDK', 'examples/' + profile.base + '-python', profile.python), note: profile.note},
+  {id: 'go', name: 'Go · SDK', directory: 'examples/' + profile.base + '-go',
+    preparation: '# Go ' + profile.go + ' or newer; prepare before supplying credentials\nGOTOOLCHAIN=local go mod download\nGOTOOLCHAIN=local go build -o ' + profile.binary + ' .',
+    command: './' + profile.binary + file, note: profile.note}];
+}
+function operatorFileHandoff(rule, runtime) {
+  const profiles = operatorFileProfiles(rule);
+  const profile = runtime === undefined ? profiles[0] : profiles.find(item => item.id === runtime);
+  return profile ? {profiles, directory: profile.directory, preparation: 'cd ' + profile.directory + '\n' + profile.preparation,
+    commands: profile.command, note: 'Run from ' + profile.directory + ' after the one-time preparation. Keep the JSON and verified CA together; replace the config path if stored elsewhere. ' + profile.note} : null;
 }
 function createProxyView(workspace, applications) {
-  const home = element('proxy'); const content = textNode('div'); content.id = 'proxy-setup-content';
-  content.append(...[...home.children].slice(2)); home.append(content);
+  const home = element('proxy'); const content = element('proxy-setup-content');
   let command = '';
+  let handoffCommand = '';
+  let handoffContext = '';
+  let ruleChoiceRequired = '';
   let gmailContext = '';
   const gmailLanguages = new Map();
   let githubContext = '';
@@ -97,6 +129,7 @@ function createProxyView(workspace, applications) {
   renderOperatorCompatibility('client-compatibility-content');
   function render() {
     command = ''; element('copy-command').disabled = true; element('download-config').disabled = true;
+    handoffCommand = ''; element('copy-provider-config-command').disabled = true;
     renderOperatorExampleProjects(null, null);
     element('gmail-client-controls').hidden = true;
     element('gmail-sdk-client-controls').hidden = true;
@@ -113,9 +146,18 @@ function createProxyView(workspace, applications) {
       'client-proxy-password-note', 'client-proxy-login-status']) element(id).textContent = '';
     const catalog = workspace.state.catalog;
     if (!catalog) { element('client-command').textContent = 'Refresh workspace status before using this client.'; return; }
-    chooseOptions('proxy-application', catalog.applications.filter(item => item.status === 'active'), 'Create an application first');
+    const diagnosticClients = operatorDiagnosticResources(catalog).applications;
+    const activeClients = catalog.applications.filter(item => item.status === 'active');
+    const ordinaryClients = activeClients.filter(item => !diagnosticClients.has(item.id));
+    const clientChoices = operatorConnectResourceChoices([...ordinaryClients,
+      ...activeClients.filter(item => diagnosticClients.has(item.id)).map(item =>
+        ({...item, name: item.name + ' · Connection check'}))], ['Choose a client']);
+    chooseOptions('proxy-application', ordinaryClients.length ? clientChoices :
+      [{id: '', name: 'Choose a client'}, ...clientChoices], 'Create a client first');
     const application = catalog.applications.find(item => item.id === element('proxy-application').value);
-    chooseOptions('proxy-rule', catalog.access_rules.filter(item => item.status === 'active' && item.application_id === application?.id), 'Add an access rule for this application');
+    const clientRules = catalog.access_rules.filter(item => item.status === 'active' && item.application_id === application?.id);
+    chooseOptions('proxy-rule', ruleChoiceRequired === application?.id ?
+      [{id: '', name: 'Choose a permission for this client'}, ...clientRules] : clientRules, 'Add a permission for this client');
     const rule = catalog.access_rules.find(item => item.id === element('proxy-rule').value);
     if (isEcrRule(rule) && application) {
       renderEcrClient(workspace, application, rule, applications);
@@ -162,7 +204,7 @@ function createProxyView(workspace, applications) {
     }
     const messageRead = gmail && !gmailSdk && element('gmail-client-operation').value === 'message';
     element('gmail-message-group').hidden = !messageRead;
-    element('client-template-title').textContent = xPost ? 'X · Text-post SDK setup' : npmInstall ? 'npm · Install/ci client setup (verification pending)' : alchemy ? 'Alchemy · Chain-status read template' : x ? 'X · Username lookup connection template' : npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmailSdk ? 'Gmail · Official ' + gmailProfile.label + ' SDK inbox job' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
+    element('client-template-title').textContent = xPost ? 'X · Text-post SDK setup' : npmInstall ? 'npm · Install/ci client setup' : alchemy ? 'Alchemy · Chain-status read template' : x ? 'X · Username lookup connection template' : npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmailSdk ? 'Gmail · Official ' + gmailProfile.label + ' SDK inbox job' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
     element('client-template-warning').textContent = xPost ?
       'This recipe publishes only when you explicitly run it locally with reviewed text and post-once confirmation. ' + xPostQuotaSummary(rule) + ' This page sends no post; never automatically retry an uncertain reply.' : npmInstall ?
       'Review the exact dependency allowlist and local manifests before running the linked npm example. Installation writes only to your deliberately selected new output directory; lifecycle scripts stay disabled and default audit stays enabled. This page does not execute or verify the job.' : alchemy ?
@@ -181,8 +223,12 @@ function createProxyView(workspace, applications) {
     chooseOptions('proxy-method', (rule?.methods || []).filter(method => operatorMethods.includes(method)).map(method => ({id: method, name: method})), 'No supported method');
     const credential = catalog.credentials.find(item => item.id === rule?.credential_id);
     if (!application || !rule) {
-      element('client-command').textContent = 'Choose an application with a saved access rule.';
-      element('client-guidance').textContent = 'Credentials and applications alone grant no access. Add a rule, then return here.'; return;
+      element('client-command').textContent = application && clientRules.length ? 'Choose a saved permission for this client.' : 'Choose a client with a saved permission.';
+      element('client-guidance').textContent = application && clientRules.length ?
+        'Choose one of this client’s saved permissions above. No permission is selected automatically.' :
+        application ? 'Credentials and clients alone grant no access. Add a permission, then return here.' :
+        activeClients.length ? 'Choose a client above, then a saved permission. Connection-check clients require an explicit choice.' :
+        'Create a client and grant a permission, then return here.'; return;
     }
     const valid = application.token_status === 'valid' && Number.isSafeInteger(application.token_expires_at_epoch_ms) && application.token_expires_at_epoch_ms > Date.now();
     const supported = operatorRuleSupported(rule, catalog);
@@ -211,11 +257,20 @@ function createProxyView(workspace, applications) {
       element('client-guidance').textContent = 'Use Clients to explicitly enable standard proxy login if advertised, then refresh. The app ID is the username and its existing Serverware token is the password. No login mode or token is changed automatically.';
       return;
     }
-    const handoff = proxyAuthentication === 'basic_and_bearer_v1' ? operatorFileHandoff(rule) : null;
+    const profiles = proxyAuthentication === 'basic_and_bearer_v1' ? operatorFileProfiles(rule) : [];
+    const selectedContext = application.id + ':' + rule.id;
+    if (selectedContext !== handoffContext) {
+      element('client-example-runtime').value = profiles[0]?.id || ''; handoffContext = selectedContext;
+    }
+    if (!profiles.some(item => item.id === element('client-example-runtime').value)) element('client-example-runtime').value = profiles[0]?.id || '';
+    chooseOptions('client-example-runtime', profiles, 'No compatible example');
+    const handoff = profiles.length ? operatorFileHandoff(rule, element('client-example-runtime').value) : null;
     if (handoff) {
       element('provider-config-handoff').hidden = false;
+      element('provider-config-prepare').textContent = handoff.preparation;
       element('provider-config-command').textContent = handoff.commands;
       element('provider-config-note').textContent = handoff.note;
+      handoffCommand = handoff.commands;
     }
     const messageId = element('gmail-message-id').value;
     if (messageRead && !/^[A-Za-z0-9_-]{1,512}$/.test(messageId)) {
@@ -249,6 +304,7 @@ function createProxyView(workspace, applications) {
     element('client-command').textContent = command;
     const ready = workspace.loaded() && rule.enforcement === 'active' && application.access_status === 'active' && !workspace.state.busy && !workspace.state.uncertain;
     element('copy-command').disabled = !ready;
+    element('copy-provider-config-command').disabled = !ready || !handoffCommand;
     element('download-config').disabled = !ready || !applications.tokenFor(application.id);
     const basic = proxyAuthentication === 'basic_and_bearer_v1';
     element('client-proxy-login').hidden = false;
@@ -294,7 +350,7 @@ function createProxyView(workspace, applications) {
         'Wait for the exact saved policy and resolve uncertain changes before using this template. ') +
         'Read ' + rule.chain + ' only: eth_chainId and eth_blockNumber, POST to keyless /v2, params: [] and no URL query. No arbitrary RPC, batches, notifications, transactions, wallets, WebSockets, NFT or Notify APIs. ' +
         'The fixed public dummy is not your Alchemy key. The app token authenticates separately to the proxy. Keep both TLS legs verified. HTTP 200 can contain an RPC error. ' +
-        'Pinned Node.js and Go examples passed isolated SDK-through-proxy checks. The prior Python acceptance used web3.py 7.13.0; SDK-through-proxy verification of web3.py 7.15.0 is pending. This page has not tested your Alchemy credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.';
+        'Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your Alchemy credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.';
       return;
     }
     if (x) {
@@ -357,7 +413,12 @@ function createProxyView(workspace, applications) {
         '. Do not add Content-Type to the allowed-header list.' : ' Request bodies are forbidden by this rule, including for POST, PUT and PATCH.') +
       (rule.query_keys.length ? ' Query parameter names allowed: ' + rule.query_keys.join(', ') + '; supply their values yourself.' : ' No query parameters are allowed.');
   }
-  for (const id of ['proxy-application', 'proxy-rule', 'proxy-method', 'gmail-client-operation', 'github-client-operation', 'npm-client-package', 'alchemy-client-method']) element(id).addEventListener('change', render);
+  for (const id of ['proxy-method', 'gmail-client-operation', 'github-client-operation', 'npm-client-package', 'alchemy-client-method', 'client-example-runtime']) element(id).addEventListener('change', render);
+  element('proxy-application').addEventListener('change', () => {
+    if (element('proxy-application').value) selectClient(element('proxy-application').value);
+    else { ruleChoiceRequired = ''; element('proxy-rule').value = ''; render(); }
+  });
+  element('proxy-rule').addEventListener('change', () => { if (element('proxy-rule').value) ruleChoiceRequired = ''; render(); });
   element('gmail-sdk-language').addEventListener('change', () => {
     try { gmailSdkLanguage(element('gmail-sdk-language').value); gmailLanguages.set(gmailContext, element('gmail-sdk-language').value); }
     catch (_) { gmailLanguages.delete(gmailContext); }
@@ -369,6 +430,13 @@ function createProxyView(workspace, applications) {
   element('x-post-proxy-ca-path').addEventListener('input', render);
   element('github-proxy-ca-path').addEventListener('input', render);
   element('alchemy-proxy-ca-path').addEventListener('input', render);
+  element('copy-provider-config-command').addEventListener('click', async () => {
+    render(); if (element('copy-provider-config-command').disabled || !handoffCommand) return;
+    try {
+      await navigator.clipboard.writeText(handoffCommand);
+      element('client-copy-status').textContent = 'Copied one selected example command. Prepare its dependencies first, then use your private config and CA. Nothing was executed; writes still require explicit local confirmation.';
+    } catch (_) { element('client-copy-status').textContent = 'Clipboard access was denied. Select and copy the example command manually.'; }
+  });
   element('copy-command').addEventListener('click', async () => {
     render(); if (element('copy-command').disabled || !command) return;
     try {
@@ -486,16 +554,28 @@ function createProxyView(workspace, applications) {
   });
   function select(applicationId, ruleId) {
     const catalog = workspace.state.catalog;
-    if (!catalog?.access_rules.some(rule => rule.id === ruleId && rule.application_id === applicationId && rule.status === 'active')) return false;
+    if (!catalog?.applications.some(item => item.id === applicationId && item.status === 'active') ||
+        !catalog.access_rules.some(rule => rule.id === ruleId && rule.application_id === applicationId && rule.status === 'active')) return false;
+    ruleChoiceRequired = '';
     element('proxy-application').value = applicationId; render();
     element('proxy-rule').value = ruleId; render();
     return element('proxy-application').value === applicationId && element('proxy-rule').value === ruleId;
   }
+  function selectClient(applicationId) {
+    const catalog = workspace.state.catalog;
+    if (!catalog?.applications.some(item => item.id === applicationId && item.status === 'active')) return false;
+    const rules = catalog.access_rules.filter(rule => rule.application_id === applicationId && rule.status === 'active');
+    ruleChoiceRequired = rules.length === 1 ? '' : applicationId;
+    element('proxy-application').value = applicationId;
+    element('proxy-rule').value = rules.length === 1 ? rules[0].id : '';
+    render(); return element('proxy-application').value === applicationId;
+  }
   function mount(container) {
-    (container || home).append(content);
+    if (container) container.append(content);
+    else home.insertBefore(content, element('proxy-operator-settings'));
     for (const id of ['proxy-application', 'proxy-rule']) element(id).disabled = Boolean(container);
   }
-  workspace.subscribe(render); return {render, select, mount};
+  workspace.subscribe(render); return {render, select, selectClient, mount};
 }
 function auditProviderOutcome(record) {
   if (!record || record.event_type !== 'data_plane.response.blocked') return null;
@@ -519,6 +599,74 @@ function createAuditView(workspace) {
   let loaded = false; let cursor = null; let count = 0; let epoch = 0; let selection = '';
   let verificationEpoch = 0; let authenticationRequired = false; let loading = false; let verifying = false;
   const authenticationMessage = 'Your session could not be verified. Reload and sign in, refresh the workspace, then explicitly refresh the audit log or verify its chain.';
+  function presentation(record) {
+    const event = record.event && typeof record.event === 'object' && !Array.isArray(record.event) ? record.event : {};
+    const own = key => Object.hasOwn(event, key) ? event[key] : undefined;
+    const titles = {'data_plane.response.released': 'Response released', 'data_plane.response.blocked': 'Response withheld',
+      'data_plane.request.denied': 'Request denied', 'operator.host_approval.requested': 'Approval requested',
+      'operator.host_approval.approved': 'Approval granted', 'operator.host_approval.denied': 'Approval denied',
+      'operator.host_approval.expired': 'Approval expired', 'data_plane.policy.reload_failed': 'Policy refresh failed',
+      'data_plane.policy.reloaded': 'Policy refreshed'};
+    const catalogTitles = {'credential.created': 'Credential saved', 'credential.github_token_created': 'GitHub token saved',
+      'credential.github_app_created': 'GitHub App saved', 'credential.github_app_key_replaced': 'GitHub App private key replaced',
+      'credential.npm_token_created': 'npm token saved', 'credential.x_app_bearer_created': 'X app token saved',
+      'credential.alchemy_key_created': 'Alchemy key saved', 'credential.aws_sigv4_created': 'AWS credentials saved',
+      'credential.aws_sigv4_replaced': 'AWS credentials replaced', 'credential.key_replaced': 'Credential key replaced',
+      'credential.revoked': 'Credential revoked locally', 'application.created': 'Client created',
+      'application.revoked': 'Client revoked', 'application.token_rotated': 'Client token replaced',
+      'application.renewal_enrolled': 'Client token renewal enabled', 'application.renewal_cancelled': 'Client token renewal cancelled',
+      'application.token_renewed': 'Client token renewed', 'application.proxy_authentication_changed': 'Client proxy login changed',
+      'access_rule.created': 'Permission saved', 'access_rule.github_created': 'GitHub permission saved',
+      'access_rule.npm_metadata_created': 'npm metadata permission saved', 'access_rule.npm_publish_created': 'npm publishing permission saved',
+      'access_rule.npm_install_created': 'npm install permission saved', 'access_rule.x_username_created': 'X lookup permission saved',
+      'access_rule.x_post_created': 'X posting permission saved', 'access_rule.alchemy_chain_status_created': 'Alchemy permission saved',
+      'access_rule.ecr_publication_created': 'ECR publication permission saved', 'access_rule.approval_changed': 'Permission approval requirement changed',
+      'access_rule.revoked': 'Permission revoked'};
+    const catalogEvent = typeof record.event_type === 'string' && record.event_type.startsWith('operator_catalog.') ? record.event_type.slice(17) : '';
+    const administrative = Object.hasOwn(catalogTitles, catalogEvent);
+    const title = Object.hasOwn(titles, record.event_type) ? titles[record.event_type] :
+      administrative ? catalogTitles[catalogEvent] : 'Recorded event';
+    const current = workspace.state.catalog;
+    const principal = own('principal_id'), route = own('route_id');
+    const resource = administrative && own('resource_id');
+    const clientId = administrative && own('resource_type') === 'application' ? resource : own('application_id');
+    const client = current?.applications.find(item => typeof principal === 'string' && item.principal_id === principal ||
+      typeof clientId === 'string' && item.id === clientId);
+    const permission = current?.access_rules.find(item => typeof route === 'string' && item.route_id === route ||
+      administrative && own('resource_type') === 'access_rule' && item.id === resource);
+    const credential = administrative && own('resource_type') === 'credential' && current?.credentials.find(item => item.id === resource);
+    const name = item => item && typeof item.name === 'string' ? item.name.slice(0, 128) : 'Not identified in the current catalog';
+    const requestContext = ['data_plane.response.released', 'data_plane.response.blocked', 'data_plane.request.denied',
+      'operator.host_approval.requested', 'operator.host_approval.approved', 'operator.host_approval.denied', 'operator.host_approval.expired'].includes(record.event_type);
+    const metadata = [];
+    if (client || requestContext) metadata.push('Client: ' + name(client));
+    if (permission || requestContext) metadata.push('Permission: ' + name(permission));
+    if (credential) metadata.push('Credential: ' + name(credential));
+    if (['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'CONNECT'].includes(own('method'))) metadata.push(own('method'));
+    if (Number.isInteger(own('status_code')) && own('status_code') >= 100 && own('status_code') <= 599)
+      metadata.push('Proxy HTTP ' + own('status_code'));
+    const reasons = {credential_lease_unavailable: 'The credential could not be released. Review its current status in Credentials.',
+      credential_injection_failed: 'The proxy could not apply the credential. Review the saved credential and permission.',
+      operator_x_post_attempt_quota_unavailable: 'The posting quota could not authorize this attempt. Review its limits and recorded usage.'};
+    let reason = '';
+    if (record.event_type === 'data_plane.request.denied') {
+      reason = Object.hasOwn(reasons, own('error')) ? reasons[own('error')] : own('status_code') === 428 || own('action') === 'approval_required' ?
+        'Human approval is required. Check Pending actions for the current review state.' : [401, 407].includes(own('status_code')) ?
+          'Proxy login was refused. Check the client token, its expiry and login configuration.' :
+          'The request did not satisfy the proxy requirements. Review the client permission, destination, method and allowed inputs.';
+    } else if (record.event_type === 'operator.host_approval.requested') {
+      reason = 'Human review was requested for this operation. Check Pending actions for its current status; this event is not an approval.';
+    } else if (record.event_type === 'data_plane.response.released') {
+      reason = 'The proxy released a response. This does not establish provider success; inspect the client response.';
+    } else if (record.event_type === 'data_plane.policy.reload_failed') {
+      reason = 'A policy refresh failed. Check Overview for the current loaded policy and Proxy settings for setup health. This historical event does not establish a current outage.';
+    } else if (administrative) {
+      reason = 'This records a saved-state change, not proof of provider access. Review the current resource status before use.';
+    }
+    // Never promote arbitrary error strings, URLs, headers, notes or unknown
+    // identifiers into the summary. Keep the server-redacted details unchanged.
+    return {title, metadata: metadata.join(' · '), reason};
+  }
   function controls() {
     const blocked = authenticationRequired && !workspace.state.catalog;
     for (const id of ['audit-refresh', 'audit-filter', 'audit-query']) element(id).disabled = blocked;
@@ -561,7 +709,10 @@ function createAuditView(workspace) {
       if (version !== epoch) return;
       if (result.ok !== true || !Array.isArray(result.items)) throw operatorError('The audit response was incomplete.');
       for (const event of result.items) {
-        const card = textNode('article', undefined, 'card event-card'); card.append(textNode('h3', event.event_type || 'Recorded event'), textNode('time', event.created_at || 'Time not reported'));
+        const summary = presentation(event);
+        const card = textNode('article', undefined, 'card event-card'); card.append(textNode('h3', summary.title), textNode('time', event.created_at || 'Time not reported'));
+        if (summary.metadata) { const metadata = textNode('p', summary.metadata, 'small muted'); metadata.dataset.auditSummary = ''; card.append(metadata); }
+        if (summary.reason) { const reason = textNode('p', summary.reason); reason.dataset.auditReason = ''; card.append(reason); }
         const outcome = auditProviderOutcome(event);
         if (outcome) {
           const note = textNode('p', outcome.text, outcome.warning ? 'warning' : 'small muted');

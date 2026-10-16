@@ -45,14 +45,15 @@ const projectReceipt = (value, kind = 'prepare') => clone(pure.run('projectUpstr
   {value, reference: {operation_id: ID, kind}}));
 const delta = (value, text) => clone(pure.run('upstreamDelta(input.review,input.text)', {review: value, text}));
 class Node {
-  constructor(id) { this.id = id; this.value = ''; this.textContent = ''; this.hidden = false; this.disabled = false; this.events = {}; }
+  constructor(id) { this.id = id; this.value = ''; this.textContent = ''; this.hidden = false; this.disabled = false; this.events = {}; this.children = []; }
   addEventListener(name, callback) { this.events[name] = callback; }
   insertBefore(node, before) { this.inserted = {node: node.id, before: before.id}; }
+  append(node) { node.parentNode = this; this.children.push(node); }
 }
 function fixture(options = {}) {
   const nodes = new Map([...HTML.matchAll(/\bid="([^"]+)"/g)].map(match => [match[1], new Node(match[1])]));
   nodes.set('proxy-setup-content', new Node('proxy-setup-content'));
-  const storage = new Map(Object.entries(options.storage || {})); const calls = []; const copied = []; const holds = new Set();
+  const storage = new Map(Object.entries(options.storage || {})); const calls = []; const copied = []; const downloads = []; const holds = new Set();
   const state = {revision: 7, settings: clone(OLD), settingsDigest: digest('b'), operation: options.operation ? clone(options.operation) : null};
   const workspace = {state: {catalog: {revision: state.revision, policy: {policy_hash: digest('a')}, allowed_upstreams: [...state.settings.allowed_upstreams]}, uncertain: false,
     get busy() { return holds.size > 0; }}, listeners: [], subscribe(callback) { this.listeners.push(callback); }, emit() { this.listeners.forEach(callback => callback()); },
@@ -95,13 +96,14 @@ function fixture(options = {}) {
     sessionStorage: {getItem: key => storage.get(key) ?? null,
       setItem(key, value) { if (options.storageFailure) throw new Error('unavailable'); storage.set(key, value); }, removeItem: key => storage.delete(key)},
     fetch, AbortSignal: {timeout: () => ({})}, crypto: {randomUUID: () => ID}, navigator: {clipboard: {async writeText(value) { copied.push(value); }}},
-    workspaceFixture: workspace});
+    workspaceFixture: workspace, handoffDownloads: downloads});
+  current.run('downloadActivationHandoff = value => handoffDownloads.push(JSON.stringify(value))');
   const view = current.run('createUpstreamsView(workspaceFixture)'); view.show(true);
   const node = id => nodes.get(id); const event = async (id, type = 'click') => {
     assert.equal(typeof node(id).events[type], 'function', id); return node(id).events[type]({preventDefault() {}});
   };
   const prepare = async () => { await event('upstreams-review'); node('upstreams-proposed').value = TARGET.allowed_upstreams.join('\n'); await event('upstreams-proposed', 'input'); await event('upstreams-form', 'submit'); };
-  return {node, event, prepare, view, workspace, state, calls, storage, copied};
+  return {node, event, prepare, view, workspace, state, calls, storage, copied, downloads};
 }
 const tests = [
   ['strict review DTO preserves canonical origins, order and immutable fixture settings', () => {
@@ -167,7 +169,9 @@ const tests = [
   ['opening Proxy settings is inert; review discovers real support explicitly', async () => {
     const f = fixture(); assert.equal(f.calls.length, 0); assert(f.node('upstreams-form').hidden); assert(f.node('upstreams-operation').hidden);
     assert.equal(f.node('upstreams-effective').textContent, FIXTURE);
-    assert.deepEqual(f.node('proxy').inserted, {node: 'proxy-upstreams', before: 'proxy-setup-content'});
+    assert.equal(f.node('proxy-upstreams').parentNode, f.node('proxy-operator-settings'));
+    assert.equal(f.node('proxy').inserted, undefined);
+    assert(HTML.indexOf('id="proxy-setup-content"') < HTML.indexOf('id="proxy-operator-settings"'));
     await f.event('upstreams-review'); assert.equal(f.calls.length, 1); assert.equal(f.calls[0].method, 'GET'); assert(!f.node('upstreams-form').hidden);
     assert(f.node('upstreams-prepare').disabled);
   }],
@@ -184,6 +188,55 @@ const tests = [
     assert(f.node('upstreams-prepare').disabled); assert(!f.node('upstreams-cancel').disabled);
     await f.event('upstreams-copy'); assert.deepEqual(JSON.parse(f.copied[0]), TARGET.allowed_upstreams);
     assert(!f.copied[0].includes('fixture_cidrs')); await f.event('upstreams-form', 'submit'); assert.equal(f.calls.filter(call => call.method === 'POST').length, 1);
+  }],
+  ['activation handoff projects only bounded public fields from the exact current pending review', () => {
+    const pending = review({expected_revision: 8, eligible: false, pending_operation_id: ID, blocked_reason: 'pending_operation'});
+    const projectHandoff = (value = receipt(), selected = pending, kind = 'prepare') => clone(pure.run(
+      'projectUpstreamActivationHandoff(input.value,input.reference,input.review)',
+      {value, reference: {operation_id: ID, kind}, review: selected}));
+    const result = projectHandoff();
+    assert.deepEqual(Object.keys(result).sort(), ['schema', 'change_kind', 'operation_id', 'observed_status', 'prepared_at',
+      'reviewed_revision', 'prepared_revision', 'policy_hash', 'expected_settings_digest', 'target_settings_digest',
+      'current_origins', 'target_origins', 'status_path', 'next_step', 'runbook_url', 'notice'].sort());
+    assert.equal(result.change_kind, 'proxy_destinations'); assert.equal(result.observed_status, 'pending');
+    assert.deepEqual(result.target_origins, TARGET.allowed_upstreams); assert.equal(result.status_path, PATH + '/' + ID);
+    assert.match(result.next_step, /both app and proxy/); assert.match(result.notice, /not activation/);
+    assert.match(result.runbook_url, /docs\/self-hosting\.md#activate-a-prepared-configuration$/);
+    assert(!JSON.stringify(result).includes('fixture_cidrs'));
+    for (const value of [null, receipt({secret: 'never-export'}), completed('cancelled'), completed('activated')])
+      assert.throws(() => projectHandoff(value));
+    for (const changes of [{expected_revision: 9}, {expected_policy_hash: digest('f')},
+      {expected_settings_digest: digest('d')}, {pending_operation_id: OTHER}])
+      assert.throws(() => projectHandoff(receipt(), {...pending, ...changes}));
+    assert.throws(() => projectHandoff(receipt(), pending, 'cancel'));
+  }],
+  ['handoff download requires validated current pending state and performs no network or storage writes', async () => {
+    const f = fixture(); assert(f.node('upstreams-handoff').disabled);
+    await f.event('upstreams-handoff'); assert.equal(f.downloads.length, 0); assert.equal(f.calls.length, 0);
+    await f.prepare(); assert(!f.node('upstreams-handoff').disabled);
+    const before = JSON.stringify({calls: f.calls, storage: [...f.storage], state: f.state});
+    await f.event('upstreams-handoff'); assert.equal(f.downloads.length, 1);
+    assert.equal(JSON.stringify({calls: f.calls, storage: [...f.storage], state: f.state}), before);
+    f.workspace.state.catalog.revision++; f.workspace.emit(); assert(f.node('upstreams-handoff').disabled);
+    await f.event('upstreams-handoff'); assert.equal(f.downloads.length, 1);
+    for (const option of [{lostPrepare: true}, {unknownCancel: true}]) {
+      const blocked = fixture(option); await blocked.prepare();
+      if (option.unknownCancel) await blocked.event('upstreams-cancel');
+      assert(blocked.node('upstreams-handoff').disabled); await blocked.event('upstreams-handoff'); assert.equal(blocked.downloads.length, 0);
+    }
+  }],
+  ['public handoff file uses a fixed filename and releases its object URL', async () => {
+    const calls = []; let blob;
+    const anchor = {click() { calls.push('click'); }, remove() { calls.push('remove'); }};
+    const download = context({Blob, URL: {createObjectURL(value) { blob = value; return 'blob:synthetic'; },
+      revokeObjectURL(value) { assert.equal(value, 'blob:synthetic'); calls.push('revoke'); }},
+      document: {createElement(name) { assert.equal(name, 'a'); return anchor; }, body: {append(value) { assert.equal(value, anchor); calls.push('append'); }}},
+      setTimeout(callback, milliseconds) { assert.equal(milliseconds, 1000); callback(); }});
+    const value = {schema: 'serverware.operatorActivationHandoff/v1'};
+    download.run('downloadActivationHandoff(input)', value);
+    assert.deepEqual(JSON.parse(await blob.text()), value); assert.equal(blob.type, 'application/json');
+    assert.equal(anchor.download, 'serverware-activation-handoff.public.json'); assert.equal(anchor.href, 'blob:synthetic');
+    assert.deepEqual(calls, ['append', 'click', 'remove', 'revoke']);
   }],
   ['stale catalog or blocked browser storage prevents any POST', async () => {
     for (const storageFailure of [false, true]) {

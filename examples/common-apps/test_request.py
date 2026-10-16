@@ -68,6 +68,64 @@ class CommonAppsTests(unittest.TestCase):
     def test_installed_pins(self):
         example.check_versions()
 
+    def check_cli(self, flags=()):
+        with patch.object(example, "client_session") as session, \
+                patch("sys.stdout", io.StringIO()) as out, patch("sys.stderr", io.StringIO()) as err:
+            status = example.main(["--config", str(self.config_path), "--check-config", *flags])
+        session.assert_not_called()
+        self.assertNotIn(TOKEN, out.getvalue() + err.getvalue())
+        self.assertNotIn("synthetic-proxy-password", out.getvalue() + err.getvalue())
+        return status, out.getvalue(), err.getvalue()
+
+    def test_local_preflight_checks_get_and_post_without_a_session(self):
+        for method in ("GET", "POST"):
+            self.write({**self.config, "methods": [method]})
+            status, out, err = self.check_cli()
+            self.assertEqual(status, 0)
+            self.assertEqual(err, "")
+            self.assertEqual(json.loads(out), {"status": "configuration_ready", "provider_calls": 0,
+                "network_checked": False, "method": method, "write_confirmation_required": method == "POST"})
+
+    def test_local_preflight_reports_closed_actionable_errors(self):
+        status, _, err = self.check_cli()
+        self.assertEqual(status, 1)
+        self.assertIn("Private config not found", err)
+        cases = [("token_expires_at_epoch_ms", 1, "Client token expired"),
+            ("ca_file", "absent.pem", "Interception CA"),
+            ("proxy_ca_file", "absent.pem", "Outer proxy CA"),
+            ("request_headers", {"PRIVATE-TOKEN": TOKEN}, "invalid or incompatible")]
+        for field, value, expected in cases:
+            with self.subTest(field=field):
+                self.write({**self.config, field: value})
+                status, out, err = self.check_cli()
+                self.assertEqual(status, 1)
+                self.assertEqual(out, "")
+                self.assertIn("Nothing was sent", err)
+                self.assertIn(expected, err)
+        self.write()
+        with patch.object(example, "check_versions", side_effect=RuntimeError(TOKEN)):
+            self.assertIn("Pinned dependencies", self.check_cli()[2])
+        for flags in (["--body", "/not-read"], ["--execute-write"], ["--print-example-body"],
+                ["--query", "unknown=" + TOKEN]):
+            status, out, err = self.check_cli(flags)
+            self.assertEqual(status, 1)
+            self.assertEqual(out, "")
+            self.assertIn("Nothing was sent", err)
+
+    def test_normal_local_failure_is_not_misreported_as_a_dispatched_request(self):
+        self.write({**self.config, "token_expires_at_epoch_ms": 1})
+        with patch.object(example, "execute") as execute, patch("sys.stderr", io.StringIO()) as err:
+            self.assertEqual(example.main(["--config", str(self.config_path)]), 1)
+        execute.assert_not_called()
+        self.assertIn("Nothing was sent. Client token expired", err.getvalue())
+        self.write({**self.config, "methods": ["POST"]})
+        with patch.object(example, "client_session") as session, patch("sys.stderr", io.StringIO()) as err:
+            self.assertEqual(example.main(["--config", str(self.config_path), "--body",
+                str(self.root / "missing-body.json"), "--execute-write"]), 1)
+        session.assert_not_called()
+        self.assertIn("Nothing was sent", err.getvalue())
+        self.assertNotIn("outcome may be unknown", err.getvalue())
+
     def test_private_download_all_provider_auth_shapes_and_relative_ca(self):
         for provider, (host, auth, prefix) in example.PROVIDERS.items():
             with self.subTest(provider=provider):

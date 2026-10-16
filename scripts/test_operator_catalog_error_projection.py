@@ -14,6 +14,7 @@ import io
 import json
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -56,13 +57,14 @@ class CatalogProjectionTests(unittest.IsolatedAsyncioTestCase):
         self.reads = 0
 
     async def request(self, *, method="GET", headers=(), chunks=(b"",), authenticate=True,
-            stalled=False, disconnected=False, failure=None):
+            stalled=False, disconnected=False, failure=None, payload=None):
         path = CATALOG if method == "GET" else POST
         fields = [(b"host", b"console.example.com"), *headers]
         if authenticate:
             fields.append((b"x-serverware-admin-token", ADMIN.encode()))
         if method == "POST":
-            raw = json.dumps({"expected_revision": 1, "expected_policy_hash": "sha256:" + "1" * 64,
+            raw = json.dumps(payload if payload is not None else {
+                "expected_revision": 1, "expected_policy_hash": "sha256:" + "1" * 64,
                 "name": "Projection control", "auth_type": "bearer", "secret": SECRET}).encode()
             fields.extend(((b"origin", ORIGIN.encode()), (b"content-type", b"application/json"),
                 (b"content-length", str(len(raw)).encode())))
@@ -97,6 +99,7 @@ class CatalogProjectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(starts), 1)
         body = b"".join(item.get("body", b"") for item in messages if item["type"] == "http.response.body")
         response_headers = dict(starts[0]["headers"])
+        self.response_headers = response_headers
         for canary in (ADMIN, SECRET):
             self.assertNotIn(canary.encode(), body + repr(response_headers).encode())
         self.assertEqual(response_headers.get(b"cache-control"), b"no-store")
@@ -168,6 +171,100 @@ class CatalogProjectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.request(method="POST"),
             (422, {"detail": "invalid operator catalog input or unsupported policy"}))
         self.worker.assert_awaited_once()
+
+    async def test_invalid_input_names_only_known_top_level_fields_without_worker(self):
+        payload = {"expected_revision": 1, "expected_policy_hash": "sha256:" + "1" * 64,
+            "name": SECRET + "\n", "auth_type": "bearer", "secret": "", SECRET: SECRET}
+        self.assertEqual(await self.request(method="POST", payload=payload),
+            (422, {"detail": "invalid operator catalog input"}))
+        self.assertEqual(self.response_headers[b"x-serverware-error-code"], b"invalid_input")
+        self.assertEqual(self.response_headers[b"x-serverware-error-fields"], b"name,secret")
+        self.worker.assert_not_awaited()
+        self.assertEqual(await self.request(method="POST", payload=payload, authenticate=False),
+            (401, {"detail": "administrator authentication required"}))
+        self.assertNotIn(b"x-serverware-error-code", self.response_headers)
+        self.worker.assert_not_awaited()
+
+    async def test_closed_codes_keep_old_status_body_and_unknown_outcome(self):
+        conflicts = (
+            (mutations.CredentialInUse, "credential_in_use"),
+            (mutations.ProviderDisconnectRequired, "provider_disconnect_required"),
+            (mutations.ApprovalRequired, "approval_required"),
+            (mutations.CatalogSettingUnchanged, "already_configured"),
+            (mutations.CatalogConflict, "catalog_changed"),
+        )
+        for exception, code in conflicts:
+            with self.subTest(code=code):
+                self.worker.side_effect = exception(SECRET)
+                self.assertEqual(await self.request(method="POST"),
+                    (409, {"detail": "operator catalog or policy changed; refresh before trying again"}))
+                self.assertEqual(self.response_headers[b"x-serverware-error-code"], code.encode())
+                self.assertNotIn(b"x-serverware-error-fields", self.response_headers)
+        for error, status, code in (
+                (ValueError(SECRET), 422, "unsupported_policy"),
+                (mutations.CatalogNotFound(SECRET), 404, "resource_not_found"),
+                (mutations.CatalogLimitReached(SECRET, SECRET), 409, "capacity_reached"),
+                (GitHubAppUnavailable(SECRET), 503, "github_app_verification_failed"),
+                (RuntimeError(SECRET), 503, "mutation_outcome_unknown")):
+            with self.subTest(code=code):
+                self.worker.side_effect = error
+                self.assertEqual((await self.request(method="POST"))[0], status)
+                self.assertEqual(self.response_headers[b"x-serverware-error-code"], code.encode())
+        self.worker.side_effect = None
+        self.worker.return_value = {"not_serializable": object()}
+        self.assertEqual(await self.request(method="POST"),
+            (503, {"detail": "operator catalog result unavailable; inspect saved status before retrying"}))
+        self.assertEqual(self.response_headers[b"x-serverware-error-code"], b"mutation_outcome_unknown")
+
+    def test_error_header_allowlist_status_and_field_bounds(self):
+        from fastapi import HTTPException
+        from pydantic import ValidationError
+        from serverware.operator_catalog_inputs import CommonAppRuleInput
+
+        error = ValidationError.from_exception_data("Synthetic", [
+            {"type": "string_type", "loc": ("scope", SECRET), "input": SECRET},
+            {"type": "string_type", "loc": (SECRET,), "input": SECRET},
+            # Known elsewhere but not a field of this input model must not leak.
+            {"type": "string_type", "loc": ("session_token",), "input": SECRET},
+        ])
+        self.assertEqual(api._validation_fields(error, CommonAppRuleInput), ("scope",))
+        with self.assertRaises(HTTPException) as caught:
+            api._reject(422, "fixed", code="invalid_input", fields=(*api._ERROR_FIELDS, SECRET))
+        names = caught.exception.headers["X-Serverware-Error-Fields"].split(",")
+        self.assertEqual(names, sorted(api._ERROR_FIELDS)[:8])
+        for status, code in ((422, SECRET), (503, "invalid_input")):
+            with self.assertRaises(HTTPException) as caught:
+                api._reject(status, "fixed", code=code, fields=(SECRET, "name"))
+            self.assertNotIn("X-Serverware-Error-Code", caught.exception.headers)
+            self.assertNotIn("X-Serverware-Error-Fields", caught.exception.headers)
+
+    def test_typed_refusals_originate_at_real_pre_write_guards(self):
+        identifier = "fixture-resource"
+        payload = SimpleNamespace(id=identifier, proxy_authentication="bearer", approval_mode="automatic")
+        record = {"id": identifier, "status": "active", "auth_type": "bearer"}
+        catalog = {"credentials": [record], "applications": [record], "access_rules": []}
+
+        def inspect_change(_payload, _actor, _collection, _event, change):
+            return change(None, None, catalog)
+
+        with patch.object(mutations, "_mutate", side_effect=inspect_change), \
+                patch.object(mutations.schema, "save_resource") as save:
+            record["auth_type"] = "google_oauth"
+            with self.assertRaises(mutations.ProviderDisconnectRequired):
+                mutations.revoke_credential(payload, ACTOR)
+            record["auth_type"] = "bearer"
+            catalog["access_rules"] = [{"status": "active", "credential_id": identifier}]
+            with self.assertRaises(mutations.CredentialInUse):
+                mutations.revoke_credential(payload, ACTOR)
+            with self.assertRaises(mutations.CatalogSettingUnchanged):
+                mutations.set_application_proxy_authentication(payload, ACTOR)
+            catalog["access_rules"] = [{**record, "operation_bundle": "aws_ecr_publish_v1"}]
+            with self.assertRaises(mutations.ApprovalRequired):
+                mutations.set_rule_approval(payload, ACTOR)
+            catalog["access_rules"] = [record]
+            with self.assertRaises(mutations.CatalogSettingUnchanged):
+                mutations.set_rule_approval(payload, ACTOR)
+            save.assert_not_called()
 
 
 if __name__ == "__main__":

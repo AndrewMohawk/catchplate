@@ -1,6 +1,6 @@
 # Set up a GitHub App for issue reads
 
-[Home](https://github.com/AndrewMohawk/serverware/wiki/Home) · [Credentials](https://github.com/AndrewMohawk/serverware/wiki/Credentials-and-providers) · [Client recipes](https://github.com/AndrewMohawk/serverware/wiki/Clients-and-recipes)
+[Home](Home.md) · [Credentials](Credentials-and-providers.md) · [Client recipes](Clients-and-recipes.md)
 
 This example lets a workload read issues and comments in one repository without
 receiving a GitHub credential. The **GitHub App** is the provider integration;
@@ -88,7 +88,7 @@ the PEM; it is not available in client configuration. [Implemented connection co
 2. Grant **Read issues and comments** for the saved repository. Wait for the
    permission to become active; provider verification is not policy activation.
 3. In **Proxy setup**, select that client/permission and download its CA.
-4. Follow the [GitHub Node/Python/Go recipes](https://github.com/AndrewMohawk/serverware/wiki/Clients-and-recipes#nodejs-python-and-go-read-github-issues).
+4. Follow the [GitHub Node/Python/Go recipes](Clients-and-recipes.md#nodejs-python-and-go-read-github-issues).
    Prepare dependencies before supplying the Serverware token. For the Node
    project, set its documented client/CA/owner/repository inputs and run
    `node client.mjs list` from `examples/github-issues-node`.
@@ -125,7 +125,7 @@ the saved repository and affected clients, submit the new PEM, inspect the saved
 result and run a permitted read. Then retire the old key in GitHub separately.
 Serverware retains the credential, clients and permissions; this operation does
 not revoke already-issued GitHub tokens or recall in-flight requests. After a
-lost response, inspect saved state instead of submitting again. [Replacement procedure](https://github.com/AndrewMohawk/serverware/wiki/Operations-and-maintenance#replace-a-github-app-private-key-without-losing-assignments).
+lost response, inspect saved state instead of submitting again. [Replacement procedure](Operations-and-maintenance.md#replace-a-github-app-private-key-without-losing-assignments).
 
 ## Troubleshooting and verification scope
 
@@ -139,7 +139,7 @@ lost response, inspect saved state instead of submitting again. [Replacement pro
   separate. [GitHub permission changes](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app#about-changes-to-permissions).
 - **Saved but the client is refused:** check client-token expiry/login mode,
   exact repository, loaded policy and both TLS trust paths; see
-  [Troubleshooting](https://github.com/AndrewMohawk/serverware/wiki/Troubleshooting).
+  [Troubleshooting](Troubleshooting.md).
 
 The repository records [isolated App-through-proxy SDK verification](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-github-app-verification.md),
 not a successful job against your GitHub installation. This guide was checked

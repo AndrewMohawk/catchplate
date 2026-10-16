@@ -1,4 +1,4 @@
-function createApplicationsView(workspace) {
+function createApplicationsView(workspace, actions = {}) {
   const tokenHome = document.createComment('shared application token panel');
   element('one-time-access').before(tokenHome);
   let held = null; let expiryTimer; let channel;
@@ -174,6 +174,20 @@ function createApplicationsView(workspace) {
           'Login enforcement pending: wait for the exact saved policy to load.', 'small muted');
       loginStatus.dataset.applicationProxyStatus = ''; card.append(loginStatus);
       if (!revoked) {
+        const setup = textNode('div', undefined, 'actions');
+        const configure = textNode('button', 'Configure client', 'secondary'); configure.dataset.action = 'configure-client';
+        const permission = textNode('button', 'Add permission', 'secondary'); permission.dataset.action = 'add-permission';
+        configure.disabled = workspace.state.busy || workspace.state.uncertain || typeof actions.configure !== 'function';
+        permission.disabled = workspace.state.busy || workspace.state.uncertain || typeof actions.addPermission !== 'function';
+        configure.addEventListener('click', () => {
+          if (workspace.state.busy || workspace.state.uncertain || !actions.configure?.(application.id))
+            element('application-action-status').textContent = 'This exact client is unavailable for setup. Refresh saved state; no request was sent.';
+        });
+        permission.addEventListener('click', () => {
+          if (workspace.state.busy || workspace.state.uncertain || !actions.addPermission?.(application.id))
+            element('application-action-status').textContent = 'Client setup could not be opened. Keep any current setup draft or finish its pending operation before starting another.';
+        });
+        setup.append(configure, permission); card.append(setup);
         const select = textNode('select'); select.className = 'application-rotate-ttl'; select.setAttribute('aria-label', 'Replacement token lifetime for ' + application.name);
         for (const [seconds, label] of lifetimes) { const option = textNode('option', label); option.value = String(seconds); select.append(option); }
         select.value = rotationLifetimes.get(application.id) || '2592000'; select.disabled = workspace.state.busy || workspace.state.uncertain;
@@ -191,15 +205,15 @@ function createApplicationsView(workspace) {
           if (!window.confirm(`Revoke application "${application.name}" (${application.id}) and its ${application.active_rule_count} active access rules? This also cancels workload renewal and previous-token overlap. Shared provider credentials and other applications remain. Enforcement begins after the proxy loads the new policy; already-dispatched requests cannot be recalled.`)) return;
           invalidate(application.id); await workspace.mutate('applications/revoke', {id: application.id}, 'application-action-status');
         });
-        card.append(textNode('p', 'Replacement token lifetime', 'small'), select); const actions = textNode('div', undefined, 'actions'); actions.append(rotate, revoke);
+        card.append(textNode('p', 'Replacement token lifetime', 'small'), select); const tokenActions = textNode('div', undefined, 'actions'); tokenActions.append(rotate, revoke);
         if (login && projectApplicationProxyAuthenticationCapability(catalog.capabilities.application_proxy_authentication)) {
           const target = login === 'bearer' ? 'basic_and_bearer_v1' : 'bearer';
           const change = textNode('button', target === 'bearer' ? 'Use bearer only' : 'Enable standard client login', 'secondary');
           change.dataset.action = 'change-proxy-authentication'; change.dataset.proxyAuthentication = target;
           change.disabled = workspace.state.busy || workspace.state.uncertain;
-          change.addEventListener('click', () => changeProxyAuthentication(application.id, target)); actions.append(change);
+          change.addEventListener('click', () => changeProxyAuthentication(application.id, target)); tokenActions.append(change);
         }
-        card.append(actions);
+        card.append(tokenActions);
         const enrollment = application.client_renewal;
         card.append(textNode('p', !enrollment ? Number.isSafeInteger(application.client_renewal_cancelled_at_epoch_ms) ?
           'Workload renewal: cancelled · ' + new Date(application.client_renewal_cancelled_at_epoch_ms).toLocaleString() : 'Tokens: manual rotation' :
@@ -208,7 +222,7 @@ function createApplicationsView(workspace) {
         if (projectWorkloadRenewalCapability(catalog.capabilities.workload_renewal, catalog.proxy_url)) {
           const manage = textNode('button', 'Manage workload renewal', 'secondary'); manage.dataset.action = 'manage-workload-renewal';
           manage.disabled = workspace.state.busy || workspace.state.uncertain;
-          manage.addEventListener('click', () => renewalView.select(application.id)); card.append(manage);
+          manage.addEventListener('click', () => { element('application-renewal').open = true; renewalView.select(application.id); }); card.append(manage);
         }
       }
       return {card, group: revoked ? 'revoked' : diagnostic.applications.has(application.id) ? 'diagnostic' : 'current'};

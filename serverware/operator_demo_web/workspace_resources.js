@@ -538,8 +538,20 @@ function createCredentialsView(workspace, actions = {}) {
   }
   workspace.subscribe(render); return {render};
 }
-function createAccessRulesView(workspace) {
+function createAccessRulesView(workspace, actions = {}) {
   const form = element('access-rule-form');
+  function manualResources(catalog) {
+    const diagnostics = operatorDiagnosticResources(catalog);
+    const includeDiagnostics = element('rule-include-diagnostics').checked;
+    return {
+      applications: catalog.applications.filter(item => item.status === 'active' && (includeDiagnostics || !diagnostics.applications.has(item.id))),
+      credentials: catalog.credentials.filter(item => item.status === 'active' && !isCommonAppCredential(item) && !isAwsCredential(item) &&
+        !isGithubCredential(item) && !isNpmCredential(item) && !isXCredential(item) && !isXOAuthCredential(item) && !isAlchemyCredential(item) &&
+        (includeDiagnostics || !diagnostics.credentials.has(item.id))),
+      origins: catalog.allowed_upstreams.filter(origin => includeDiagnostics || origin !== 'https://demo-upstream:8443')
+    };
+  }
+  element('rule-include-diagnostics').addEventListener('change', render);
   renderOperatorCompatibility('rule-compatibility-content');
   function renderSummary() {
     const catalog = workspace.state.catalog;
@@ -622,6 +634,11 @@ function createAccessRulesView(workspace) {
     const credentialInput = element('rule-credential-input').value;
     const placeholder = credentialInput === 'replace_exact' ? element('rule-placeholder').value : undefined;
     const credential = catalog.credentials.find(item => item.id === element('rule-credential-id').value);
+    const permitted = manualResources(catalog);
+    if (!permitted.applications.some(item => item.id === element('rule-application-id').value) ||
+        !permitted.credentials.some(item => item.id === credential?.id) || !permitted.origins.includes(origin)) {
+      element('access-rule-form-status').textContent = 'Choose an available client, credential and approved destination. Connection-check resources require the explicit advanced option.'; return;
+    }
     try {
       if (isAwsCredential(credential)) throw new Error();
       if (!availableCredentialInputModes(catalog).includes(credentialInput)) throw new Error();
@@ -650,19 +667,22 @@ function createAccessRulesView(workspace) {
   });
   function render() {
     const catalog = workspace.state.catalog;
+    const choices = catalog ? manualResources(catalog) : {applications: [], credentials: [], origins: []};
     const responseModes = availableResponseModes(catalog);
     const credentialInputModes = availableCredentialInputModes(catalog);
-    element('access-rule-fields').disabled = !workspace.ready('access_rules') || !catalog?.credentials.some(item => item.status === 'active' && !isGithubCredential(item) && !isNpmCredential(item) && !isXCredential(item) && !isAlchemyCredential(item)) ||
-      !catalog?.applications.some(item => item.status === 'active') || !catalog?.allowed_upstreams.length || !responseModes.length || !credentialInputModes.length;
+    element('access-rule-fields').disabled = !workspace.ready('access_rules') || !choices.credentials.length ||
+      !choices.applications.length || !choices.origins.length || !responseModes.length || !credentialInputModes.length;
     if (!catalog) { renderResponseMode(); renderCredentialInput(); renderRequestBody(); renderSummary(); return; }
     chooseModeOptions('rule-response-mode', responseFormChoices(catalog, element('rule-response-mode').value), 'No supported response mode available');
     renderResponseMode();
-    chooseOptions('rule-application-id', catalog.applications.filter(item => item.status === 'active'), 'Create an application first');
-    chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active' && !isCommonAppCredential(item) && !isAwsCredential(item) && !isGithubCredential(item) && !isNpmCredential(item) && !isXCredential(item) && !isXOAuthCredential(item) && !isAlchemyCredential(item)), 'Provider presets and ECR need Set up access');
+    chooseOptions('rule-application-id', [{id: '', name: choices.applications.length ? 'Choose a client' : 'Create a client first'},
+      ...operatorConnectResourceChoices(choices.applications)], 'Create a client first');
+    chooseOptions('rule-credential-id', [{id: '', name: choices.credentials.length ? 'Choose a saved credential' : 'Provider presets and ECR need Set up access'},
+      ...operatorConnectResourceChoices(choices.credentials)], 'Provider presets and ECR need Set up access');
     chooseOptions('rule-credential-input', credentialInputModes.map(mode => ({id: mode, name: operatorCredentialInputModes[mode]})), 'No supported credential input available');
     renderCredentialInput();
     renderRequestBody();
-    chooseOptions('rule-upstream-origin', catalog.allowed_upstreams.map(origin => ({id: origin, name: origin})), 'No approved destination configured');
+    chooseOptions('rule-upstream-origin', [{id: '', name: 'Choose an approved destination'}, ...choices.origins.map(origin => ({id: origin, name: origin}))], 'No approved destination configured');
     renderSummary();
     const diagnostic = operatorDiagnosticResources(catalog);
     renderResourceGroups('access-rules-list', catalog.access_rules.map(rule => {
@@ -673,6 +693,16 @@ function createAccessRulesView(workspace) {
       const card = resourceCard(rule, badge, [['Application', application?.name || rule.application_id], ['Credential', credential?.name || rule.credential_id],
         ...operatorRuleCredentialRows(rule, credential), ...operatorRuleRestrictions(rule), ...operatorApprovalRows(rule), ['Rule ID', rule.id]]);
       if (rule.status === 'active') {
+        const configure = textNode('button', 'Open client setup', 'secondary'); configure.dataset.action = 'configure-rule';
+        configure.disabled = workspace.state.busy || workspace.state.uncertain || application?.status !== 'active' ||
+          !operatorRuleSupported(rule, catalog) || typeof actions.configure !== 'function';
+        configure.addEventListener('click', () => {
+          const current = workspace.state.catalog;
+          const selected = current?.access_rules.find(item => item.id === rule.id && item.status === 'active');
+          if (!selected || workspace.state.busy || workspace.state.uncertain || !operatorRuleSupported(selected, current) ||
+              !actions.configure?.(selected.application_id, selected.id))
+            element('rule-action-status').textContent = 'This exact permission is unavailable for client setup. Refresh and review saved state; no request was sent.';
+        }); card.append(configure);
         const approval = textNode('button', rule.approval_mode === 'host_review_v1' ? 'Remove human approval requirement' : 'Require human approval', 'secondary');
         approval.dataset.action = 'change-approval';
         approval.hidden = isEcrRule(rule);

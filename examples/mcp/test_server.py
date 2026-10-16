@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import multiprocessing
+import io
 import os
 from pathlib import Path
 import signal
@@ -17,6 +18,7 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -388,11 +390,75 @@ class ProtocolTests(unittest.TestCase):
             capture_output=True, timeout=10, check=False)
         self.assertEqual(help_result.returncode, 0)
         self.assertIn(b"--allow-actions", help_result.stdout)
+        self.assertIn(b"--print-client-config", help_result.stdout)
         invalid = subprocess.run([sys.executable, "-I", "-B", script, "--config", "fixture=" + str(self.directory / SECRET), "--check"],
             capture_output=True, timeout=10, check=False)
         self.assertEqual(invalid.returncode, 1)
         self.assertNotIn(SECRET.encode(), invalid.stderr + invalid.stdout)
         self.assertNotIn(b"Traceback", invalid.stderr)
+
+    def test_print_client_config_preserves_paths_without_secrets_or_network(self):
+        directory = self.directory / "private files with spaces"
+        directory.mkdir()
+        for alias, provider in (("balance", "stripe"), ("message", "slack")):
+            (directory / (alias + " file.json")).write_text(json.dumps(engine_configuration(provider)), encoding="utf-8")
+        configurations = [item for alias in ("balance", "message")
+            for item in ("--config", alias + "=" + str(directory / (alias + " file.json")))]
+        script = str(Path(server.__file__).resolve())
+        # Exercise the real CLI with a socket/DNS audit hook, not a fake loader.
+        command = [sys.executable, "-I", "-B", str(Path(__file__).resolve()), "--network-free-cli"]
+        printed = subprocess.run(command + configurations + ["--print-client-config"],
+            capture_output=True, timeout=10, check=False)
+        self.assertEqual(printed.returncode, 0, printed.stderr)
+        self.assertEqual(printed.stderr, b"")
+        value = json.loads(printed.stdout)
+        self.assertEqual(set(value), {"mcpServers"})
+        launch = value["mcpServers"]["serverware"]
+        self.assertEqual(launch, {"command": str(Path(sys.executable).absolute()),
+            "args": ["-I", "-B", script] + configurations})
+        self.assertNotIn(SECRET.encode(), printed.stdout)
+        self.assertNotIn(b"proxy.example.test", printed.stdout)
+        self.assertNotIn(b"--allow-actions", printed.stdout)
+        # The generated command is directly usable; no shell parsing required.
+        checked = subprocess.run([launch["command"], *launch["args"], "--check"],
+            capture_output=True, timeout=10, check=False)
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        self.assertEqual(json.loads(checked.stdout)["operations"], 2)
+        async def exercise():
+            async with Client(StdioServerParameters(**launch, env={"PATH": os.defpath})) as client:
+                self.assertEqual({tool.name for tool in (await client.list_tools()).tools},
+                    {"list_operations", "read_operation", "perform_action"})
+                refused = await client.call_tool("perform_action", {"operation_id": "message",
+                    "arguments": {"text": "not sent"}, "confirmed": True})
+                self.assertEqual(refused.structured_content["status"], "refused")
+        anyio.run(exercise)
+        enabled = subprocess.run(command + configurations + ["--allow-actions", "message",
+            "--console-origin", "https://console.example.test/", "--print-client-config"],
+            capture_output=True, timeout=10, check=False)
+        self.assertEqual(enabled.returncode, 0, enabled.stderr)
+        args = json.loads(enabled.stdout)["mcpServers"]["serverware"]["args"]
+        self.assertEqual(args[-4:], ["--allow-actions", "message", "--console-origin", "https://console.example.test"])
+        self.assertNotIn(SECRET.encode(), enabled.stdout)
+
+    def test_print_client_config_validates_locally_and_keeps_venv_interpreter(self):
+        configuration = self.directory / "balance.json"
+        configuration.write_text(json.dumps(engine_configuration("stripe")), encoding="utf-8")
+        argv = ["server.py", "--config", "balance=" + str(configuration), "--print-client-config"]
+        captured = io.StringIO()
+        # Resolving this path's symlink would lose the venv; preserve it verbatim.
+        selected = str(self.directory / "virtual environment" / "bin" / "python")
+        with patch.object(sys, "argv", argv), patch.object(sys, "executable", selected), \
+                patch.object(server, "create_server", side_effect=AssertionError("Must not start MCP")), redirect_stdout(captured):
+            server.main()
+        self.assertEqual(json.loads(captured.getvalue())["mcpServers"]["serverware"]["command"], selected)
+        command = [sys.executable, "-I", "-B", str(Path(server.__file__).resolve())]
+        for suffix in (["--config", "balance=" + str(configuration), "--allow-actions", "unknown", "--print-client-config"],
+                ["--config", "balance=" + str(self.directory / SECRET), "--print-client-config"],
+                ["--config", "balance=" + str(configuration), "--check", "--print-client-config"]):
+            failed = subprocess.run(command + suffix, capture_output=True, timeout=10, check=False)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertEqual(failed.stdout, b"")
+            self.assertNotIn(SECRET.encode(), failed.stderr)
 
     def test_real_engine_through_stdio_and_cli_check_without_provider_transport(self):
         for alias, provider in (("balance", "stripe"), ("message", "slack")):
@@ -428,7 +494,12 @@ class ProtocolTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 5 and sys.argv[1] == "--fixture-stdio":
+    if len(sys.argv) > 2 and sys.argv[1] == "--network-free-cli":
+        import runpy
+        sys.addaudithook(_no_provider)
+        sys.argv = [str(Path(server.__file__).resolve()), *sys.argv[2:]]
+        runpy.run_path(sys.argv[0], run_name="__main__")
+    elif len(sys.argv) == 5 and sys.argv[1] == "--fixture-stdio":
         server.create_server(FixtureOperations(sys.argv[2], sys.argv[3] == "enabled"),
             timeout=float(sys.argv[4])).run(transport="stdio")
     elif len(sys.argv) == 3 and sys.argv[1] == "--engine-stdio":

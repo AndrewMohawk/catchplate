@@ -1,6 +1,6 @@
 # Capability matrix and glossary
 
-[Home](https://github.com/AndrewMohawk/serverware/wiki/Home) · [Credentials and providers](https://github.com/AndrewMohawk/serverware/wiki/Credentials-and-providers) · [Clients and recipes](https://github.com/AndrewMohawk/serverware/wiki/Clients-and-recipes)
+[Home](Home.md) · [Credentials and providers](Credentials-and-providers.md) · [Clients and recipes](Clients-and-recipes.md)
 
 Serverware separates **what the software implements**, **what this instance is configured to offer**, and **what has succeeded against a real provider**. None is a substitute for the others. This page summarizes repository contracts and recorded verification; it does not report new live probes.
 
@@ -42,7 +42,7 @@ Provider contracts: [GitHub](https://github.com/AndrewMohawk/serverware/blob/mai
 
 The X daily limit is offered only when the instance advertises the exact compatible quota capability. It counts **attempts**, shared across clients/connections for the verified account, not confirmed successful posts. A committed attempt with an uncertain outcome stays charged; refresh, reconnect or a client restart is not a reset. This ordinary trusted-host limit is not native rollback-proof authority. [Quota contract](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-x-posting-quotas.md).
 
-An npm metadata grant does not allow installation; an installation grant does not allow publication. List the complete permitted dependency closure explicitly. Publication hours restrict when requests may run; Serverware does not schedule the job. [Permissions](https://github.com/AndrewMohawk/serverware/wiki/Permissions-and-policies).
+An npm metadata grant does not allow installation; an installation grant does not allow publication. List the complete permitted dependency closure explicitly. Publication hours restrict when requests may run; Serverware does not schedule the job. [Permissions](Permissions-and-policies.md).
 
 An uncertain write may already have happened. Do not automatically retry X posting, npm publication or another write after a lost response; inspect audit and provider state first. A local confirmation flag is not durable deduplication.
 
@@ -77,7 +77,7 @@ The Alchemy Node recipe uses Viem instead of the archived Alchemy SDK. The npm r
 
 ## Where to go next
 
-- [Get started](https://github.com/AndrewMohawk/serverware/wiki/Getting-started) to connect a saved credential to a client.
-- [Proxy and CA](https://github.com/AndrewMohawk/serverware/wiki/Proxy-and-CA) for transport and provider application setup.
-- [Operations and maintenance](https://github.com/AndrewMohawk/serverware/wiki/Operations-and-maintenance) for rotation, reauthorization and removal.
-- [Troubleshooting](https://github.com/AndrewMohawk/serverware/wiki/Troubleshooting) for unavailable capabilities, pending activation and uncertain outcomes.
+- [Get started](Getting-started.md) to connect a saved credential to a client.
+- [Proxy and CA](Proxy-and-CA.md) for transport and provider application setup.
+- [Operations and maintenance](Operations-and-maintenance.md) for rotation, reauthorization and removal.
+- [Troubleshooting](Troubleshooting.md) for unavailable capabilities, pending activation and uncertain outcomes.

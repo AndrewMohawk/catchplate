@@ -1,6 +1,6 @@
 # Troubleshooting
 
-[Home](https://github.com/AndrewMohawk/serverware/wiki/Home) · [Proxy and CA](https://github.com/AndrewMohawk/serverware/wiki/Proxy-and-CA) · [Operations and maintenance](https://github.com/AndrewMohawk/serverware/wiki/Operations-and-maintenance)
+[Home](Home.md) · [Proxy and CA](Proxy-and-CA.md) · [Operations and maintenance](Operations-and-maintenance.md)
 
 Start with the checkpoint that failed: **console load, credential save, permission activation, proxy connection, provider operation, or response release**. A failure at one stage does not prove failure—or success—at another.
 

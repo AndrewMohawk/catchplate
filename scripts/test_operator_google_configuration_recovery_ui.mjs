@@ -12,6 +12,7 @@ const SOURCE = ['workspace_core.js', 'workspace_google.js', 'workspace_upstreams
 const HTML = readFileSync(new URL('index.html', ASSETS), 'utf8');
 const PATH = '/api/operator-demo/oauth/google/configuration/v2';
 const KEY = 'serverware.operator.google.configuration.operation.v2';
+const RECOVERY_KEY = 'serverware.operator.mutation.review.v1';
 const ID = '11111111-1111-4111-8111-111111111111';
 const OWNER = '22222222-2222-4222-8222-222222222222';
 const ORIGIN = 'https://operator.example.com';
@@ -56,7 +57,7 @@ class Node {
   constructor(id) { this.id = id; this.events = {}; this.value = ''; this.children = []; this._text = ''; this.hidden = false; this.disabled = false; }
   get textContent() { return this._text + this.children.map(child => typeof child === 'string' ? child : child.textContent).join(''); }
   set textContent(value) { this._text = value; this.children = []; }
-  append(...children) { this.children.push(...children); }
+  append(...children) { for (const child of children) if (typeof child !== 'string') child.parentNode = this; this.children.push(...children); }
   addEventListener(name, callback) { (this.events[name] ||= []).push(callback); }
   querySelectorAll() { return []; }
   insertBefore(node, before) { this.inserted = {node: node.id, before: before.id}; }
@@ -70,20 +71,27 @@ function fixture(options = {}) {
   node('mutation-review').hidden = true;
   const reference = {operation_id: ID, kind: options.kind || 'prepare'};
   const stored = Object.hasOwn(options, 'stored') ? options.stored : options.empty ? null : options.malformed ? '{' : JSON.stringify(reference);
-  const storage = new Map(stored === null ? [] : [[KEY, stored]]); const writes = []; const calls = []; const forbidden = [];
+  const storage = new Map(stored === null ? [] : [[KEY, stored]]); const writes = []; const calls = []; const forbidden = []; const downloads = [];
   const state = {operation: clone(options.operation || operation()), status: 200, badOperation: false, discoveryTransform: null, removeFailure: false};
+  const catalog = () => ({revision: state.operation.revision, allowed_upstreams: clone(state.operation.status === 'activated' ? TARGET : OLD).allowed_upstreams,
+    policy: {policy_hash: hash('a'), loaded_policy_hash: hash('a'), activation: 'active'}});
   const location = {origin: ORIGIN, protocol: 'https:', hash: '#overview'};
   const deny = name => () => { forbidden.push(name); throw new Error('Forbidden fixture effect'); };
-  const context = vm.createContext({URL, Date, TextEncoder, location, element: node,
+  const context = vm.createContext({URL, Date, TextEncoder, location, element: node, handoffDownloads: downloads,
     window: {addEventListener() {}}, document: {getElementById: node,
       createElement() { const value = new Node(''); created.push(value); return value; }},
     sessionStorage: {getItem(key) { if (options.unreadable) throw new Error(PRIVATE); return storage.get(key) ?? null; },
       setItem(key, value) { writes.push({key, value}); storage.set(key, value); },
-      removeItem(key) { if (state.removeFailure) throw new Error(PRIVATE); writes.push({key, removed: true}); storage.delete(key); }},
+      removeItem(key) { if (state.removeFailure && key === KEY) throw new Error(PRIVATE); writes.push({key, removed: true}); storage.delete(key); }},
     localStorage: {getItem: deny('localStorage'), setItem: deny('localStorage')},
     crypto: {randomUUID: deny('new-operation')}, setTimeout: deny('timer'), clearTimeout() {},
     AbortSignal: {timeout(value) { assert.equal(value, 30000); return {}; }},
     fetch(path, init) {
+      if (path === '/api/operator-demo/catalog') {
+        assert.equal(init.method, undefined); assert.equal(init.body, undefined);
+        assert.equal(init.credentials, 'same-origin'); assert.equal(init.cache, 'no-store'); assert.equal(init.redirect, 'error');
+        return Promise.resolve({ok: true, status: 200, headers: {get: () => 'application/json'}, async json() { return catalog(); }});
+      }
       try {
         assert.equal(init.method, 'GET'); assert.equal(init.body, undefined);
         assert.equal(init.credentials, 'same-origin'); assert.equal(init.cache, 'no-store'); assert.equal(init.redirect, 'error');
@@ -98,15 +106,16 @@ function fixture(options = {}) {
     },
   });
   vm.runInContext(SOURCE, context, {timeout: 2000});
-  const workspace = vm.runInContext('createOperatorWorkspace()', context, {timeout: 1000});
-  const catalog = () => ({revision: state.operation.revision, allowed_upstreams: clone(state.operation.status === 'activated' ? TARGET : OLD).allowed_upstreams,
-    policy: {policy_hash: hash('a'), loaded_policy_hash: hash('a'), activation: 'active'}});
-  workspace.state.catalog = catalog();
-  workspace.refresh = async () => {
-    workspace.state.catalog = catalog(); node('load-error').hidden = true;
-    node('mutation-review-confirm').disabled = !workspace.state.uncertain;
-    workspace.emit(); return true;
+  vm.runInContext('downloadActivationHandoff = value => handoffDownloads.push(JSON.stringify(value))', context);
+  // Catalogue DTO parsing has its own tests; keep this fixture's small catalogue
+  // while exercising the real refresh/recovery epoch and fixed public marker.
+  vm.runInContext('projectCatalog = value => value', context);
+  const projectHandoff = (value, reference, current) => {
+    context.handoffInput = {value, reference, current};
+    return clone(vm.runInContext('projectGoogleActivationHandoff(handoffInput.value, handoffInput.reference, handoffInput.current)', context));
   };
+  const workspace = vm.runInContext('createOperatorWorkspace()', context, {timeout: 1000});
+  workspace.state.catalog = catalog();
   if (options.priorWarning) workspace.requireReview(options.priorWarning);
   if (options.xHold) workspace.setConsentHold(true, 'x-provider-configuration');
   context.workspaceFixture = workspace;
@@ -117,12 +126,15 @@ function fixture(options = {}) {
   };
   const navigate = active => { location.hash = active ? '#proxy' : '#overview'; return view.show(active); };
   const clean = ({retired = false, storedValue = stored} = {}) => {
-    assert.equal(node('google-configuration-client-secret').value, ''); assert.deepEqual(writes, retired ? [{key: KEY, removed: true}] : []);
+    assert.equal(node('google-configuration-client-secret').value, '');
+    assert.deepEqual(writes.filter(write => write.key === KEY), retired ? [{key: KEY, removed: true}] : []);
+    assert(writes.every(write => write.key === KEY || write.key === RECOVERY_KEY &&
+      (write.value === 'required' && !write.removed || write.removed === true && write.value === undefined)));
     assert.deepEqual(forbidden, []); assert.equal(storage.get(KEY) ?? null, retired ? null : storedValue);
     for (const value of [...nodes.values(), ...created].map(item => item.textContent)) assert(!value.includes(PRIVATE) && !value.includes(SECRET));
     assert(calls.every(call => call.method === 'GET'));
   };
-  return {node, workspace, state, reference, storage, calls, view, event, navigate, location, clean};
+  return {node, workspace, state, reference, storage, calls, downloads, projectHandoff, view, event, navigate, location, clean};
 }
 
 const tests = [
@@ -144,7 +156,9 @@ const tests = [
       assert.equal(f.node('google-configuration-check').disabled, false, 'Check remains available during its own hold');
       assert.equal(f.node('google-configuration-operation-reference').textContent, ID);
       await f.navigate(true); assert.equal(f.location.hash, '#proxy'); assert.deepEqual(f.calls, []);
-      assert.deepEqual(f.node('proxy').inserted, {node: 'google-configuration-panel', before: 'proxy-setup-content'});
+      assert.equal(f.node('google-configuration-panel').parentNode, f.node('proxy-operator-settings'));
+      assert.equal(f.node('proxy').inserted, undefined);
+      assert(HTML.indexOf('id="proxy-operator-settings"') > HTML.indexOf('id="proxy-setup-content"'));
       await f.event('mutation-review-confirm'); assert.equal(f.workspace.state.uncertain, true);
       f.node('google-configuration-client-secret').value = SECRET;
       await f.event('google-configuration-check');
@@ -152,6 +166,53 @@ const tests = [
       assert.equal(f.workspace.state.busy, kind === 'cancel'); assert.equal(f.workspace.state.uncertain, true);
       assert.equal(f.storage.get(KEY), JSON.stringify(f.reference)); f.clean();
     }
+  }],
+  ['Google activation handoff projects only public pins from the exact current pending operation', () => {
+    const f = fixture(); const op = operation(); const current = discovery(op);
+    const result = f.projectHandoff(op, f.reference, current);
+    assert.deepEqual(Object.keys(result).sort(), ['schema', 'change_kind', 'operation_id', 'observed_status', 'prepared_at',
+      'reviewed_revision', 'prepared_revision', 'policy_hash', 'expected_settings_digest', 'profile_binding_digest',
+      'current_origins', 'target_origins', 'status_path', 'next_step', 'runbook_url', 'notice'].sort());
+    assert.equal(result.change_kind, 'managed_google'); assert.equal(result.observed_status, 'pending');
+    assert.equal(result.status_path, PATH + '/' + ID); assert.deepEqual(result.target_origins, TARGET.allowed_upstreams);
+    assert.equal(result.profile_binding_digest, hash('c')); assert.match(result.next_step, /custody preserved/);
+    assert.match(result.runbook_url, /docs\/self-hosting\.md#activate-a-prepared-configuration$/);
+    assert.match(result.notice, /not activation/);
+    const serialized = JSON.stringify(result);
+    for (const forbidden of [CLIENT, OWNER, SECRET, 'fixture_cidrs', 'custody_ref', 'client_secret', 'secret_present', 'redirect_uri'])
+      assert(!serialized.includes(forbidden));
+    for (const value of [null, {...op, client_secret: SECRET}, operation('activated'), operation('cancelled')])
+      assert.throws(() => f.projectHandoff(value, f.reference, current));
+    for (const reference of [{operation_id: OWNER, kind: 'prepare'}, {operation_id: ID, kind: 'cancel'}, null])
+      assert.throws(() => f.projectHandoff(op, reference, current));
+    for (const change of [value => { value.revision++; }, value => { value.policy_hash = hash('e'); },
+      value => { value.effective_settings_digest = hash('e'); }, value => { value.operation.profile_binding_digest = hash('e'); }]) {
+      const stale = clone(current); change(stale); assert.throws(() => f.projectHandoff(op, f.reference, stale));
+    }
+    f.clean();
+  }],
+  ['Google handoff needs a current validated pending GET and never changes configuration or stored state', async () => {
+    const f = fixture(); assert(f.node('google-configuration-handoff').disabled);
+    await f.event('google-configuration-handoff'); assert.deepEqual(f.downloads, []); assert.deepEqual(f.calls, []);
+    await f.navigate(true); await f.event('google-configuration-check');
+    assert.equal(f.workspace.state.busy, false); assert.equal(f.workspace.state.uncertain, true);
+    assert.equal(f.node('google-configuration-handoff').disabled, false, 'Validated informational export does not clear the generic review warning');
+    const before = JSON.stringify({calls: f.calls, storage: [...f.storage], state: f.state});
+    f.node('google-configuration-client-secret').value = SECRET;
+    await f.event('google-configuration-handoff'); assert.equal(f.downloads.length, 1);
+    assert.equal(JSON.stringify({calls: f.calls, storage: [...f.storage], state: f.state}), before);
+    assert.equal(JSON.parse(f.downloads[0]).change_kind, 'managed_google'); f.clean();
+    f.workspace.state.catalog.revision++; f.workspace.emit(); assert(f.node('google-configuration-handoff').disabled);
+    await f.event('google-configuration-handoff'); assert.equal(f.downloads.length, 1); f.clean();
+    for (const options of [{kind: 'cancel'}, {operation: operation('cancelled')}, {operation: operation('activated')}, {empty: true}]) {
+      const blocked = fixture(options); await blocked.navigate(true);
+      if (!options.empty) await blocked.event('google-configuration-check');
+      assert(blocked.node('google-configuration-handoff').disabled); await blocked.event('google-configuration-handoff');
+      assert.deepEqual(blocked.downloads, []); blocked.clean();
+    }
+    const failed = fixture(); failed.state.status = 503; await failed.navigate(true); await failed.event('google-configuration-check');
+    assert(failed.node('google-configuration-handoff').disabled); await failed.event('google-configuration-handoff');
+    assert.deepEqual(failed.downloads, []); failed.clean();
   }],
   ['terminal GET retires only after explicit acknowledgement and second Overview load has no repeated hold', async () => {
     for (const status of ['cancelled', 'activated']) {

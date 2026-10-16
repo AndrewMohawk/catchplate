@@ -253,7 +253,14 @@ async function fixture(browser, options, exercise) {
         typeof options.notificationHandler === 'function' && Object.hasOwn(NOTIFICATION_LIMITS, item.path))));
   } finally { await context.close(); }
 }
-async function ready(page) { await page.waitForFunction(() => !document.querySelector('#credential-fields').disabled); }
+async function ready(page) {
+  // Public catalog rendering and the workspace write/recovery gate, independent
+  // of whether a provider editor or the advanced permission form is open.
+  await page.waitForFunction(() => ['credentials', 'applications', 'rules'].every(name =>
+    /^\d+$/.test(document.querySelector('#overview-' + name + '-count').textContent)) &&
+    document.querySelector('#load-error').hidden && document.querySelector('#mutation-review').hidden &&
+    !document.querySelector('#mutation-review-refresh').disabled);
+}
 async function view(page, name) {
   if (name === 'connect') {
     await page.locator('nav a[href="#overview"]').click();

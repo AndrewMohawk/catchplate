@@ -56,12 +56,19 @@ function buildCurlCommand({proxyUrl, upstreamUrl, method, caPath, allowedHeaders
 if (typeof module !== 'undefined' && module.exports) module.exports = {buildCurlCommand, clientCredentialInput, credentialHeaderTarget};
 else {
   const workspace = createOperatorWorkspace();
-  let reauthorization; let xAccounts; let connect;
+  let reauthorization; let xAccounts; let connect; let proxy;
+  const configureClient = (applicationId, ruleId) => {
+    if (workspace.state.busy || workspace.state.uncertain) return false;
+    const selected = ruleId ? proxy.select(applicationId, ruleId) : proxy.selectClient(applicationId);
+    if (selected) location.hash = 'proxy';
+    return selected;
+  };
   createCredentialsView(workspace, {reauthorize: id => reauthorization.open(id), disconnectX: id => xAccounts.disconnect(id),
-    add: template => connect.addCredential(template), canAdd: () => connect.canAddCredential(), use: id => connect.selectCredential(id)}); createAccessRulesView(workspace);
-  const applications = createApplicationsView(workspace);
+    add: template => connect.addCredential(template), canAdd: () => connect.canAddCredential(), use: id => connect.selectCredential(id)});
+  createAccessRulesView(workspace, {configure: configureClient});
+  const applications = createApplicationsView(workspace, {configure: id => configureClient(id), addPermission: id => connect.selectApplication(id)});
   reauthorization = createGoogleReauthorizationView(workspace, applications);
-  const proxy = createProxyView(workspace, applications); const audit = createAuditView(workspace);
+  proxy = createProxyView(workspace, applications); const audit = createAuditView(workspace);
   const upstreams = createUpstreamsView(workspace);
   const googleConfiguration = createGoogleConfigurationView(workspace);
   const xConfiguration = createXConfigurationView(workspace);
@@ -83,6 +90,8 @@ else {
   function navigate() {
     const approvalLocation = pendingApprovalLocation(location.pathname);
     let view = location.hash.slice(1) || (approvalLocation ? 'pending-actions' : 'overview');
+    const proxyTarget = ['proxy-operator-settings', 'proxy-upstreams', 'google-configuration-panel', 'x-configuration-panel'].includes(view) ? view : null;
+    if (proxyTarget) view = 'proxy';
     if (view === 'main-content') { element('main-content').focus(); return; }
     if (!Object.hasOwn(operatorViews, view)) { view = 'overview'; history.replaceState(null, '', '#overview'); }
     for (const name of Object.keys(operatorViews)) {
@@ -100,13 +109,18 @@ else {
     googleConfiguration.show(view === 'proxy');
     xConfiguration.show(view === 'proxy');
     if (view === 'audit') audit.open();
+    if (view === 'overview') renderOverviewAction(workspace.state.catalog);
+    if (proxyTarget) requestAnimationFrame(() => element(proxyTarget).scrollIntoView({block: 'start'}));
   }
   // The retained #connect route is an action, not a second resource inventory.
   // Explicit links open access setup; the credential editor selects save-only
   // mode through its own controller entrypoint without changing API identities.
   document.addEventListener('click', event => {
     const link = event.target.closest('a[href="#connect"]');
-    if (link && !connect.startSetup()) event.preventDefault();
+    if (link && !(link.id === 'overview-next-action' && connect.continuation()) && !connect.startSetup()) event.preventDefault();
+  });
+  element('overview-next-action').addEventListener('click', event => {
+    if (event.currentTarget.dataset.refresh === 'true') { event.preventDefault(); workspace.refresh({manual: true}); }
   });
   element('overview-try-demo').addEventListener('click', () => {
     const panel = element('overview-demo-panel'); panel.hidden = !panel.hidden;
@@ -160,6 +174,36 @@ else {
       return card;
     }), 'No matching saved permissions. Other accounts, applications, and permissions remain available in their management pages.');
   }
+  function renderOverviewAction(catalog) {
+    const continuation = connect.continuation();
+    let next;
+    if (continuation) next = {...continuation, href: '#connect'};
+    else if (workspace.state.uncertain) {
+      const affected = element('mutation-review-resource').getAttribute('href');
+      next = {label: 'Review interrupted change', href: ['#credentials', '#applications', '#access-rules'].includes(affected) ? affected : '#credentials',
+        summary: 'Review the saved state and the interruption notice before making another change. Nothing is automatically retried.'};
+    } else if (!catalog) next = {label: 'Refresh workspace status', href: '#overview', refresh: true,
+      summary: 'Saved state is unavailable. Refresh it before choosing the next setup step.'};
+    else {
+      const diagnostics = operatorDiagnosticResources(catalog);
+      const credentials = catalog.credentials.filter(item => item.status === 'active' && !diagnostics.credentials.has(item.id));
+      const clients = catalog.applications.filter(item => item.status === 'active' && !diagnostics.applications.has(item.id));
+      const validClients = clients.filter(item => item.token_status === 'valid' && item.token_expires_at_epoch_ms > Date.now());
+      const permissions = catalog.access_rules.filter(item => item.status === 'active' && !diagnostics.access_rules.has(item.id) &&
+        validClients.some(client => client.id === item.application_id) && credentials.some(credential => credential.id === item.credential_id));
+      next = !credentials.length ? {label: 'Add your first credential', href: '#credentials', summary: 'Choose a provider and save its account or key. Client access is configured separately.'} :
+        !validClients.length ? clients.length ? {label: 'Review expired client access', href: '#applications', summary: 'Saved clients need a valid proxy token. Review them before setting up another client.'} :
+          {label: 'Set up access with a saved credential', href: '#connect', summary: 'Choose a saved account or key, name your client, and review its permission.'} :
+        !permissions.length ? {label: 'Choose permissions for your client', href: '#connect', summary: 'Your saved credentials and clients do not grant access on their own. Choose the operation and scope.'} :
+        !permissions.some(rule => operatorRuleSupported(rule, catalog)) ? {label: 'Review unavailable permissions', href: '#access-rules', summary: 'Existing permissions do not match the currently supported setup. Review them without changing their scope automatically.'} :
+        !workspace.loaded() ? {label: 'Check pending proxy activation', href: '#proxy', summary: 'Wait for the proxy to confirm the saved policy before using the client.'} :
+          {label: 'Configure your client and send a scoped test request', href: '#proxy', summary: 'Select the exact saved client and permission, then use its config and CA. Provider success is verified by the request outcome, not this setup status.'};
+    }
+    element('overview-next-action').textContent = next.label;
+    element('overview-next-action').href = next.href;
+    element('overview-next-action').dataset.refresh = String(next.refresh === true);
+    element('overview-next-summary').textContent = next.summary;
+  }
   workspace.subscribe(() => {
     const catalog = workspace.state.catalog;
     renderSyntheticDemo(catalog);
@@ -171,15 +215,7 @@ else {
     for (const [name, collection] of [['credentials', 'credentials'], ['applications', 'applications'], ['rules', 'access_rules']])
       element('overview-' + name + '-count').textContent = catalog ? String(catalog[collection].filter(item =>
         item.status === 'active' && !diagnostics[collection].has(item.id)).length) : 'Unavailable';
-    if (catalog) {
-      const ordinaryApps = catalog.applications.filter(item => item.status === 'active' && !diagnostics.applications.has(item.id));
-      const validApps = ordinaryApps.filter(item => item.token_status === 'valid' && item.token_expires_at_epoch_ms > Date.now());
-      const step = !catalog.credentials.some(item => item.status === 'active' && !diagnostics.credentials.has(item.id)) ? ['Add your first credential', '#credentials'] :
-        !validApps.length ? ordinaryApps.length ? ['Review expired client access', '#applications'] : ['Set up access with a saved credential', '#connect'] :
-        !catalog.access_rules.some(item => item.status === 'active' && !diagnostics.access_rules.has(item.id) && validApps.some(app => app.id === item.application_id)) ? ['Choose permissions for your client', '#connect'] :
-        !workspace.loaded() ? ['Check pending proxy activation', '#proxy'] : ['Configure your client and send a scoped test request', '#proxy'];
-      element('overview-next-action').textContent = step[0]; element('overview-next-action').href = step[1];
-    }
+    renderOverviewAction(catalog);
     if (location.hash === '#audit') audit.open();
   });
   for (const id of ['retry-load', 'credentials-refresh', 'applications-refresh', 'rules-refresh', 'proxy-refresh'])

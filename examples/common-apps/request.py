@@ -36,6 +36,23 @@ PROVIDERS = {
     "sentry": ("sentry.io", "Authorization", "Bearer "),
 }
 FAILURE = "Request failed; inspect Serverware's audit log. If a write was sent, its outcome may be unknown: do not blindly retry."
+LOCAL_ERRORS = {
+    "config_missing": "Private config not found. Use --config with the downloaded JSON file.",
+    "config_invalid": "Private config is invalid or incompatible. Use the complete common-app download, not its nested recipe.",
+    "token_expired": "Client token expired. Ask the operator for a current private client configuration.",
+    "dependencies": "Pinned dependencies are missing or differ. Install requirements.txt in the selected virtual environment before supplying credentials.",
+    "ca_invalid": "Interception CA is missing or invalid. Place the verified public CA at the config's ca_file path; relative paths start beside the JSON.",
+    "proxy_ca_invalid": "Outer proxy CA is missing or invalid. Check the optional proxy_ca_file; never disable TLS verification.",
+    "query_invalid": "Query arguments do not match this permission. Use only its allowed keys without overriding configured selectors.",
+    "check_flags": "--check-config cannot be combined with a body, write confirmation or --print-example-body.",
+}
+
+
+class LocalConfigurationError(ValueError):
+    """Only fixed, token-safe local diagnostics may reach the CLI."""
+    def __init__(self, code):
+        self.code = code if code in LOCAL_ERRORS else "config_invalid"
+        super().__init__(LOCAL_ERRORS[self.code])
 
 
 def strict_json(raw):
@@ -95,6 +112,8 @@ def load_configuration(path):
         if type(config.get(field)) is not str or str(UUID(config[field])) != config[field]:
             raise ValueError("Invalid application or permission identity")
     expiry = config.get("token_expires_at_epoch_ms")
+    if type(expiry) is int and 0 < expiry <= time.time_ns() // 1000000:
+        raise LocalConfigurationError("token_expired")
     if (config.get("proxy_authentication") != "basic_and_bearer_v1"
             or config.get("proxy_username") != config["application_id"]
             or type(expiry) is not int or not time.time_ns() // 1000000 < expiry <= 2**53 - 1
@@ -158,6 +177,25 @@ def public_ca(path):
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.load_verify_locations(cadata=raw.decode("ascii"))
     return raw
+
+
+def check_local_configuration(config, query=()):
+    """Check local inputs only: no session, DNS, proxy or provider request."""
+    try:
+        request_url(config, query)
+    except Exception:
+        raise LocalConfigurationError("query_invalid") from None
+    try:
+        check_versions()
+    except Exception:
+        raise LocalConfigurationError("dependencies") from None
+    for field, code in (("ca_file", "ca_invalid"), ("proxy_ca_file", "proxy_ca_invalid")):
+        if field == "proxy_ca_file" and config[field] is None:
+            continue
+        try:
+            public_ca(config[field])
+        except Exception:
+            raise LocalConfigurationError(code) from None
 
 
 def read_bounded(response):
@@ -284,14 +322,19 @@ def execute_body(config, body=None, execute_write=False, query=()):
 
 def execute(config, body_path=None, execute_write=False, query=()):
     """CLI/file compatibility wrapper; never read a body without write intent."""
-    body = None
-    if config["methods"] == ["POST"]:
-        if execute_write is not True or body_path is None:
-            raise ValueError("A write requires --body PATH and --execute-write")
-        body = read_file(body_path, MAX_BODY_BYTES)
-    elif body_path is not None or execute_write:
-        raise ValueError("This permission is read-only")
-    return execute_body(config, body, execute_write, query)
+    try:
+        body = None
+        if config["methods"] == ["POST"]:
+            if execute_write is not True or body_path is None:
+                raise ValueError("A write requires --body PATH and --execute-write")
+            body = read_file(body_path, MAX_BODY_BYTES)
+        elif body_path is not None or execute_write:
+            raise ValueError("This permission is read-only")
+    except Exception:
+        pass
+    else:
+        return execute_body(config, body, execute_write, query)
+    raise RequestExecutionError()
 
 
 def main(argv=None):
@@ -301,10 +344,27 @@ def main(argv=None):
     parser.add_argument("--execute-write", action="store_true", help="Confirm this invocation may perform one write or paid AI call")
     parser.add_argument("--query", action="append", default=[], metavar="KEY=VALUE", help="An allowed read query; cannot override fixed scope")
     parser.add_argument("--print-example-body", action="store_true", help="Print the scoped example body and exit without a request")
+    parser.add_argument("--check-config", action="store_true", help="Validate config, expiry, dependencies, CA files and query locally; send nothing")
     args = parser.parse_args(argv)
     logging.disable(logging.CRITICAL)
+    execution_entered = False
     try:
-        config = load_configuration(args.config)
+        try:
+            config = load_configuration(args.config)
+        except LocalConfigurationError:
+            raise
+        except FileNotFoundError:
+            raise LocalConfigurationError("config_missing") from None
+        except Exception:
+            raise LocalConfigurationError("config_invalid") from None
+        if args.check_config:
+            if args.body is not None or args.execute_write or args.print_example_body:
+                raise LocalConfigurationError("check_flags")
+            check_local_configuration(config, args.query)
+            print(json.dumps({"status": "configuration_ready", "provider_calls": 0,
+                "network_checked": False, "method": config["methods"][0],
+                "write_confirmation_required": config["methods"] == ["POST"]}))
+            return 0
         if args.print_example_body:
             if args.body is not None or args.execute_write or args.query or type(config.get("request_body")) is not dict:
                 raise ValueError("This operation has no example body, or incompatible flags")
@@ -313,7 +373,8 @@ def main(argv=None):
         if config["methods"] == ["POST"] and (args.body is None or not args.execute_write):
             print("This is a write or paid API call. Review a JSON body, then explicitly pass --body PATH --execute-write. Nothing was sent.", file=sys.stderr)
             return 2
-        check_versions()
+        check_local_configuration(config, args.query)
+        execution_entered = True
         result = execute(config, args.body, args.execute_write, args.query)
         print(json.dumps(result, ensure_ascii=True))
         provider_error = type(result["response"]) is dict and (
@@ -324,9 +385,17 @@ def main(argv=None):
         elif not 200 <= result["status"] < 300 or provider_error:
             print("The request did not return success. Inspect the response and audit log before retrying; a write outcome may be unknown.", file=sys.stderr)
         return 0 if 200 <= result["status"] < 300 and not provider_error else 2
+    except LocalConfigurationError as error:
+        print("Nothing was sent. " + LOCAL_ERRORS[error.code], file=sys.stderr)
+        return 1
+    except RequestExecutionError as error:
+        print(FAILURE if error.request_started else
+            "Nothing was sent. Check the local body, query and verified CA files before trying again.", file=sys.stderr)
+        return 1
     except Exception:
         # Exceptions from proxy transports may contain the private proxy URL.
-        print(FAILURE, file=sys.stderr)
+        print(FAILURE if execution_entered else
+            "Nothing was sent. Check the local body file and command arguments. Do not include provider credentials.", file=sys.stderr)
         return 1
 
 

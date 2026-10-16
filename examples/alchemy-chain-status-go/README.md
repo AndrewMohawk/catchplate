@@ -21,11 +21,20 @@ provider entitlement or validity of an Alchemy key.
 
 ## Configure and run
 
+Prepare once with Go 1.25 or newer, from this directory and before supplying
+any client credentials:
+
+```sh
+GOTOOLCHAIN=local go mod download
+GOTOOLCHAIN=local go build -o chain-status-example .
+```
+
+Reuse that binary for subsequent jobs; no install or build is needed per run.
 For an existing permission, download its private client JSON and verified CA
 from **Proxy setup**, then run from this directory:
 
 ```sh
-GOTOOLCHAIN=local go run . --config /private/path/serverware-client.private.json
+./chain-status-example --config /private/path/serverware-client.private.json
 ```
 
 This imports the saved Basic application login and exact chain-status scope;
@@ -60,16 +69,15 @@ only and is not automatically loaded:
 
 Supply the application token through an environment/CI secret store, not command
 arguments, URLs or tracked files. Use a supported Go release at least 1.25;
-this dependency repair uses official Go 1.26.9. From this directory:
+this dependency repair uses official Go 1.26.9. After the one-time preparation above:
 
 ```sh
-GOTOOLCHAIN=local go mod download
-GOTOOLCHAIN=local go test ./...
-GOTOOLCHAIN=local go run .
+./chain-status-example
 ```
 
-The tests use synthetic in-memory RPC responses and generated certificates; they
-do not call Alchemy or a real proxy. **`go run .` performs two real read requests**
+Optional `GOTOOLCHAIN=local go test ./...` checks use synthetic in-memory RPC
+responses and generated certificates; they do not call Alchemy or a real proxy.
+**`./chain-status-example` performs two real read requests**
 through the configured proxy, subject to its policy. Successful output contains
 only public chain status, for example `{"chain_id":"0x1","block_number":4660}`.
 The first response must identify the selected chain (`0x1` for mainnet,

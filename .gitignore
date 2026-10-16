@@ -11,7 +11,14 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .venv/
+examples/common-apps/.venv-ai/
+examples/common-apps/.venv-services/
 venv/
+
+# Prepared Go examples; build once before supplying private client settings.
+examples/alchemy-chain-status-go/chain-status-example
+examples/x-username-go/x-username-example
+examples/x-post-go/x-post-example
 
 # Rust build output.
 target/

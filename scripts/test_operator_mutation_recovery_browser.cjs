@@ -64,11 +64,64 @@ test('lost reply survives a new workspace and needs a fresh catalog plus explici
   const f = inert(); await f.workspace.refresh();
   f.ctx.respond = (path, options) => options.method === 'POST' ? Promise.reject(new Error('lost reply')) : response(catalog());
   assert.equal(await f.workspace.mutate('credentials', {secret: SECRET}, 'status', () => assert.fail('no reply')), false);
+  assert.equal(f.node('mutation-review-resource').href, '#credentials');
+  assert.equal(f.node('mutation-review-resource').textContent, 'Review Credentials');
+  assert.equal(f.node('mutation-review-resource').hidden, false);
+  assert.doesNotMatch(f.node('mutation-review-text').textContent, /lost one-time token/i);
   const next = inert({storage: f.storage}); assert(next.workspace.state.uncertain); assert(next.node('mutation-review-confirm').disabled);
+  assert(next.node('mutation-review-resource').hidden, 'reload does not invent or persist the prior action context');
   next.click(); assert.equal(next.storage.get(KEY), VALUE);
   await next.workspace.refresh(); assert.equal(next.workspace.state.uncertain, true); assert.equal(next.node('mutation-review-confirm').disabled, false);
   next.click(); assert.equal(next.workspace.state.uncertain, false); assert.equal(next.storage.size, 0);
   assert.equal(next.calls.length, 1); assert(next.calls.every(item => !item.options.method));
+});
+test('action guidance stays in memory and refresh never acknowledges or resends a mutation', async () => {
+  for (const [path, view, token] of [['credentials/replace-key', 'credentials', false],
+    ['applications', 'applications', true], ['applications/rotate-token', 'applications', true],
+    ['applications/renewal/enroll', 'applications', false], ['access-rules/common-app', 'access-rules', false]]) {
+    const f = inert(); await f.workspace.refresh();
+    const destinations = [];
+    f.workspace.subscribe(() => { if (f.workspace.state.uncertain) destinations.push(f.node('mutation-review-resource').href); });
+    f.ctx.respond = (requestPath, options) => options.method === 'POST' ? Promise.reject(new Error(SECRET)) : response(catalog());
+    await f.workspace.mutate(path, {secret: SECRET, name: SECRET}, 'status', () => assert.fail('no reply'));
+    assert.equal(f.node('mutation-review-resource').href, '#' + view);
+    assert.equal(/lost one-time token/i.test(f.node('mutation-review-text').textContent), token);
+    assert(!f.node('mutation-review-text').textContent.includes(SECRET));
+    await f.node('mutation-review-refresh').events.click();
+    assert(destinations.length > 0 && destinations.every(value => value === '#' + view),
+      'review destination is current before Overview or any other subscriber renders');
+    assert(f.workspace.state.uncertain); assert.equal(f.calls.filter(item => item.options.method === 'POST').length, 1);
+    assert.deepEqual([...f.storage], [[KEY, VALUE]], 'only the unchanged constant marker is persisted');
+    f.click(); assert.equal(f.workspace.state.uncertain, false); assert(f.node('mutation-review-resource').hidden);
+  }
+});
+test('closed API error headers add safe guidance with status binding and generic fallback', async () => {
+  const f = inert();
+  const message = (status, code = null, fields = null) => f.ctx.operatorApiErrorMessage({status,
+    headers: {get: name => name === 'X-Serverware-Error-Code' ? code : fields}});
+  const expected = {invalid_input: [422, /form fields/], unsupported_policy: [422, /not supported/],
+    catalog_changed: [409, /Saved state changed since/], credential_in_use: [409, /active permissions/],
+    provider_disconnect_required: [409, /provider disconnect/], approval_required: [409, /human approval/],
+    already_configured: [409, /already matches/], capacity_reached: [409, /resource limit/],
+    resource_not_found: [404, /no longer available/], github_app_verification_failed: [503, /GitHub App verification/],
+    mutation_outcome_unknown: [503, /save outcome could not be confirmed/]};
+  for (const [code, [status, pattern]] of Object.entries(expected)) {
+    assert.match(message(status, code), pattern);
+    assert.equal(message(400, code), message(400), 'mismatched status never selects a specialized message');
+  }
+  assert.match(message(422, 'invalid_input', 'scope,secret'), /Check: Operation limits, Provider key or token\./);
+  for (const fields of ['', SECRET, 'secret,' + SECRET, 'secret,secret', '__proto__', 'name,'.repeat(9), 'x'.repeat(513)])
+    assert.equal(message(422, 'invalid_input', fields), message(422));
+  for (const code of [SECRET, '__proto__', 'INVALID_INPUT', 'invalid_input ']) assert.equal(message(422, code), message(422));
+  assert.equal(message(409, 'credential_in_use', 'secret'), message(409));
+  await f.workspace.refresh();
+  f.ctx.respond = (path, options) => options.method === 'POST' ? {ok: false, status: 422,
+    headers: {get: name => name === 'X-Serverware-Error-Code' ? 'invalid_input' : 'secret'},
+    json: () => assert.fail('error body is not parsed or rendered')} : response(catalog());
+  await f.workspace.mutate('credentials', {secret: SECRET}, 'status', () => assert.fail('no success'));
+  assert(f.workspace.state.uncertain, 'recognized local validation still retains the existing review hold');
+  assert.match(f.node('status').textContent, /Provider key or token/);
+  assert.equal(f.calls.filter(item => item.options.method === 'POST').length, 1);
 });
 for (const fault of ['get', 'set', 'silent-set']) test(fault + ' persistence failure refuses POST and private callback', async () => {
   const f = inert({fault}); await f.workspace.refresh();
@@ -204,7 +257,13 @@ const browserTests = [
       await context.route(ORIGIN + CREATE, async route => { assert.equal(await marker(page), VALUE); await route.fallback(); });
       await credentialForm(page); await page.locator('#connect-credential-next').click(); await held(page);
       assert.equal(state.credentials.length, 1); assert.equal(state.posts.length, 1);
+      assert.equal(await page.locator('#mutation-review-resource').getAttribute('href'), '#credentials');
+      assert.doesNotMatch(await page.locator('#mutation-review-text').innerText(), /lost one-time token/i);
+      await page.locator('#mutation-review-resource').click(); await page.locator('#credentials').waitFor({state: 'visible'});
+      await page.locator('#mutation-review-refresh').click(); await held(page);
+      assert.equal(state.posts.length, 1, 'review navigation and refresh do not resend or acknowledge');
       state.catalogStatus = 503; await page.reload({waitUntil: 'networkidle'}); await held(page);
+      assert(await page.locator('#mutation-review-resource').isHidden());
       assert(await page.locator('#mutation-review-confirm').isDisabled());
       await page.locator('#mutation-review-confirm').dispatchEvent('click'); assert.equal(await marker(page), VALUE);
       state.catalogStatus = 200; await view(page, 'credentials'); await page.locator('#credentials-refresh').click();

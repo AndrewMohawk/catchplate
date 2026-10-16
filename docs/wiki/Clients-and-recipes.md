@@ -1,6 +1,6 @@
 # Clients and recipes
 
-[Home](https://github.com/AndrewMohawk/serverware/wiki/Home) · [Getting started](https://github.com/AndrewMohawk/serverware/wiki/Getting-started) · [Proxy and CA](https://github.com/AndrewMohawk/serverware/wiki/Proxy-and-CA)
+[Home](Home.md) · [Getting started](Getting-started.md) · [Proxy and CA](Proxy-and-CA.md)
 
 A **client** is your script, agent, CLI tool or CI job. It is not the provider account it uses.
 
@@ -21,7 +21,7 @@ A GitHub App ID is **not** `SERVERWARE_APP_ID`. The latter is the Serverware cli
 7. Open **Proxy setup**, select this client and permission, and download the interception CA. Verify it through your trusted operator channel. Use the proxy URL, not the workspace URL.
 8. Prepare the chosen example's dependencies **before supplying the client token**, then run its reviewed entrypoint and inspect **Audit log**.
 
-Presets and copied recipes are capability-gated. If the matching control is unavailable, do not replace it with a broad generic grant or disable verification. See [Permissions and policies](https://github.com/AndrewMohawk/serverware/wiki/Permissions-and-policies).
+Presets and copied recipes are capability-gated. If the matching control is unavailable, do not replace it with a broad generic grant or disable verification. See [Permissions and policies](Permissions-and-policies.md).
 
 ## Inputs the client receives
 
@@ -89,7 +89,7 @@ Manual token rotation remains the default. The deployed ordinary instance offers
 4. Wait for the matching saved policy to load, then choose **Download public setup JSON**. This contains public identifiers, fingerprint and timing—not a private key or proxy token. Follow the same README's `configure` instructions using that setup and the separately saved token.
 5. Follow the README's [worker instructions](https://github.com/AndrewMohawk/serverware/blob/main/examples/managed-client/README.md#run-a-worker) for the actual run commands and CA setup. A saved enrollment or setup download does not prove a renewal or provider request succeeded.
 
-The helper must regularly obtain a current token and replace SDK connection pools when its generation changes. The previous token has **at most five minutes of overlap**, ending sooner at its original expiry. Renewal cannot extend its own enrollment. Cancellation, enrollment replacement or manual rotation invalidates the old renewal authority and overlap; see [Operations and maintenance](https://github.com/AndrewMohawk/serverware/wiki/Operations-and-maintenance#manage-workload-renewal).
+The helper must regularly obtain a current token and replace SDK connection pools when its generation changes. The previous token has **at most five minutes of overlap**, ending sooner at its original expiry. Renewal cannot extend its own enrollment. Cancellation, enrollment replacement or manual rotation invalidates the old renewal authority and overlap; see [Operations and maintenance](Operations-and-maintenance.md#manage-workload-renewal).
 
 The normal proxy passed isolated synthetic-provider checks with stock Requests 2.31.0, and the shipped helper's default HTTPS transport separately passed with its locked Requests 2.34.2 graph. That run recovered a saved pending operation from its reopened journal without a second issuance, then joined two provider calls to audit. The deployed GET-only UI check also passed. An explicitly enrolled deployed workload and a real provider job still need acceptance. See the [project tracker](https://github.com/AndrewMohawk/serverware/blob/main/docs/project-completion.md#default-managed-helper-https--isolated-connected-acceptance); do not interpret this recipe as real-provider verification.
 
@@ -234,14 +234,14 @@ confirmation below remain required.
 
 ## GitHub Actions
 
-Five reviewed **inactive samples** are available: [GitHub issues](https://github.com/AndrewMohawk/serverware/blob/main/examples/github-issues-node/workflow.example.yml), [npm metadata](https://github.com/AndrewMohawk/serverware/blob/main/examples/npm-registry/workflow.example.yml), [Alchemy reads](https://github.com/AndrewMohawk/serverware/blob/main/examples/alchemy-chain-status-node/workflow.example.yml), [X username lookup](https://github.com/AndrewMohawk/serverware/blob/main/examples/x-username-node/workflow.example.yml), and [a common-app GET](https://github.com/AndrewMohawk/serverware/blob/main/examples/common-apps/github-actions.yml).
+Six reviewed **inactive samples** are available: [GitHub issues](https://github.com/AndrewMohawk/serverware/blob/main/examples/github-issues-node/workflow.example.yml), [npm metadata](https://github.com/AndrewMohawk/serverware/blob/main/examples/npm-registry/workflow.example.yml), [Alchemy reads](https://github.com/AndrewMohawk/serverware/blob/main/examples/alchemy-chain-status-node/workflow.example.yml), [X username lookup](https://github.com/AndrewMohawk/serverware/blob/main/examples/x-username-node/workflow.example.yml), [Gmail reads](https://github.com/AndrewMohawk/serverware/blob/main/examples/google-gmail-node/workflow.example.yml), and [a common-app GET](https://github.com/AndrewMohawk/serverware/blob/main/examples/common-apps/github-actions.yml).
 
-For the four Node samples:
+For each sample:
 
 1. Keep the corresponding example directory and lock in your repository. Review the sample, then deliberately copy it into `.github/workflows/`.
 2. Create a protected GitHub environment, restrict it to trusted default-branch runs, and control who may approve access. The samples call it `serverware-demo`; that is a legacy **GitHub environment name**, not a separate Serverware mode. Rename it consistently if desired.
-3. Set environment secrets `SERVERWARE_PROXY_TOKEN`, `SERVERWARE_CA_PEM`, and optional `SERVERWARE_PROXY_CA_PEM` where supported. Obtain CA material from your trusted operator. Never add provider keys, refresh tokens or GitHub App private keys.
-4. Set the sample's variables: proxy URL, client UUID and exact provider selectors. Ensure the proxy is reachable from the runner and the client token remains valid.
+3. For GitHub, Alchemy, X username, Gmail and the common-app GET, supply the complete private download as `SERVERWARE_CLIENT_CONFIG_JSON`, plus `SERVERWARE_CA_PEM` and optional `SERVERWARE_PROXY_CA_PEM`. Their connection and exact selectors come from the downloaded permission, not separately retyped variables. Obtain CA material from your trusted operator; never add provider keys, refresh tokens or GitHub App private keys.
+4. The npm sample retains its documented `SERVERWARE_PROXY_TOKEN`, CA secrets and proxy/client/package variables; follow that sample's instructions rather than mixing the two configuration formats. For every sample, the proxy must be reachable from the runner and the client token unexpired. GitHub requires the read-only `github_issues_read_v1` download, not its write-enabled bundle.
 5. Run manually on the trusted default branch. Dependency installation receives no Serverware token; only the final bounded read step receives the client configuration.
 
 The common-app sample uses Ubuntu 24.04's Python 3.12 and the checked-in
@@ -312,6 +312,6 @@ Use the same workload model: create a client for the agent/job, grant only its r
 
 For a different application, first identify its documented proxy, proxy-authentication and TLS hooks. Setting `HTTPS_PROXY` alone is **not** a general SDK integration guarantee. The examples use explicit per-client transport configuration; some launch isolated children. npm and PyGithub also document combined-CA tradeoffs rather than independent trust stores. Never weaken TLS or rewrite SDK requests to force a preset match.
 
-Use finite job deadlines and inspect audit records on failure. Do not automatically retry writes, post unknown outcomes, or interpret a blocked response as proof of no upstream effect. Client-token expiry is separate from provider-token refresh. Manually managed clients need explicit rotation and a workload-secret update; long-running workers can instead use the optional finite enrollment above. Revoke unused permissions or clients. See [Operations and maintenance](https://github.com/AndrewMohawk/serverware/wiki/Operations-and-maintenance).
+Use finite job deadlines and inspect audit records on failure. Do not automatically retry writes, post unknown outcomes, or interpret a blocked response as proof of no upstream effect. Client-token expiry is separate from provider-token refresh. Manually managed clients need explicit rotation and a workload-secret update; long-running workers can instead use the optional finite enrollment above. Revoke unused permissions or clients. See [Operations and maintenance](Operations-and-maintenance.md).
 
-Saving AWS credentials alone is not publication permission; the deployed ECR capability still needs its exact approved regional destination, client permission and image review. For unavailable capabilities or denials, use [Troubleshooting](https://github.com/AndrewMohawk/serverware/wiki/Troubleshooting) and the [capability matrix](https://github.com/AndrewMohawk/serverware/wiki/Capability-matrix-and-glossary); do not substitute broader authority.
+Saving AWS credentials alone is not publication permission; the deployed ECR capability still needs its exact approved regional destination, client permission and image review. For unavailable capabilities or denials, use [Troubleshooting](Troubleshooting.md) and the [capability matrix](Capability-matrix-and-glossary.md); do not substitute broader authority.

@@ -1,6 +1,6 @@
 # Custom API credentials
 
-[Home](https://github.com/AndrewMohawk/serverware/wiki/Home) · [Credentials and providers](https://github.com/AndrewMohawk/serverware/wiki/Credentials-and-providers) · [Proxy and CA](https://github.com/AndrewMohawk/serverware/wiki/Proxy-and-CA)
+[Home](Home.md) · [Credentials and providers](Credentials-and-providers.md) · [Proxy and CA](Proxy-and-CA.md)
 
 Use a manual credential when your API accepts a Bearer token or a key in one HTTP header and its requests fit Serverware's supported JSON profile. This example gives a status-checking script access to **one GET endpoint**, without giving the script the provider secret.
 
@@ -18,7 +18,7 @@ Never put the provider secret into the client, a URL, the dummy-value field, sou
 
 ## 1. Check the destination and save the credential
 
-The operator must already have approved your API's HTTPS origin, for example `https://api.example.test`. Check **Proxy setup → Proxy destinations**. If the actual origin is absent, use the [destination configuration procedure](https://github.com/AndrewMohawk/serverware/wiki/Proxy-and-CA#let-the-proxy-reach-a-new-provider) with the deployment owner. Preparing a destination change is not live activation; a permission cannot add a host or wildcard.
+The operator must already have approved your API's HTTPS origin, for example `https://api.example.test`. Check **Proxy setup → Proxy destinations**. If the actual origin is absent, use the [destination configuration procedure](Proxy-and-CA.md#let-the-proxy-reach-a-new-provider) with the deployment owner. Preparing a destination change is not live activation; a permission cannot add a host or wildcard.
 
 Open **Credentials → Manual API key**:
 
@@ -119,7 +119,7 @@ Send exactly one matching header. A missing, different or duplicate value is ref
 
 Check the actual API response, then open **Audit log → Refresh log**. Search by the saved client or permission reference and compare the recorded identity and timing with your request. Use **Allowed responses** or **Blocked / withheld responses** to narrow the results; use **All events** when investigating failures that did not release a response.
 
-An active permission proves policy activation, not provider-key validity. A denied request may indicate the wrong proxy token, expiry, host/path/method, header/dummy value or unsupported response. Do not fix it by broadening every permission. Follow [Troubleshooting](https://github.com/AndrewMohawk/serverware/wiki/Troubleshooting).
+An active permission proves policy activation, not provider-key validity. A denied request may indicate the wrong proxy token, expiry, host/path/method, header/dummy value or unsupported response. Do not fix it by broadening every permission. Follow [Troubleshooting](Troubleshooting.md).
 
 **Verify audit log** checks the local stored chain, not an independent witness or hardware attestation. A withheld response can follow an attempted upstream request. If you later adapt this recipe to writes, an error or timeout is not proof that nothing happened; never automatically replay an uncertain write.
 

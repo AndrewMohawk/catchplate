@@ -16,13 +16,22 @@ accepts HTTP 201, matching the [X create-post API](https://docs.x.com/x-api/post
 
 ## Prepared input contract
 
+Prepare once with Go 1.23 or newer, from this directory and before supplying
+any client credentials:
+
+```sh
+GOTOOLCHAIN=local go mod download
+GOTOOLCHAIN=local go build -o x-post-example .
+```
+
+Reuse that binary for subsequent jobs; no install or build is needed per run.
 For an existing posting grant, download its private client JSON and verified CA
 from **Proxy setup**. Set `SERVERWARE_X_POST_TEXT` to your intended post and
 `SERVERWARE_X_POST_CONFIRM=post-once` explicitly in your local environment, then
 run from this directory:
 
 ```sh
-GOTOOLCHAIN=local go run . --config /private/path/serverware-client.private.json
+./x-post-example --config /private/path/serverware-client.private.json
 ```
 
 This sends one real post, subject to the grant. **The JSON never supplies post

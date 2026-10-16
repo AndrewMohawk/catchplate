@@ -1,12 +1,16 @@
-# INACTIVE SAMPLE. Review and copy deliberately into .github/workflows/.
-# No workflow, proxy, TLS or real Alchemy acceptance is claimed by this file.
+# INACTIVE SAMPLE: review and copy deliberately into .github/workflows/.
+# Keep this example and its reviewed package-lock.json in the checkout.
+# Set SERVERWARE_CLIENT_CONFIG_JSON to the downloaded private READ permission,
+# SERVERWARE_CA_PEM to its public CA, and optional SERVERWARE_PROXY_CA_PEM only
+# for a private outer proxy CA. No provider key or separate scope selectors.
+# Use a protected serverware-demo environment. No workflow run is claimed here.
 name: Read Alchemy chain status through Serverware
 on:
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: serverware-alchemy-chain-status-example
+  group: serverware-alchemy-read-example
   cancel-in-progress: false
 jobs:
   read:
@@ -32,38 +36,78 @@ jobs:
           token: ''
       - name: Install without application credentials or lifecycle scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Read the explicitly permitted chain status
-        timeout-minutes: 2
+      - name: Read using the downloaded permission
+        timeout-minutes: 3
         env:
-          SERVERWARE_PROXY_URL: ${{ vars.SERVERWARE_PROXY_URL }}
-          SERVERWARE_APP_ID: ${{ vars.SERVERWARE_APP_ID }}
-          SERVERWARE_PROXY_TOKEN: ${{ secrets.SERVERWARE_PROXY_TOKEN }}
-          SERVERWARE_ALCHEMY_CHAIN: ${{ vars.SERVERWARE_ALCHEMY_CHAIN }}
-          TRUSTED_SERVERWARE_CA_PEM: ${{ secrets.SERVERWARE_CA_PEM }}
-          TRUSTED_PROXY_CA_PEM: ${{ secrets.SERVERWARE_PROXY_CA_PEM }}
+          SERVERWARE_CLIENT_CONFIG_JSON: ${{ secrets.SERVERWARE_CLIENT_CONFIG_JSON }}
+          SERVERWARE_CA_PEM: ${{ secrets.SERVERWARE_CA_PEM }}
+          SERVERWARE_PROXY_CA_PEM: ${{ secrets.SERVERWARE_PROXY_CA_PEM }}
         run: |
           set -euo pipefail
           umask 077
           test "$(node --version)" = v25.5.0
-          ca_dir=$(mktemp -d -- "$RUNNER_TEMP/serverware-alchemy-ca.XXXXXXXX")
-          trap 'rm -f -- "$ca_dir/serverware-ca.pem" "$ca_dir/proxy-ca.pem"; rmdir -- "$ca_dir"' EXIT
-          export SERVERWARE_CA_FILE="$ca_dir/serverware-ca.pem"
-          unset SERVERWARE_PROXY_CA_FILE
-          if [[ -n "$TRUSTED_PROXY_CA_PEM" ]]; then
-            export SERVERWARE_PROXY_CA_FILE="$ca_dir/proxy-ca.pem"
-          fi
+          private_dir=$(mktemp -d -- "$RUNNER_TEMP/serverware-alchemy-read.XXXXXXXX")
+          export SERVERWARE_CI_PRIVATE_DIR="$private_dir"
+          printf 'SERVERWARE_CI_PRIVATE_DIR=%s\n' "$private_dir" >> "$GITHUB_ENV"
+          cleanup() {
+            rm -f -- "$private_dir/client.private.json" "$private_dir/serverware-ca.pem" \
+              "$private_dir/proxy-ca.pem" "$private_dir/response.private.json"
+            rmdir -- "$private_dir"
+          }
+          trap cleanup EXIT
           node --input-type=module <<'NODE'
           import { writeFileSync } from 'node:fs';
-          for (const [path, pem] of [
-            [process.env.SERVERWARE_CA_FILE, process.env.TRUSTED_SERVERWARE_CA_PEM],
-            [process.env.SERVERWARE_PROXY_CA_FILE, process.env.TRUSTED_PROXY_CA_PEM],
-          ]) {
-            if (!path) continue;
-            if (!pem || !pem.includes('-----BEGIN CERTIFICATE-----') || Buffer.byteLength(pem) > 262144) {
-              throw new Error('Explicit trusted CA input required');
-            }
-            writeFileSync(path, pem, { mode: 0o600, flag: 'wx' });
+          import { join } from 'node:path';
+          import { X509Certificate } from 'node:crypto';
+          import { loadClientConfig } from './client.mjs';
+          try {
+            const directory = process.env.SERVERWARE_CI_PRIVATE_DIR;
+            const filename = join(directory, 'client.private.json');
+            const raw = process.env.SERVERWARE_CLIENT_CONFIG_JSON ?? '';
+            if (!raw || Buffer.byteLength(raw) > 65536) throw new Error();
+            const config = JSON.parse(raw);
+            if (!config || typeof config !== 'object' || Array.isArray(config)
+                || config.operation_bundle !== 'alchemy_chain_status_read_v1') throw new Error();
+            writeFileSync(filename, raw, { mode: 0o600, flag: 'wx' });
+            // Validate the original download first. No CA is read and no request
+            // is sent by loadClientConfig. Commands/headers in JSON stay inert.
+            loadClientConfig(filename, {});
+            const publicCa = (name, pem) => {
+              if (!pem || Buffer.byteLength(pem) > 262144) throw new Error();
+              const pattern = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+              const blocks = pem.match(pattern);
+              if (!blocks || blocks.length > 32 || pem.replace(pattern, '').trim()) throw new Error();
+              for (const block of blocks) new X509Certificate(block);
+              writeFileSync(join(directory, name), pem, { mode: 0o600, flag: 'wx' });
+            };
+            publicCa('serverware-ca.pem', process.env.SERVERWARE_CA_PEM);
+            const extra = process.env.SERVERWARE_PROXY_CA_PEM ?? '';
+            if (extra) publicCa('proxy-ca.pem', extra);
+            // Only local CA filenames change; login and saved scope are retained.
+            config.ca_file = 'serverware-ca.pem';
+            config.proxy_ca_file = extra ? 'proxy-ca.pem' : null;
+            writeFileSync(filename, JSON.stringify(config), { mode: 0o600, flag: 'w' });
+            loadClientConfig(filename, {});
+          } catch {
+            console.error('Invalid private client configuration or public CA inputs; no request sent.');
+            process.exitCode = 1;
           }
           NODE
-          unset TRUSTED_SERVERWARE_CA_PEM TRUSTED_PROXY_CA_PEM
-          timeout --signal=TERM --kill-after=5s 40s node client.mjs
+          unset SERVERWARE_CLIENT_CONFIG_JSON SERVERWARE_CA_PEM SERVERWARE_PROXY_CA_PEM
+          timeout --signal=TERM --kill-after=5s 40s \
+            node client.mjs --config "$private_dir/client.private.json" > "$private_dir/response.private.json"
+          # Never log provider data or upload private files as workflow artifacts.
+          printf '%s\n' 'Read completed. Provider response withheld from workflow logs.'
+      - name: Remove any remaining private files
+        if: always()
+        run: |
+          set -euo pipefail
+          private_dir="${SERVERWARE_CI_PRIVATE_DIR:-}"
+          if [[ -z "$private_dir" || ! -d "$private_dir" ]]; then exit 0; fi
+          case "$private_dir" in
+            "$RUNNER_TEMP"/serverware-alchemy-read.????????) ;;
+            *) printf '%s\n' 'Refusing cleanup of an unexpected directory.' >&2; exit 1 ;;
+          esac
+          rm -f -- "$private_dir/client.private.json" "$private_dir/serverware-ca.pem" \
+            "$private_dir/proxy-ca.pem" "$private_dir/response.private.json"
+          rmdir -- "$private_dir"

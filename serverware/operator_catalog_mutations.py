@@ -37,6 +37,22 @@ class CatalogNotFound(Exception):
     """No catalog resource has this identifier."""
 
 
+class CredentialInUse(CatalogConflict):
+    """Saved permissions still reference the credential."""
+
+
+class ProviderDisconnectRequired(CatalogConflict):
+    """The provider-aware account disconnect flow is required."""
+
+
+class ApprovalRequired(CatalogConflict):
+    """The selected operation cannot disable its mandatory review."""
+
+
+class CatalogSettingUnchanged(CatalogConflict):
+    """The saved setting already equals the requested value."""
+
+
 class CatalogLimitReached(Exception):
     def __init__(self, collection: str, reason: str):
         self.collection, self.reason = collection, reason
@@ -895,9 +911,9 @@ def revoke_credential(payload: TargetInput, actor_id: str) -> dict:
         if record.get("auth_type") in {"google_oauth", "x_oauth"}:
             # A shared OAuth grant needs provider-aware disconnect and retained
             # cleanup; the static deletion endpoint cannot substitute for it.
-            raise CatalogConflict()
+            raise ProviderDisconnectRequired()
         if _active_rules(catalog, "credential_id", payload.id):
-            raise CatalogConflict()
+            raise CredentialInUse()
         from serverware import operator_catalog_aws as aws
         from serverware import operator_github_app
         removed = (db.delete_operator_aws_credential(conn, payload.id) if aws.selected(record)
@@ -948,7 +964,7 @@ def set_application_proxy_authentication(payload: ApplicationProxyAuthentication
         record = _target(catalog, "applications", payload.id)
         previous = schema.application_proxy_authentication(record)
         if previous == payload.proxy_authentication:
-            raise CatalogConflict()
+            raise CatalogSettingUnchanged()
         rules = _active_rules(catalog, "application_id", payload.id)
         record["proxy_authentication"] = payload.proxy_authentication
         return _Change(schema.save_resource(conn, "applications", record), authority_changed=bool(rules),
@@ -961,9 +977,9 @@ def set_rule_approval(payload: RuleApprovalInput, actor_id: str) -> dict:
         record = _target(catalog, "access_rules", payload.id)
         from serverware import operator_catalog_ecr
         if operator_catalog_ecr.selected(record):
-            raise CatalogConflict("ECR publication review is mandatory")
+            raise ApprovalRequired()
         if record.get("approval_mode", "automatic") == payload.approval_mode:
-            raise CatalogConflict()
+            raise CatalogSettingUnchanged()
         if payload.approval_mode == "automatic":
             record.pop("approval_mode", None)
         else:

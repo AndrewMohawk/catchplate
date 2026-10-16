@@ -1,6 +1,6 @@
 # Permissions and policies
 
-[Home](https://github.com/AndrewMohawk/serverware/wiki/Home) · [Credentials](https://github.com/AndrewMohawk/serverware/wiki/Credentials-and-providers) · [Remove or rotate access](https://github.com/AndrewMohawk/serverware/wiki/Operations-and-maintenance)
+[Home](Home.md) · [Credentials](Credentials-and-providers.md) · [Remove or rotate access](Operations-and-maintenance.md)
 
 A permission answers: **which client may use which credential, for what operation?** The saved permissions are compiled into the proxy's signed policy. A destination being approved by the operator does not grant every client access to it.
 
@@ -19,7 +19,7 @@ Use **Set up access**, select the saved credential and client, and choose the op
 | X account posting | The connected account; optional shared attempt limit when available | Media, replies or general X API access |
 | Alchemy chain status | Mainnet or Sepolia; two fixed read methods | Transactions, arbitrary RPC, batches or WebSockets |
 
-Preset support still requires the matching instance capability, approved destination and provider-side rights. See [the capability matrix](https://github.com/AndrewMohawk/serverware/wiki/Capability-matrix-and-glossary) for source contracts.
+Preset support still requires the matching instance capability, approved destination and provider-side rights. See [the capability matrix](Capability-matrix-and-glossary.md) for source contracts.
 
 ## “I only want the credential replaced; I do not need response filtering”
 
@@ -91,7 +91,7 @@ after five minutes; an approval lasts at most sixty seconds within that window.
 This trusts the server administrator: full host control can bypass the checks or
 alter local state. It does not require a per-action YubiKey/WebAuthn ceremony or
 provide TEE protection. Future hardware-backed enforcement is separate. See
-[review operations](https://github.com/AndrewMohawk/serverware/wiki/Operations-and-maintenance#host-trusted-request-review).
+[review operations](Operations-and-maintenance.md#host-trusted-request-review).
 
 ## Check activation and revocation
 

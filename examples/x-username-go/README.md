@@ -25,11 +25,20 @@ keep these boundaries separate.
 
 ## Configure and run
 
+Prepare once with Go 1.23 or newer, from this directory and before supplying
+any client credentials:
+
+```sh
+GOTOOLCHAIN=local go mod download
+GOTOOLCHAIN=local go build -o x-username-example .
+```
+
+Reuse that binary for subsequent jobs; no install or build is needed per run.
 For an existing permission, download its private client JSON and verified CA
 from **Proxy setup**, then run from this directory:
 
 ```sh
-GOTOOLCHAIN=local go run . --config /private/path/serverware-client.private.json
+./x-username-example --config /private/path/serverware-client.private.json
 ```
 
 The file supplies only the saved Basic application login and exact username
@@ -63,16 +72,15 @@ operator setup flow. Use the HTTPS proxy URL, not the admin UI URL. Supply:
 | `SERVERWARE_X_USERNAME` | The exact lowercase username selected in the permission, without `@` |
 
 Use an environment/CI secret store for the application token; do not place it in
-command arguments, URLs or tracked files. With Go 1.23 or later:
+command arguments, URLs or tracked files. After the one-time preparation above:
 
 ```sh
-GOTOOLCHAIN=local go mod download
-GOTOOLCHAIN=local go test ./...
-GOTOOLCHAIN=local go run .
+./x-username-example
 ```
 
-The tests use in-memory SDK responses and generated synthetic certificates; they
-do not contact X or a proxy. **`go run .` makes one real read request** through
+Optional `GOTOOLCHAIN=local go test ./...` checks use in-memory SDK responses and
+generated certificates; they do not contact X or a proxy.
+**`./x-username-example` makes one real read request** through
 your configured proxy, subject to its policy. A matched response prints
 `{"users":1}`. HTTP-200 error envelopes, missing data, wrong-user responses,
 provider errors and transport failures are not reported as successful lookups.

@@ -1,6 +1,6 @@
 # Credentials and providers
 
-[Home](https://github.com/AndrewMohawk/serverware/wiki/Home) · [Supported capabilities](https://github.com/AndrewMohawk/serverware/wiki/Capability-matrix-and-glossary) · [Rotation and reauthorization](https://github.com/AndrewMohawk/serverware/wiki/Operations-and-maintenance)
+[Home](Home.md) · [Supported capabilities](Capability-matrix-and-glossary.md) · [Rotation and reauthorization](Operations-and-maintenance.md)
 
 A credential is a provider account or key stored by Serverware. It is not your console login or a client's proxy token. Saving one grants no client access.
 
@@ -14,7 +14,7 @@ Provider options are capability-dependent. An unavailable destination or unsuppo
 
 ## GitHub: personal access token or GitHub App
 
-For a complete read-only example, follow [Create and install a GitHub App](https://github.com/AndrewMohawk/serverware/wiki/GitHub-App-setup), including provider-console settings, IDs, private-key storage and client verification.
+For a complete read-only example, follow [Create and install a GitHub App](GitHub-App-setup.md), including provider-console settings, IDs, private-key storage and client verification.
 
 **Personal access token:** choose **GitHub personal access token** and paste a token limited to the intended repository and Issues rights. Keep the suggested name or edit it. Saving does not check its provider validity or renew it.
 
@@ -33,9 +33,9 @@ Then assign **Read issues and comments** or **Read and create issues/comments** 
 
 ## Google: connect an account for Gmail reads
 
-The [Google/X OAuth setup guide](https://github.com/AndrewMohawk/serverware/wiki/OAuth-provider-setup#google-operator-application-setup) walks the operator through the provider console, callback registration, fixed scopes and activation before account consent.
+The [Google/X OAuth setup guide](OAuth-provider-setup.md#google-operator-application-setup) walks the operator through the provider console, callback registration, fixed scopes and activation before account consent.
 
-1. The proxy operator configures the Google OAuth application under **Proxy setup**; see [provider application setup](https://github.com/AndrewMohawk/serverware/wiki/Proxy-and-CA).
+1. The proxy operator configures the Google OAuth application under **Proxy setup**; see [provider application setup](Proxy-and-CA.md).
 2. In **Credentials**, choose the Google account connection when available, label the account, and use **Continue to Google**. This is separate from a Google Gemini API key.
 3. Return to Serverware and let it reconcile the exact saved account. If the result is uncertain, use the offered status check rather than starting another consent attempt.
 4. Explicitly use that account with a client and grant **Read Gmail**. Choose **Official Gmail SDK** for the supplied Node/Python/Go projects, or the supported custom HTTP option for your own client.
@@ -58,7 +58,7 @@ A metadata grant does not permit installation, and installation does not permit 
 
 ## X: app-only lookup and account posting are different credentials
 
-For managed account posting, start with [X OAuth application and account setup](https://github.com/AndrewMohawk/serverware/wiki/OAuth-provider-setup#x-operator-application-setup).
+For managed account posting, start with [X OAuth application and account setup](OAuth-provider-setup.md#x-operator-application-setup).
 
 For **X · username lookup**, store the app-only bearer token—not a user OAuth token, API secret or full Authorization header. Assign one exact lowercase username, without `@`, URL or wildcard. This preset cannot post.
 
@@ -91,7 +91,7 @@ not a daily spend budget.
 
 ## Manual API key: Bearer or custom header
 
-Follow the [worked custom-API guide](https://github.com/AndrewMohawk/serverware/wiki/Custom-API-credentials) for a narrow GET permission, verified-TLS curl request, exact dummy replacement and audit check.
+Follow the [worked custom-API guide](Custom-API-credentials.md) for a narrow GET permission, verified-TLS curl request, exact dummy replacement and audit check.
 
 Choose **Manual API key**, name the credential, and select how the provider expects it: a Bearer token or one custom header such as `X-API-Key`. Enter the provider secret without inventing an OAuth lifecycle. Later, a permission selects automatic insertion or exact public-dummy replacement, the approved origin, exact path and methods. This covers supported JSON APIs, not every authentication scheme, SDK or webhook. [Ordinary JSON contract](https://github.com/AndrewMohawk/serverware/blob/main/docs/ordinary-client-compatibility.md).
 
@@ -108,7 +108,7 @@ stock-Boto3 run passed all five actions with eight signed requests/ACKs in
 browser checks passed without human SSO, provider calls or notification delivery.
 Existing destinations/permissions are unchanged and AWS access was not
 automatically enabled. Real AWS remains unverified. See the
-[ECR recipe](https://github.com/AndrewMohawk/serverware/wiki/Clients-and-recipes#aws-ecr-publication)
+[ECR recipe](Clients-and-recipes.md#aws-ecr-publication)
 and [current guide](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-ecr-publication.md).
 
 The capability also supports explicit terminal staging retirement and separate ECR

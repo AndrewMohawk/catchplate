@@ -352,7 +352,10 @@ def main() -> None:
     parser.add_argument("--allow-actions", action="append", default=[], metavar="ALIAS",
         help="Allow explicitly confirmed actions for this configuration alias (default: reads only)")
     parser.add_argument("--console-origin", help="HTTPS Serverware console origin for validated approval links")
-    parser.add_argument("--check", action="store_true", help="Validate configuration without starting MCP or contacting providers")
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument("--check", action="store_true", help="Validate configuration without starting MCP or contacting providers")
+    output.add_argument("--print-client-config", action="store_true",
+        help="Validate locally and print copyable MCP launch JSON, without credentials or provider calls")
     args = parser.parse_args()
     if os.name != "posix":
         raise ValueError("This bounded process-group runner currently requires a POSIX host")
@@ -377,6 +380,21 @@ def main() -> None:
     bounded_json(catalog, MAX_ARGUMENT_BYTES)
     if args.check:
         print(json.dumps({"status": "configured", "operations": len(catalog), "transport": "stdio", "provider_calls": 0}))
+        return
+    if args.print_client_config:
+        # Keep the venv interpreter symlink: resolving it would select the system
+        # Python and lose the installed MCP runtime. Every argument is a separate
+        # JSON string, so spaces need no shell quoting or command evaluation.
+        launch = ["-I", "-B", str(Path(__file__).resolve())]
+        for alias, path in configs.items():
+            launch.extend(["--config", f"{alias}={path}"])
+        for alias in dict.fromkeys(args.allow_actions):
+            launch.extend(["--allow-actions", alias])
+        if args.console_origin:
+            launch.extend(["--console-origin", _console_origin(args.console_origin)])
+        print(json.dumps({"mcpServers": {"serverware": {
+            "command": str(Path(sys.executable).absolute()), "args": launch,
+        }}}, indent=2))
         return
     logging.getLogger("urllib3").setLevel(logging.CRITICAL)
     create_server(operations).run(transport="stdio")

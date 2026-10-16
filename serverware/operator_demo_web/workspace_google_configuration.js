@@ -92,9 +92,29 @@ function projectGoogleConfiguration(value) {
   return value;
 }
 
+function projectGoogleActivationHandoff(value, reference, discovery) {
+  const receipt = projectGoogleConfigurationOperation(value, reference);
+  const current = projectGoogleConfiguration(discovery);
+  if (!googleConfigurationReference(reference) || reference.kind !== 'prepare' || receipt.status !== 'pending' ||
+      current.state !== 'pending' || !operatorExact(current.operation, receipt) || current.revision !== receipt.staged_revision ||
+      current.policy_hash !== receipt.policy_hash || current.effective_settings_digest !== receipt.expected_settings_digest ||
+      !operatorExact(current.effective_settings, receipt.old_settings))
+    throw operatorError('Review the exact pending Google operation again before downloading its handoff.');
+  // Do not export the OAuth client ID, profile/custody objects or any secret fields.
+  return {schema: 'serverware.operatorActivationHandoff/v1', change_kind: 'managed_google',
+    operation_id: receipt.operation_id, observed_status: 'pending', prepared_at: receipt.created_at,
+    reviewed_revision: receipt.reviewed_revision, prepared_revision: receipt.staged_revision,
+    policy_hash: receipt.policy_hash, expected_settings_digest: receipt.expected_settings_digest,
+    profile_binding_digest: receipt.profile_binding_digest,
+    current_origins: [...receipt.old_settings.allowed_upstreams], target_origins: [...receipt.target_settings.allowed_upstreams],
+    status_path: googleConfigurationPath + '/' + receipt.operation_id,
+    next_step: 'Perform the separately reviewed app/proxy restart with managed provider custody preserved. Do not export the secret or add the legacy Google environment layer.',
+    runbook_url: activationHandoffRunbook, notice: activationHandoffNotice};
+}
+
 function createGoogleConfigurationView(workspace) {
   const panel = element('google-configuration-panel');
-  element('proxy').insertBefore(panel, element('proxy-setup-content'));
+  element('proxy-operator-settings').append(panel);
   let discovery = null; let reference = null; let receipt = null; let retainedRaw = null;
   let visible = false; let busy = false; let storageBlocked = false; let recoveryHint = null;
   const holdOwner = 'google-provider-configuration';
@@ -112,6 +132,10 @@ function createGoogleConfigurationView(workspace) {
   const canWrite = () => visible && !busy && !storageBlocked && !workspace.state.busy && !workspace.state.uncertain && current();
   const canCancel = () => visible && !busy && !storageBlocked && !workspace.state.busy && !workspace.state.uncertain &&
     !unresolved() && receipt?.status === 'pending' && reference?.kind === 'prepare';
+  function handoff() {
+    if (!visible || busy || storageBlocked || workspace.state.busy || !current() || unresolved()) return null;
+    try { return projectGoogleActivationHandoff(receipt, reference, discovery); } catch (_) { return null; }
+  }
   function validInput() {
     const secret = element('google-configuration-client-secret').value;
     return googleConfigurationClient(element('google-configuration-client-id').value) && secret.length > 0 &&
@@ -169,6 +193,7 @@ function createGoogleConfigurationView(workspace) {
     element('google-configuration-prepare').disabled = !canWrite() || !eligible || unresolved() || receipt?.status === 'pending' || !validInput();
     element('google-configuration-check').disabled = busy || storageBlocked || !reference || workspace.writeInFlight();
     element('google-configuration-cancel').disabled = !canCancel();
+    element('google-configuration-handoff').disabled = handoff() === null;
     element('google-configuration-callback').textContent = discovery?.redirect_uri || 'Review provider settings to get this deployment’s exact callback URL.';
     element('google-configuration-scopes').textContent = discovery ? discovery.scopes.join('\n') : 'Read Gmail (gmail_readonly); exact scopes are shown after review.';
     element('google-configuration-added-upstream').textContent = !discovery?.review ? 'No configuration change is currently eligible.' :
@@ -317,6 +342,11 @@ function createGoogleConfigurationView(workspace) {
   for (const id of ['google-configuration-client-id', 'google-configuration-client-secret']) element(id).addEventListener('input', render);
   element('google-configuration-check').addEventListener('click', check);
   element('google-configuration-cancel').addEventListener('click', cancel);
+  element('google-configuration-handoff').addEventListener('click', () => {
+    clearSecret(); const value = handoff(); render(); if (value === null) return;
+    try { downloadActivationHandoff(value); say('Downloaded public Google activation handoff. No secret was exported, services restarted or consent started; the deployment owner must recheck the operation.'); }
+    catch (_) { say('The public handoff could not be downloaded. Keep the operation reference and use the activation guide; no settings were changed.'); }
+  });
   element('mutation-review-confirm').addEventListener('click', acknowledgeTerminal);
   window.addEventListener('pagehide', clearSecret);
   if (reference || storageBlocked) {

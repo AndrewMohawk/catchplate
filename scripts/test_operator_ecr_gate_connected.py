@@ -362,6 +362,9 @@ def build(args):
     services["edge"]["command"] = ["-m", "scripts.test_operator_ecr_gate_connected", "edge"]
     for name in ("serverware", "decision-gate-rs"):
         services[name]["environment"]["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(ORIGINS)
+        # Match docker-compose.host-approvals.yml; ECR requires this explicit
+        # ordinary host-trusted profile, never native/TEE approval authority.
+        services[name]["environment"]["SERVERWARE_HOST_TRUSTED_APPROVALS_ENABLED"] = "1"
         services[name]["environment"].pop("SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS", None)
     # Ordinary activation requires /data to start empty and writes its own
     # identity marker. Provision artifact custody in a separate private mount.

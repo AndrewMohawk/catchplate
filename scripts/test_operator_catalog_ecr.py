@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Focused ECR catalog/compiled-policy checks; no credentials or provider I/O."""
 from copy import deepcopy
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -39,6 +40,15 @@ def fixture():
 
 
 class EcrCatalogTests(unittest.TestCase):
+    def test_ecr_schema_supplies_embedded_loader_definition_registry(self):
+        # Rust's closed_embedded_policy_schema requires this even for inline schemas.
+        source = Path(__file__).resolve().parents[1] / "schemas/adapters/aws.ecr.publish.v1.schema.json"
+        embedded_schema = json.loads(source.read_text())
+        self.assertIsInstance(embedded_schema, dict)
+        self.assertIsInstance(embedded_schema.get("$defs"), dict)
+        self.assertEqual(embedded_schema["$id"],
+            "https://serverware.local/schemas/adapters/aws.ecr.publish.v1.schema.json")
+
     def test_typed_catalog_compiles_closed_signing_without_header_injection(self):
         rule, credential, raw = fixture()
         ecr.validate_rule(rule, credential)

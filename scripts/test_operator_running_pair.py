@@ -4,6 +4,9 @@
 The actual boundary runs, but its parent transport is mocked. This proves only
 request admission and delegation, not the state of any running app/gate pair.
 """
+import copy
+import json
+import os
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -97,6 +100,61 @@ class ReadonlyPairTests(unittest.TestCase):
             self.check.json_request(self.check.control, CATALOG)
         self.assertIs(raised.exception, failure)
         self.parent.assert_called_once_with(self.check, self.check.control, CATALOG)
+
+    def catalog_fixture(self):
+        origins = ["https://demo-upstream:8443"] + [f"https://provider-{index}.example.com" for index in range(15)]
+        snapshot = {"schema": "serverware.operatorCatalog/v1", "mode": "operator-development",
+            "productionReady": False, "hardwareVerified": False, "allowed_upstreams": origins,
+            "revision": 17, "policy": {"policy_hash": "sha256:" + "a" * 64, "sequence": 12},
+            **{key: [] for key in checker.COLLECTIONS}}
+        env = patch.dict(os.environ, {"SERVERWARE_OPERATOR_DEMO_UPSTREAMS": json.dumps(origins),
+            "SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS": '["172.16.249.18/32"]'})
+        env.start()
+        self.addCleanup(env.stop)
+        return snapshot
+
+    def test_catalog_accepts_exact_configured_sixteen_origins_without_transport(self):
+        snapshot = self.catalog_fixture()
+        with patch.object(self.check, "control_json", return_value=snapshot) as transport:
+            self.assertIs(self.check.catalog(), snapshot)
+            self.assertIs(self.check.snapshot, snapshot)
+            transport.assert_called_once_with(CATALOG, authenticated=True)
+        self.parent.assert_not_called()
+
+    def test_catalog_rejects_missing_extra_or_reordered_origins(self):
+        snapshot = self.catalog_fixture()
+        for origins in (snapshot["allowed_upstreams"][:-1], snapshot["allowed_upstreams"] +
+                ["https://other.example.com"], list(reversed(snapshot["allowed_upstreams"]))):
+            with self.subTest(origins=origins), patch.object(self.check, "control_json",
+                    return_value={**snapshot, "allowed_upstreams": origins}):
+                with self.assertRaises(CheckFailure):
+                    self.check.catalog()
+        self.parent.assert_not_called()
+
+    def test_catalog_retains_schema_flags_revision_policy_and_collection_guards(self):
+        snapshot = self.catalog_fixture()
+        changes = (("schema", "other"), ("mode", "other"), ("productionReady", True),
+            ("hardwareVerified", True), ("revision", True), ("revision", 0),
+            ("policy", {"policy_hash": "invalid", "sequence": 12}),
+            ("policy", {"policy_hash": "sha256:" + "a" * 64, "sequence": True}),
+            ("policy", {"policy_hash": "sha256:" + "a" * 64, "sequence": 0}),
+            *((key, {}) for key in checker.COLLECTIONS))
+        for key, value in changes:
+            changed = copy.deepcopy(snapshot)
+            changed[key] = value
+            with self.subTest(key=key, value=value), patch.object(self.check, "control_json", return_value=changed):
+                with self.assertRaises(CheckFailure):
+                    self.check.catalog()
+        self.parent.assert_not_called()
+
+    def test_catalog_invalid_configured_origin_is_refused_before_transport(self):
+        snapshot = self.catalog_fixture()
+        with patch.dict(os.environ, {"SERVERWARE_OPERATOR_DEMO_UPSTREAMS": '["http://provider.example.com"]'}), \
+                patch.object(self.check, "control_json", return_value=snapshot) as transport:
+            with self.assertRaises(ValueError):
+                self.check.catalog()
+            transport.assert_not_called()
+        self.parent.assert_not_called()
 
 
 if __name__ == "__main__":

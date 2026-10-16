@@ -73,7 +73,28 @@ async function choose(page, provider) {
   assert.equal(await page.locator('#connect-credential-next').innerText(), 'Save credential');
   assert.equal(await page.locator('#connect-method-choice').isVisible(), false, 'provider tile skips the old chooser');
   await page.waitForFunction(() => document.activeElement?.id === 'connect-credential-secret', null, {polling: 50});
+  await settledFocus(page);
   assert.equal(await page.locator('#connect-credential-secret').inputValue(), '');
+}
+
+async function settledFocus(page) {
+  // Real frames, with the clock already resumed before the provider click:
+  // observing focus once must not hide a later hash/layout render that blurs it.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'connect-credential-secret', 'secret focus survives the settled render');
+}
+
+async function refreshWithoutMovingFocus(page, state) {
+  const before = state.catalogCalls;
+  await Promise.all([
+    page.waitForResponse(response => response.url() === 'https://operator-catalog.example.test/api/operator-demo/catalog'),
+    // Invoke the existing refresh listener without a pointer/keyboard action
+    // that would legitimately move focus to the refresh button itself.
+    page.locator('#connect-status-refresh').dispatchEvent('click')
+  ]);
+  await page.waitForFunction(() => !document.getElementById('connect-status-refresh').disabled, null, {polling: 50});
+  assert.equal(state.catalogCalls, before + 1); assert.equal(state.posts.length, 0);
+  await settledFocus(page);
 }
 
 async function privateAbsent(page) {
@@ -98,7 +119,9 @@ function cases(artifacts) {
   return [
     ...['openai', 'github', 'npm', 'manual'].map(provider => [provider + ': provider tile, default name, focused secret and Enter save only a credential',
       browser => synthetic(browser, {provider}, async (page, state) => {
-        await choose(page, provider); await page.locator('#connect-credential-secret').fill(SECRET);
+        await choose(page, provider);
+        if (provider === 'openai') await refreshWithoutMovingFocus(page, state);
+        await page.locator('#connect-credential-secret').fill(SECRET);
         await page.locator('#connect-credential-secret').press('Enter'); await saved(page, state);
         await page.locator('#connect-saved-done').click(); await page.locator('#credentials').waitFor({state: 'visible'});
         assert.match(await page.locator('#credentials-list').innerText(), new RegExp(DEFAULT_NAMES[provider]));

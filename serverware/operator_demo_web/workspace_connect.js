@@ -51,6 +51,7 @@ function createConnectView(workspace, applications, proxy) {
   let connectionMethod = null; let savedChoice = ''; let beforeGoogle = null;
   let selectedCommonApp = '';
   let saveOnly = false; let savedCredential = '';
+  let pendingCredentialFocus = '';
   let includeDiagnostics = false;
   element('connect-x-post-quota').value = 'none';
   const catalog = () => workspace.state.catalog;
@@ -82,9 +83,18 @@ function createConnectView(workspace, applications, proxy) {
     return true;
   }
   function focusCredentialSecret() {
-    const id = connectionMethod === 'x' ? 'connect-x-secret' : connectionMethod === 'alchemy' ? 'connect-alchemy-secret' :
+    pendingCredentialFocus = connectionMethod === 'x' ? 'connect-x-secret' : connectionMethod === 'alchemy' ? 'connect-alchemy-secret' :
       newGithubApp() ? 'connect-github-app-id' : 'connect-credential-secret';
-    requestAnimationFrame(() => { if (location.hash === '#connect' && !element(id).disabled) element(id).focus(); });
+    focusVisibleCredential();
+  }
+  function focusVisibleCredential() {
+    if (!open || !pendingCredentialFocus || location.hash !== '#connect') return;
+    const input = element(pendingCredentialFocus);
+    if (input.matches(':disabled') || !input.getClientRects().length) return;
+    // Hash navigation can finish after the first animation frame. Focus only
+    // once the router has shown and rendered this editor, never a hidden form.
+    input.focus();
+    if (document.activeElement === input) pendingCredentialFocus = '';
   }
   const credential = () => catalog()?.credentials.find(item => item.id === selectedCredential && item.status === 'active' && (!isAwsCredential(item) || ecrAvailable(catalog(), item)));
   const commonPreset = () => catalog()?.capabilities?.common_apps ? commonAppPreset(catalog(), connectionMethod === 'common' ? selectedCommonApp : credential()?.app_preset) : null;
@@ -990,6 +1000,7 @@ function createConnectView(workspace, applications, proxy) {
   element('connect-back').addEventListener('click', () => { if (step > 0 && step < 4 && !workspace.state.busy && !checkpoint) { review = null; goto(step - 1); } });
   element('connect-status-refresh').addEventListener('click', () => workspace.refresh({manual: true}));
   function resetDraft() {
+    pendingCredentialFocus = '';
     element('connect-approval-required').checked = false;
     selectedCredential = ''; selectedApplication = ''; selectedRule = ''; review = null; checkpoint = null; savedCredential = '';
     includeDiagnostics = false;
@@ -1078,5 +1089,6 @@ function createConnectView(workspace, applications, proxy) {
     if (!active) { element('connect-credential-secret').value = ''; element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; element('connect-github-private-key').value = ''; }
     if (!active || step !== 4) proxy.mount(null);
     render();
+    if (active) focusVisibleCredential(); else pendingCredentialFocus = '';
   }};
 }

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.local/schemas/adapters/aws.ecr.publish.v1.schema.json",
+  "title": "Exact-image host-reviewed ECR publication",
+  "type": "object", "additionalProperties": false,
+  "required": ["credentialBinding", "registryId", "region", "repositoryName", "imageTag", "approval", "request", "response"],
+  "properties": {
+    "registryId": {"type": "string", "pattern": "^[0-9]{12}$"},
+    "region": {"type": "string", "minLength": 1, "maxLength": 63, "pattern": "^(?!cn-)[a-z]{2}-[a-z]+-[1-9][0-9]?$"},
+    "repositoryName": {"type": "string", "minLength": 2, "maxLength": 256,
+      "pattern": "^(?:[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*/)*[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*$"},
+    "imageTag": {"type": "string", "minLength": 1, "maxLength": 300, "pattern": "^[!-~]{1,300}$"},
+    "approval": {"const": {"mode": "host_review_v1", "scope": "publication"}},
+    "credentialBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["credentialType", "provider", "subjects", "secretClass"],
+      "properties": {
+        "credentialType": {"const": "static"}, "provider": {"const": "operator-demo"},
+        "secretClass": {"const": "awsSigV4"},
+        "subjects": {"type": "array", "minItems": 1, "maxItems": 1,
+          "items": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"}}
+      }
+    },
+    "request": {"const": {
+      "allowedHeaders": ["amz-sdk-invocation-id", "amz-sdk-request", "authorization", "user-agent", "x-amz-date", "x-amz-target"],
+      "discardHeaders": ["accept-encoding"], "allowedQueryKeys": [],
+      "allowedMediaTypes": ["application/x-amz-json-1.1"], "maxBodyBytes": 16777216, "valueRules": []
+    }},
+    "response": {"const": {
+      "mode": "awsEcrPublicationJsonV1", "maxBodyBytes": 26214400,
+      "contentTypes": ["application/x-amz-json-1.1"], "allowedHeaders": [],
+      "error": {"mode": "awsEcrPublicationJsonV1", "maxBodyBytes": 65536,
+        "contentTypes": ["application/x-amz-json-1.1", "application/json"], "allowedHeaders": [], "onInvalid": "block"}
+    }}
+  }
+}

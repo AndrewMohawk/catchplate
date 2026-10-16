@@ -175,6 +175,19 @@ class AwsEcrSigningTests(unittest.TestCase):
             credentials().secret_access_key = "x" * 40
         self.reject(signing.SignedRequest)
 
+    def test_explicit_transport_accept_is_signed_and_dispatch_bound(self):
+        signed = self.signed(include_accept=True)
+        headers = dict(signed.headers)
+        self.assertEqual(headers["accept"], "*/*")
+        self.assertIn("SignedHeaders=accept;content-type;host;x-amz-date;x-amz-target,", headers["authorization"])
+        signing.assert_dispatch(signed, **dispatch_fields(signed))
+        for changed in (tuple((k, v) for k, v in signed.headers if k != "accept"),
+                tuple((k, "application/json" if k == "accept" else v) for k, v in signed.headers)):
+            self.reject(signing.assert_dispatch, signed, **dispatch_fields(signed, headers=changed))
+        for value in (1, "true", None):
+            self.reject(self.signed, include_accept=value)
+        self.assertNotIn("accept", dict(self.signed().headers))
+
     def test_five_actions_exact_owned_headers_and_canonical_input(self):
         self.assertEqual(signing.ACTIONS, frozenset(ACTION_NAMES))
         for session in (False, True):

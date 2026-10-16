@@ -210,6 +210,8 @@ def initialize() -> None:
             from serverware import operator_x_quota
             if operator_x_quota.enabled():
                 operator_x_quota.initialize(conn)
+            from serverware import operator_ecr_publications
+            operator_ecr_publications.initialize(conn)
             conn.commit()
             operator_google_managed_config.committed(conn)
         materialize()

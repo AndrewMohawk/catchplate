@@ -23,7 +23,7 @@ function projectAwsCredential(item) {
   if (!item || Object.keys(item).some(key => !allowed.includes(key)) ||
       item.auth_type !== 'aws_sigv4_v1' || item.connection_type !== 'aws_sigv4_v1' ||
       item.provider_id !== 'aws' || item.header_name !== null || item.legacy_upstream_origin != null ||
-      item.signing_available !== false || typeof item.expired !== 'boolean' || item.active_rule_count !== 0 ||
+      item.signing_available !== false || typeof item.expired !== 'boolean' || !Number.isSafeInteger(item.active_rule_count) || item.active_rule_count < 0 ||
       !['long_term', 'session'].includes(item.credential_kind) ||
       (item.credential_kind === 'long_term' ? item.expires_at !== null || item.expired : !awsUtc(item.expires_at)) ||
       (item.status === 'active' ? !Number.isSafeInteger(generation) || generation < 1 : item.status !== 'revoked' || generation !== null) ||
@@ -49,14 +49,14 @@ function awsReplaceAvailable(catalog, credential) {
   return awsStorageAvailable(catalog) && isAwsCredential(credential) && credential.status === 'active' &&
     Number.isSafeInteger(credential.credential_generation) && credential.credential_generation < Number.MAX_SAFE_INTEGER;
 }
-function awsCredentialRows(credential) {
+function awsCredentialRows(credential, catalog) {
   const expired = credential.expired || credential.credential_kind === 'session' && Date.parse(credential.expires_at) <= Date.now();
-  return [['Authentication', 'AWS Signature Version 4 credentials — storage only'],
+  return [['Authentication', ecrAvailable(catalog, credential) ? 'AWS credentials · scoped ECR publication only' : 'AWS Signature Version 4 credentials — storage only'],
     ['Credential kind', credential.credential_kind === 'session' ? 'Temporary session' : 'Long-term access key'],
     ['Session expiry (UTC)', credential.expires_at || 'No session expiry supplied'],
     ['Expiry observation', credential.credential_kind === 'long_term' ? 'No session expiry; validity not tested' :
       expired ? 'Expired — replace the complete tuple explicitly' : 'Not past supplied expiry; validity not tested'],
-    ['Availability', operatorAwsNotice], ['Automatic renewal', 'None']];
+    ['Availability', ecrAvailable(catalog, credential) ? 'ECR publication owner and proxy advertised; AWS entitlement is untested' : operatorAwsNotice], ['Automatic renewal', 'None']];
 }
 function createAwsCredentialsView(workspace) {
   const selector = element('credential-storage-type');
@@ -89,7 +89,8 @@ function createAwsCredentialsView(workspace) {
     element('aws-storage-availability').hidden = selector.value !== 'aws';
     element('credential-fields').disabled = selector.value !== 'manual' || !workspace.ready('credentials');
     element('aws-credential-fields').disabled = !available || !workspace.ready('credentials');
-    element('aws-storage-availability').textContent = available ? operatorAwsNotice +
+    element('aws-storage-availability').textContent = available && projectEcrCapability(workspace.state.catalog?.capabilities.ecr_publication) ?
+      'Save AWS credentials, then use them with a client and an exact ECR publishing permission. Whole-image approval is mandatory. Saving does not test AWS access or renew credentials.' : available ? operatorAwsNotice +
       ' Save or replace credentials only. No AWS validation request, application access or automatic renewal.' :
       'AWS credential storage is not advertised by this deployment. Manual header credentials are not a substitute.';
     if (!available || workspace.state.uncertain || !workspace.state.catalog) { clear('aws-credential'); close(); }
@@ -164,7 +165,7 @@ function createAwsCredentialsView(workspace) {
         status(statusId, 'AWS change acknowledged, but refreshed state is unconfirmed. Inspect it before another action.'); return;
       }
       status(statusId, (replacing ? 'Complete AWS tuple replaced in Serverware. ' : 'AWS credentials saved in Serverware. ') +
-        operatorAwsNotice + ' No AWS request was made; this does not revoke or renew credentials at AWS.');
+        (ecrAvailable(refreshed, current) ? 'Use with a client to grant an exact ECR permission. ' : operatorAwsNotice + ' ') + 'No AWS request was made; this does not revoke or renew credentials at AWS.');
     } catch (error) {
       if (attempted) workspace.requireReview('The AWS change outcome could not be confirmed. Inspect saved state before another action.');
       status(statusId, operatorMessage(error));

@@ -254,7 +254,7 @@ def checks(name):
 class OperatorUpstreamBoundsTests(unittest.TestCase):
     def test_explicit_origin_capacity_matches_startup_and_prepare(self):
         from serverware import operator_demo, operator_upstream_setup
-        origins = ["https://service-" + str(index) + ".example.com" for index in range(16)]
+        origins = ["https://service-" + str(index) + ".example.com" for index in range(32)]
         payload = {"expected_revision": 1, "expected_policy_hash": "sha256:" + "0" * 64,
             "operation_id": str(uuid.uuid4()), "allowed_upstreams": origins,
             "expected_settings_digest": "sha256:" + "1" * 64}
@@ -264,11 +264,11 @@ class OperatorUpstreamBoundsTests(unittest.TestCase):
         retained = {"allowed_upstreams": origins, "fixture_cidrs": []}
         self.assertEqual(operator_google_setup._settings(json.dumps(retained, sort_keys=True)), retained)
         google_target = operator_google_setup._target({"allowed_upstreams": origins[:-1], "fixture_cidrs": []})
-        self.assertEqual(len(google_target["allowed_upstreams"]), 16)
+        self.assertEqual(len(google_target["allowed_upstreams"]), 32)
         self.assertEqual(google_target["allowed_upstreams"][-1], "https://gmail.googleapis.com")
         with self.assertRaises(operator_google_setup.SetupUnavailable):
             operator_google_setup._target(retained)
-        for invalid in ([], origins + ["https://overflow.example.com"], origins + [origins[0]]):
+        for invalid in ([], origins + ["https://overflow.example.com"], origins[:-1] + [origins[0]]):
             with self.assertRaises(ValueError):
                 operator_upstream_setup.PrepareInput(**{**payload, "allowed_upstreams": invalid})
             with self.assertRaises(RuntimeError):

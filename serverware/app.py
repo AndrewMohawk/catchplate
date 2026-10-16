@@ -392,6 +392,7 @@ _OPERATOR_CATALOG_BODY_POST_PATHS = frozenset({
     "/api/operator-demo/access-rules/x-username",
     "/api/operator-demo/access-rules/x-post",
     "/api/operator-demo/access-rules/alchemy-chain-status",
+    "/api/operator-demo/access-rules/aws-ecr-publication",
     "/api/operator-demo/oauth/google/disconnect",
     "/api/operator-demo/oauth/google/reauthorize",
     "/api/operator-demo/oauth/google/reauthorization-storage",
@@ -649,6 +650,14 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     from serverware import operator_host_approvals_api as host_approvals
     if operator_active and request.method == "POST" and host_approvals.owns_post(request.scope.get("path")):
         # The exact host-only routes authenticate before their bounded parser.
+        return await call_next(request)
+    from serverware import operator_ecr_publications_api as ecr_publications
+    from serverware import operator_ecr_signing_api as ecr_signing
+    if (operator_active and request.method == "POST" and (
+            ecr_publications.owns_post(request.scope.get("path"))
+            or ecr_signing.owns_post(request.scope.get("path")))):
+        # Authentication precedes the dedicated bounded raw-upload/lease parser.
+        # The unchanged outer signer authenticates actual machine responses.
         return await call_next(request)
     if _operator_catalog_body_is_route_owned(request.method, request.scope.get("path"),
             operator_active=operator_active):
@@ -30329,6 +30338,8 @@ from serverware import operator_x_configuration_api as _operator_x_configuration
 from serverware import operator_x_accounts_api as _operator_x_accounts_api
 from serverware import operator_notification_api as _operator_notification_api
 from serverware import operator_host_approvals_api as _operator_host_approvals_api
+from serverware import operator_ecr_publications_api as _operator_ecr_publications_api
+from serverware import operator_ecr_signing_api as _operator_ecr_signing_api
 
 _fastapi_app.include_router(_registration_handoff_routes.router)
 _fastapi_app.include_router(_registration_recovery_routes.router)
@@ -30349,4 +30360,6 @@ _fastapi_app.include_router(_operator_x_configuration_api.router)
 _fastapi_app.include_router(_operator_x_accounts_api.router)
 _fastapi_app.include_router(_operator_notification_api.router)
 _fastapi_app.include_router(_operator_host_approvals_api.router)
+_fastapi_app.include_router(_operator_ecr_publications_api.router)
+_fastapi_app.include_router(_operator_ecr_signing_api.router)
 app = _SignedControlPlaneASGI(_fastapi_app)

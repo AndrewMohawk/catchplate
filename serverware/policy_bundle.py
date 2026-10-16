@@ -25,7 +25,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
-from serverware import alchemy_rpc_read, github_issues, host_trusted_approval_policy, npm_install, npm_metadata, npm_publish, x_app_read, x_post
+from serverware import alchemy_rpc_read, ecr_publication_policy, github_issues, host_trusted_approval_policy, npm_install, npm_metadata, npm_publish, x_app_read, x_post
 from serverware import operator_audit_timing as _audit_timing
 from serverware.config import (
     POLICY_BUNDLE_PATH,
@@ -108,7 +108,7 @@ def _deep_freeze(value: Any) -> Any:
 
 
 SUPPORTED_ADAPTERS = {"generic.rest", "gmail.v1", "gmail.read.v1", "x.v2", "npm.registry",
-    npm_install.ADAPTER, npm_metadata.ADAPTER, npm_publish.ADAPTER, x_app_read.ADAPTER, x_post.ADAPTER, alchemy_rpc_read.ADAPTER}
+    npm_install.ADAPTER, npm_metadata.ADAPTER, npm_publish.ADAPTER, x_app_read.ADAPTER, x_post.ADAPTER, alchemy_rpc_read.ADAPTER, ecr_publication_policy.ADAPTER}
 GMAIL_READ_ADAPTER = "gmail.read.v1"
 ORDERED_FORM_QUERY_MODE = "orderedFormV1"
 GMAIL_READ_RESPONSE_MODE = "gmailReadJsonV1"
@@ -447,6 +447,8 @@ def adapter_operation_field_names(
         return x_post.OPERATION_FIELDS if operation == x_post.OPERATION else None
     if adapter_type == alchemy_rpc_read.ADAPTER:
         return alchemy_rpc_read.OPERATION_FIELDS if operation == alchemy_rpc_read.OPERATION else None
+    if adapter_type == ecr_publication_policy.ADAPTER:
+        return ecr_publication_policy.OPERATION_FIELDS if operation == ecr_publication_policy.OPERATION else None
     return None
 
 
@@ -475,7 +477,7 @@ def adapter_operation_query_fields(
             (adapter_config.get("request") or {}).get("allowedQueryKeys") or []
         )
     if adapter_type in {"npm.registry", npm_install.ADAPTER, npm_metadata.ADAPTER, npm_publish.ADAPTER, x_app_read.ADAPTER, x_post.ADAPTER,
-            alchemy_rpc_read.ADAPTER}:
+            alchemy_rpc_read.ADAPTER, ecr_publication_policy.ADAPTER}:
         return frozenset()
     return None
 SUPPORTED_CONSTRAINTS = {
@@ -700,6 +702,7 @@ OAUTH_BINDING_FIELDS = frozenset(
     {"provider", "providerSubjects", "clientIds", "requiredScopes"}
 )
 CREDENTIAL_INJECTION_FIELDS = {
+    "awsEcrSigningV1": frozenset({"type"}),
     "bearer": frozenset({"type", "header", "field", "prefix"}),
     "basic": frozenset({"type", "header", "field", "username"}),
     "header": frozenset({"type", "name", "field", "prefix"}),
@@ -2505,6 +2508,9 @@ def _validate_route_credential_binding(
     paths: tuple[str, ...],
 ) -> None:
     binding = adapter_config.get("credentialBinding")
+    signing = credential is not None and credential.injection.get("type") == "awsEcrSigningV1"
+    if signing != (adapter_type == ecr_publication_policy.ADAPTER):
+        raise PolicyBundleError(f"route {route_id} AWS signing requires its dedicated ECR adapter")
     if credential is None:
         if adapter_type != "generic.rest":
             raise PolicyBundleError(
@@ -2630,7 +2636,8 @@ def _validate_route_credential_binding(
             and adapter_type == "npm.registry"
             and secret_class
             in {"automationToken", "granularAccessToken", "legacyToken"}
-        ) or secret_class == {
+        ) or (signing and credential.kind == "static" and credential.provider == "operator-demo"
+            and credential.injection == ecr_publication_policy.INJECTION and secret_class == "awsSigV4") or secret_class == {
             "bearer": "bearerToken",
             "basic": "basicPassword",
             "header": "customHeader",
@@ -2868,6 +2875,8 @@ def _validate_credential_injection(credential_id: str, raw: Any) -> dict[str, An
         raise PolicyBundleError(
             f"credential {credential_id} {injection_type} injection has unsupported fields: {rendered}"
         )
+    if injection_type == "awsEcrSigningV1":
+        return injection  # No generic header/query target or secret export.
 
     field = injection.get("field")
     if field is not None and (
@@ -4916,7 +4925,8 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
             if ("contentTypePolicy" in constraint
                     and constraint["contentTypePolicy"] not in {
                         github_issues.CONTENT_TYPE_POLICY, npm_install.CONTENT_TYPE_POLICY, npm_metadata.CONTENT_TYPE_POLICY,
-                        x_app_read.CONTENT_TYPE_POLICY, x_post.CONTENT_TYPE_POLICY, alchemy_rpc_read.CONTENT_TYPE_POLICY}):
+                        x_app_read.CONTENT_TYPE_POLICY, x_post.CONTENT_TYPE_POLICY, alchemy_rpc_read.CONTENT_TYPE_POLICY,
+                        ecr_publication_policy.CONTENT_TYPE_POLICY}):
                 raise PolicyBundleError(f"route {route_id} responseEnvelope contentTypePolicy is invalid")
             status_codes = constraint.get("statusCodes")
             if (
@@ -5821,6 +5831,8 @@ def _declared_route_operations(
     adapter_config: dict[str, Any],
     paths: tuple[str, ...],
 ) -> set[str]:
+    if adapter_type == ecr_publication_policy.ADAPTER:
+        return {ecr_publication_policy.OPERATION}
     if adapter_type == npm_install.ADAPTER:
         return {npm_install.OPERATIONS[adapter_config["mode"]]}
     if adapter_type == alchemy_rpc_read.ADAPTER:
@@ -5951,6 +5963,14 @@ def validate_buffered_passthrough_response(
     """
     safe_headers = SAFE_RESPONSE_HEADERS
     mode = response.get("mode") if isinstance(response, dict) else None
+    if adapter_type == ecr_publication_policy.ADAPTER or mode == ecr_publication_policy.MODE:
+        try:
+            if adapter_type != ecr_publication_policy.ADAPTER:
+                raise ValueError("typed adapter required")
+            ecr_publication_policy.validate_response_profile(response, constraints)
+        except (TypeError, ValueError):
+            raise PolicyBundleError(f"route {route_id} ECR publication response profile is invalid") from None
+        return
     if adapter_type == x_post.ADAPTER or mode == x_post.MODE:
         try:
             if adapter_type != x_post.ADAPTER:
@@ -6125,7 +6145,7 @@ def _validate_optional_response_release_contract(
     adapter_name: str,
     *, adapter_config: dict[str, Any] | None = None,
 ) -> None:
-    if adapter_name in {npm_install.ADAPTER, npm_metadata.ADAPTER, npm_publish.ADAPTER, x_app_read.ADAPTER, x_post.ADAPTER, alchemy_rpc_read.ADAPTER}:
+    if adapter_name in {npm_install.ADAPTER, npm_metadata.ADAPTER, npm_publish.ADAPTER, x_app_read.ADAPTER, x_post.ADAPTER, alchemy_rpc_read.ADAPTER, ecr_publication_policy.ADAPTER}:
         validate_buffered_passthrough_response(route_id, adapter_name, response,
             adapter_config=adapter_config)
         return
@@ -6341,6 +6361,8 @@ def provider_request_profile(adapter_type: str, mode: str | None = None, *,
     if query_mode is not None and (adapter_type != GMAIL_READ_ADAPTER
             or query_mode != ORDERED_FORM_QUERY_MODE):
         raise PolicyBundleError("unsupported provider query mode")
+    if adapter_type == ecr_publication_policy.ADAPTER:
+        return ecr_publication_policy.request_profile()
     if adapter_type == npm_install.ADAPTER:
         return npm_install.request_profile(mode)
     if adapter_type == x_app_read.ADAPTER:
@@ -6513,6 +6535,12 @@ def _validate_adapter_security_invariants(
     signed_policy: bool,
 ) -> None:
     request_query_mode(adapter_type, adapter_config)
+    if adapter_type == ecr_publication_policy.ADAPTER:
+        try:
+            ecr_publication_policy.validate_authority(adapter_config, adapter=adapter_type, host=host,
+                credential_ref=credential_ref, jit=jit, methods=methods, paths=paths, constraints=constraints)
+        except (TypeError, ValueError):
+            raise PolicyBundleError(f"route {route_id} ECR publication authority is invalid") from None
     if adapter_type == x_post.ADAPTER:
         try:
             x_post.validate_authority(adapter_config, adapter=adapter_type, host=host,
@@ -6556,7 +6584,7 @@ def _validate_adapter_security_invariants(
         except (TypeError, ValueError):
             raise PolicyBundleError(f"route {route_id} GitHub authority is invalid") from None
     if adapter_type in {"gmail.v1", GMAIL_READ_ADAPTER, "x.v2", "npm.registry",
-            npm_install.ADAPTER, npm_metadata.ADAPTER, npm_publish.ADAPTER, x_app_read.ADAPTER, x_post.ADAPTER, alchemy_rpc_read.ADAPTER}:
+            npm_install.ADAPTER, npm_metadata.ADAPTER, npm_publish.ADAPTER, x_app_read.ADAPTER, x_post.ADAPTER, alchemy_rpc_read.ADAPTER, ecr_publication_policy.ADAPTER}:
         _validate_provider_request_profile(route_id, adapter_type, adapter_config)
 
     if adapter_type == GMAIL_READ_ADAPTER:
@@ -7123,6 +7151,8 @@ def compile_policy_bundle(
             credential_id,
             item.get("injection"),
         )
+        if injection == ecr_publication_policy.INJECTION and (kind != "static" or provider != "operator-demo"):
+            raise PolicyBundleError(f"credential {credential_id} AWS signing identity is invalid")
         if kind == "oauth2":
             _validate_managed_oauth_injection(credential_id, provider, injection)
         credentials[credential_id] = CredentialPolicy(
@@ -7193,6 +7223,7 @@ def compile_policy_bundle(
                 else {x_app_read.MODE} if adapter_type == x_app_read.ADAPTER
                 else {x_post.MODE} if adapter_type == x_post.ADAPTER
                 else {alchemy_rpc_read.MODE} if adapter_type == alchemy_rpc_read.ADAPTER
+                else {ecr_publication_policy.MODE} if adapter_type == ecr_publication_policy.ADAPTER
                 else {GMAIL_READ_RESPONSE_MODE} if adapter_type == GMAIL_READ_ADAPTER
                 else SUPPORTED_RESPONSE_MODES if adapter_type == "generic.rest" else BUFFERED_RESPONSE_MODES | {"stream"})
             if not isinstance(response_mode, str) or response_mode not in supported_modes:
@@ -7202,7 +7233,8 @@ def compile_policy_bundle(
                 isinstance(max_response_bytes, bool)
                 or not isinstance(max_response_bytes, int)
                 or max_response_bytes < 0
-                or max_response_bytes > 16 * 1024 * 1024
+                or max_response_bytes > (ecr_publication_policy.MAX_RESPONSE_BYTES
+                    if adapter_type == ecr_publication_policy.ADAPTER else 16 * 1024 * 1024)
             ):
                 raise PolicyBundleError(
                     f"route {route_id} response maxBodyBytes must be an integer between 0 and 16777216"
@@ -7651,6 +7683,14 @@ def compile_policy_bundle(
             or "jit" in item or "responseObservation" in item
         ):
             raise PolicyBundleError(f"route {route_id} Alchemy RPC read transport or authority extension is invalid")
+        if adapter_type == ecr_publication_policy.ADAPTER and (
+            match.get("scheme") != "https" or match.get("host") != ecr_publication_policy.host(adapter_config["region"])
+            or type(match.get("port")) is not int or match["port"] != 443
+            or match.get("methods") != ["POST"] or match.get("paths") != ["/"]
+            or "credentialHeader" in item or "jit" in item or "responseObservation" in item
+            or credentials[credential_ref].injection != ecr_publication_policy.INJECTION
+        ):
+            raise PolicyBundleError(f"route {route_id} ECR publication transport or authority extension is invalid")
         if adapter_type == npm_publish.ADAPTER and (
             match.get("scheme") != "https" or match.get("host") != npm_publish.HOST
             or type(match.get("port")) is not int or match["port"] != 443

@@ -314,6 +314,24 @@ class ReplaceAwsSigV4CredentialInput(TargetInput, _AwsSigV4TupleInput):
     expected_credential_generation: int = Field(ge=1, lt=9_007_199_254_740_991)
 
 
+class AwsEcrRuleInput(NamedInput):
+    application_id: str = Field(min_length=36, max_length=36)
+    credential_id: str = Field(min_length=36, max_length=36)
+    operation_bundle: Literal["aws_ecr_publish_v1"]
+    registry_id: str = Field(min_length=12, max_length=12)
+    region: str = Field(min_length=1, max_length=63)
+    repository_name: str = Field(min_length=2, max_length=256)
+    image_tag: str = Field(min_length=1, max_length=300)
+    approval_mode: Literal["host_review_v1"]
+    _canonical_ids = field_validator("application_id", "credential_id")(_identifier)
+
+    @model_validator(mode="after")
+    def exact_scope(self):
+        from serverware.ecr_publication_policy import validate_scope
+        validate_scope(self.registry_id, self.region, self.repository_name, self.image_tag)
+        return self
+
+
 class GoogleDisconnectInput(TargetInput):
     """Explicit review of local impact and Google's wider revocation boundary."""
     confirmed_affected_rule_ids: list[Annotated[str, Field(min_length=36, max_length=36)]] = Field(max_length=64)

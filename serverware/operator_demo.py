@@ -15,7 +15,7 @@ from serverware.development_sandbox import (
 
 SCHEMA = "serverware.operatorDemo/v1"
 # Keep aligned with the deployed Rust operator_demo::Deployment parser.
-MAX_ALLOWED_UPSTREAMS = 16
+MAX_ALLOWED_UPSTREAMS = 32
 MARKER = ".serverware-operator-demo.json"
 MARKER_BYTES = b'{"schema": "serverware.operatorDemo/v1", "syntheticOnly": false}\n'
 _pid = None
@@ -103,7 +103,7 @@ def active() -> bool:
 def _destinations(raw, fixture) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Validate both raw deployment inputs and retained managed settings."""
     if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_ALLOWED_UPSTREAMS:
-        raise RuntimeError("operator workspace requires 1-16 explicitly allowed HTTPS origins")
+        raise RuntimeError("operator workspace requires 1-32 explicitly allowed HTTPS origins")
     upstreams = tuple(origin(item)[0] for item in raw)
     if len(set(upstreams)) != len(upstreams):
         raise RuntimeError("operator demo upstream origins must be unique")
@@ -232,6 +232,10 @@ def request_allowed(method: str, path: str) -> bool:
     from serverware import operator_host_approvals as host_approvals
     if host_approvals.owns_post(path):
         return method.upper() == "POST"
+    from serverware import operator_ecr_publications_api as ecr_publications
+    from serverware import operator_ecr_signing_api as ecr_signing
+    if ecr_publications.owns_post(path) or ecr_signing.owns_post(path):
+        return method.upper() == "POST"
     x_accounts = "/api/operator-demo/oauth/x"
     if path == "/api/oauth/callback/x" or path in {x_accounts + "/start", x_accounts + "/disconnect"}:
         from serverware import operator_x_admission
@@ -295,6 +299,7 @@ def request_allowed(method: str, path: str) -> bool:
         "/api/operator-demo/access-rules/x-username",
         "/api/operator-demo/access-rules/x-post",
         "/api/operator-demo/access-rules/alchemy-chain-status",
+        "/api/operator-demo/access-rules/aws-ecr-publication",
         "/api/operator-demo/oauth/google/disconnect", "/api/operator-demo/oauth/google/reauthorize",
         "/api/operator-demo/oauth/google/setup/cancel",
         "/api/operator-demo/proxy/upstreams/cancel",

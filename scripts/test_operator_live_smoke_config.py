@@ -57,7 +57,7 @@ class LiveSmokeConfigurationTests(unittest.TestCase):
         malformed = ["", "[", "null", "true", "{}", '"https://demo-upstream:8443"',
             "[NaN]", "[Infinity]", "[]", json.dumps([FOUR[1]]), json.dumps(FOUR + [FOUR[1]]),
             json.dumps([FIXTURE, None]), json.dumps([FIXTURE, True]), json.dumps([FIXTURE, {}]),
-            json.dumps([FIXTURE] + [f"https://host{number}.example.com" for number in range(16)]),
+            json.dumps([FIXTURE] + [f"https://host{number}.example.com" for number in range(32)]),
             " " * 32769, b"[]", [], 1, True]
         aliases = ["http://api.github.com", "HTTPS://api.github.com", "https://API.github.com",
             "https://api.github.com/", "https://api.github.com:443", "https://api.github.com:8443",
@@ -71,8 +71,9 @@ class LiveSmokeConfigurationTests(unittest.TestCase):
         for raw in malformed:
             with self.subTest(raw=repr(raw)), self.assertRaises(smoke.CheckFailure):
                 smoke.parse_expected_upstreams(raw)
-        maximum = [FIXTURE] + [f"https://host{number}.example.com" for number in range(15)]
-        self.assertEqual(smoke.parse_expected_upstreams(json.dumps(maximum)), maximum)
+        for capacity in (16, 32):
+            maximum = [FIXTURE] + [f"https://host{number}.example.com" for number in range(capacity - 1)]
+            self.assertEqual(smoke.parse_expected_upstreams(json.dumps(maximum)), maximum)
 
     def test_catalog_requires_exact_selected_roster_and_preserves_previous_snapshot_on_refusal(self):
         for selection in (None, json.dumps(FOUR)):

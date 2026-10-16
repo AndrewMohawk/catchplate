@@ -118,6 +118,36 @@ const tests = [
     assert.throws(() => delta(review(), FIXTURE + '\n' + NPM + '\n' + NPM));
     assert.throws(() => delta(review({old_settings: {allowed_upstreams: [GITHUB], fixture_cidrs: []}, protected_origins: [], fixed_first_origin: null}), GITHUB + '\n' + FIXTURE));
   }],
+  ['32 destinations preserve the retained roster; 33 and duplicate destinations refuse', () => {
+    const origins = [FIXTURE, ...Array.from({length: 31}, (_, index) => `https://service-${index}.example.com`)];
+    const retained = origins.slice(0, 16);
+    const protectedOrigins = origins.map(origin => ({origin, reasons: ['retained_policy']}))
+      .sort((left, right) => left.origin.localeCompare(right.origin));
+    const full = review({old_settings: {...OLD, allowed_upstreams: origins}, protected_origins: protectedOrigins});
+    assert.deepEqual(project(full), full);
+    const change = delta(review({old_settings: {...OLD, allowed_upstreams: retained}}), origins.join('\n'));
+    assert.deepEqual(change.allowed_upstreams, origins);
+    assert.deepEqual(change.removed, []);
+    assert.deepEqual(change.added, origins.slice(16));
+    assert.deepEqual(projectReceipt(receipt({target_settings: {...OLD, allowed_upstreams: origins}})).target_settings.allowed_upstreams, origins);
+    const overflow = [...origins, 'https://overflow.example.com'];
+    assert.throws(() => delta(review(), overflow.join('\n')), error => /1–32/.test(error.uiMessage));
+    assert.throws(() => project(review({old_settings: {...OLD, allowed_upstreams: overflow}})));
+    assert.throws(() => project({...full, protected_origins: [...protectedOrigins, protectedOrigins[0]]}));
+    assert.throws(() => delta(review(), [...origins.slice(0, -1), origins[1]].join('\n')));
+    assert.match(HTML, /Use 1–32 unique canonical HTTPS origins/);
+  }],
+  ['Google destination addition obeys the same 32-origin bound', () => {
+    vm.runInContext(readFileSync(resolve(ROOT, 'serverware/operator_demo_web/workspace_google_configuration.js'), 'utf8'), pure.value, {timeout: 1000});
+    const origins = Array.from({length: 31}, (_, index) => `https://service-${index}.example.com`);
+    const gmail = 'https://gmail.googleapis.com';
+    const target = {allowed_upstreams: [...origins, gmail], fixture_cidrs: []};
+    const accepts = (old, next) => pure.run('googleConfigurationTarget(input.old,input.target)', {old, target: next});
+    assert.equal(accepts({allowed_upstreams: origins, fixture_cidrs: []}, target), true);
+    assert.equal(accepts(target, target), true);
+    assert.equal(accepts({allowed_upstreams: [...origins, NPM], fixture_cidrs: []},
+      {allowed_upstreams: [...origins, NPM, gmail], fixture_cidrs: []}), false);
+  }],
   ['same-set reorders, protected removal and fixed-first changes never prepare', () => {
     assert.throws(() => delta(review(), FIXTURE)); assert.throws(() => delta(review(), NPM));
     assert.throws(() => delta(review(), NPM + '\n' + FIXTURE));

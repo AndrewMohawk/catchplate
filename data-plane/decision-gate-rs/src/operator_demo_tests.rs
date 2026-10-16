@@ -220,6 +220,27 @@ fn operator_demo_deployment_origins_and_fixture_ips_are_narrow_and_immutable() {
 }
 
 #[test]
+fn operator_demo_origin_capacity_is_bounded_at_thirty_two() {
+    let origins: Vec<String> = (0..32)
+        .map(|index| format!("https://service-{index}.example.com"))
+        .collect();
+    for count in [16, 32] {
+        let settings = json!({"allowed_upstreams": &origins[..count], "fixture_cidrs": []});
+        assert!(Deployment::parse(&settings["allowed_upstreams"].to_string(), None).is_ok());
+        assert!(Deployment::managed(&settings).is_ok());
+    }
+    let mut overflow = origins.clone();
+    overflow.push("https://overflow.example.com".to_owned());
+    let mut duplicate = origins.clone();
+    duplicate[31] = duplicate[0].clone();
+    for invalid in [Vec::<String>::new(), overflow, duplicate] {
+        let settings = json!({"allowed_upstreams": invalid, "fixture_cidrs": []});
+        assert!(Deployment::parse(&settings["allowed_upstreams"].to_string(), None).is_err());
+        assert!(Deployment::managed(&settings).is_err());
+    }
+}
+
+#[test]
 fn operator_demo_marker_is_distinct_private_regular_and_single_link() {
     let scratch = Scratch::new();
     let marker = scratch.0.join(".serverware-operator-demo.json");

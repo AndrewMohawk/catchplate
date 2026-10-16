@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 pub(crate) const POLICY: &str = "discardUnselectedV1";
 pub(crate) fn uses_mode(mode: &str) -> bool {
-    matches!(mode, crate::buffered_response::JSON_OR_EMPTY_204_V2_MODE | crate::gmail_read::MODE | crate::npm_metadata::MODE | crate::npm_publish::MODE | crate::x_app_read::MODE | crate::x_post::MODE | crate::alchemy_rpc_read::MODE)
+    matches!(mode, crate::buffered_response::JSON_OR_EMPTY_204_V2_MODE | crate::gmail_read::MODE | crate::npm_metadata::MODE | crate::npm_publish::MODE | crate::x_app_read::MODE | crate::x_post::MODE | crate::alchemy_rpc_read::MODE | crate::aws_ecr_publication::MODE)
         || crate::npm_install::supported_response_mode(mode)
 }
 const TRANSPORT: &[&str] = &[

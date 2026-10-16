@@ -247,6 +247,26 @@ pagination are outside these recipes. Provider writes and AI calls that may
 incur charges require an explicit deliberate run; do not replay uncertain
 outcomes automatically.
 
+## AWS ECR publication — source integration, not deployed
+
+The [Boto3 example](https://github.com/AndrewMohawk/serverware/blob/main/examples/ecr-publish-python/README.md)
+adds a narrow workflow under integration: save AWS credentials in Serverware,
+grant one client/account/standard-region/repository/tag permission, stage verified
+image bytes, review that exact image, then explicitly activate its publication
+UUID and publish with `--execute-write`. Only one ECR permission per client and
+region is allowed. This is five ECR API actions ending in `PutImage`, not Docker
+push, an image build or arbitrary AWS access. The private client download carries
+only Serverware login/scope/trust settings, never AWS keys.
+
+The matching new proxy build and connected acceptance are pending; the recorded
+live instance remains storage-only for AWS. Review is host-trusted, not TEE or
+YubiKey enforcement. The original 30-minute deadline is clipped to client/AWS
+expiry; never automatically replay an uncertain upload. Four retained artifact
+slots are not automatically reclaimed, and explicit terminal cleanup and ECR
+Slack/webhook event projection remain unfinished. The local MCP delivery excludes
+ECR. Read the [current ECR guide](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-ecr-publication.md)
+for commands, retained limits and the exact source-versus-live boundary.
+
 ## Agents, scheduled scripts and existing applications
 
 Use the same workload model: create a client for the agent/job, grant only its required operations, and inject only that client's proxy token and trusted CA inputs. Run the maintained example entrypoint as a tool when it matches the task. Do not put provider secrets or the client token into prompts, tool output or conversation history.
@@ -255,4 +275,4 @@ For a different application, first identify its documented proxy, proxy-authenti
 
 Use finite job deadlines and inspect audit records on failure. Do not automatically retry writes, post unknown outcomes, or interpret a blocked response as proof of no upstream effect. Client-token expiry is separate from provider-token refresh. Manually managed clients need explicit rotation and a workload-secret update; long-running workers can instead use the optional finite enrollment above. Revoke unused permissions or clients. See [Operations and maintenance](https://github.com/AndrewMohawk/serverware/wiki/Operations-and-maintenance).
 
-AWS credential storage is not an ECR publication recipe, and ordinary approval-dependent jobs are not enabled by these examples. For unavailable capabilities or denials, use [Troubleshooting](https://github.com/AndrewMohawk/serverware/wiki/Troubleshooting) and the [capability matrix](https://github.com/AndrewMohawk/serverware/wiki/Capability-matrix-and-glossary); do not substitute broader authority.
+Saving AWS credentials alone is not publication permission; the ECR example above remains under integration, not deployed. For unavailable capabilities or denials, use [Troubleshooting](https://github.com/AndrewMohawk/serverware/wiki/Troubleshooting) and the [capability matrix](https://github.com/AndrewMohawk/serverware/wiki/Capability-matrix-and-glossary); do not substitute broader authority.

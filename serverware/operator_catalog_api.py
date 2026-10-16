@@ -29,6 +29,7 @@ MUTATION_PATHS = frozenset(PREFIX + path for path in (
     "/access-rules", "/access-rules/revoke", "/access-rules/approval", "/access-rules/gmail-read", "/access-rules/github", "/access-rules/npm-metadata", "/access-rules/npm-publish", "/access-rules/x-username", "/access-rules/x-post",
     "/access-rules/alchemy-chain-status", "/access-rules/npm-install",
     "/access-rules/common-app",
+    "/access-rules/aws-ecr-publication",
     "/oauth/google/disconnect", "/oauth/google/reauthorize", "/oauth/google/reauthorization-storage",
     "/oauth/google/setup", "/oauth/google/setup/cancel",
     "/proxy/upstreams", "/proxy/upstreams/cancel",
@@ -336,6 +337,11 @@ async def create_rule(request: Request, identity: auth.AdminIdentity = Depends(_
 @router.post("/access-rules/common-app")
 async def create_common_app_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
     return await _mutate(request, identity, "CommonAppRuleInput", "create_common_app_rule", 8192, created=True)
+
+
+@router.post("/access-rules/aws-ecr-publication")
+async def create_ecr_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "AwsEcrRuleInput", "create_ecr_rule", 8192, created=True)
 
 
 @router.post("/access-rules/revoke")

@@ -146,6 +146,12 @@ pub(crate) fn validate_envelope_pairing(
     if adapter_type == crate::alchemy_rpc_read::ADAPTER {
         return crate::alchemy_rpc_read::validate_envelope(mode, constraints);
     }
+    if adapter_type == crate::aws_ecr_publication::ADAPTER {
+        return crate::aws_ecr_publication::validate_envelope(mode, constraints);
+    }
+    if mode == Some(crate::aws_ecr_publication::MODE) {
+        return Err("awsEcrPublicationJsonV1 requires its dedicated ECR adapter".into());
+    }
     if mode == Some(crate::alchemy_rpc_read::MODE) {
         return Err("alchemyRpcReadJsonV1 requires its explicit Alchemy read adapter".into());
     }

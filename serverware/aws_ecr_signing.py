@@ -1,4 +1,4 @@
-"""Pure, unintegrated SigV4 foundation for five ECR API operations only.
+"""Pure SigV4 signing for five ECR API operations only.
 
 This is not authorization. Callers must validate the JSON operation, account,
 repository and upload state; bind current policy/application/credential
@@ -151,12 +151,13 @@ def _require_fresh(signed: SignedRequest, clock: ClockObservation) -> None:
 
 
 def sign(credentials: Credentials, *, region: str, action: str, body: bytes,
-         clock: ClockObservation) -> SignedRequest:
+         clock: ClockObservation, include_accept: bool = False) -> SignedRequest:
     """Sign exact already-authorized bytes; construct every signing header ourselves."""
     try:
         expiry = _credentials_expiry(credentials)
         _check_clock(clock)
-        if (type(region) is not str or not 1 <= len(region) <= 63
+        if (type(include_accept) is not bool
+                or type(region) is not str or not 1 <= len(region) <= 63
                 or _REGION.fullmatch(region) is None or region.startswith("cn-")
                 or type(action) is not str or len(action) > 64 or action not in ACTIONS
                 or type(body) is not bytes or len(body) > MAX_BODY_BYTES
@@ -174,6 +175,11 @@ def sign(credentials: Credentials, *, region: str, action: str, body: bytes,
             "x-amz-date": timestamp,
             "x-amz-target": "AmazonEC2ContainerRegistry_V20150921." + action,
         }
+        if include_accept:
+            # The ordinary reqwest transport supplies this default. Binding it
+            # explicitly prevents an unobserved header insertion after the
+            # final built-request comparison; it is also covered by SigV4.
+            headers["accept"] = "*/*"
         if credentials.session_token is not None:
             headers["x-amz-security-token"] = credentials.session_token
         ordered = sorted(headers.items())

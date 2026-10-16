@@ -194,6 +194,10 @@ def save_resource(conn, collection: str, record: dict, create: bool = False) -> 
 
 def rule_credential_header(rule: dict, credential: dict) -> dict | None:
     """Translate public per-rule input without opening the encrypted credential."""
+    from serverware import operator_catalog_ecr
+    if operator_catalog_ecr.selected(rule):
+        operator_catalog_ecr.validate_rule(rule, credential)
+        return None
     from serverware import operator_catalog_aws
     if operator_catalog_aws.selected(credential):
         raise CatalogIntegrityError('AWS credentials have no access-rule signing profile')
@@ -221,6 +225,10 @@ def rule_credential_header(rule: dict, credential: dict) -> dict | None:
 
 def rule_content_modes(rule: dict) -> tuple[str | None, str]:
     """Validate additive modes without defaulting retained records into them."""
+    from serverware import operator_catalog_ecr
+    if operator_catalog_ecr.selected(rule):
+        operator_catalog_ecr.validate_shape(rule)
+        return None, operator_catalog_ecr.RESPONSE_MODE
     from serverware import operator_catalog_x_post
     if operator_catalog_x_post.selected(rule):
         operator_catalog_x_post.validate_shape(rule)
@@ -267,6 +275,10 @@ def rule_content_modes(rule: dict) -> tuple[str | None, str]:
 
 def rule_request_body_mode(rule: dict, credential: dict) -> str | None:
     """Google's existing exact GET/no-body contract is not widened by this mode."""
+    from serverware import operator_catalog_ecr
+    if operator_catalog_ecr.selected(rule):
+        operator_catalog_ecr.validate_rule(rule, credential)
+        return None
     from serverware import operator_common_apps
     if operator_common_apps.selected(rule) or operator_common_apps.selected(credential):
         operator_common_apps.validate_rule(rule, credential)
@@ -470,6 +482,8 @@ def validate_bindings(conn, catalog: dict | None = None, *, metadata_profile=Non
     operator_catalog_alchemy.validate_route_coexistence(catalog['access_rules'])
     from serverware import operator_catalog_x_post
     operator_catalog_x_post.validate_route_coexistence(catalog['access_rules'], catalog['credentials'])
+    from serverware import operator_catalog_ecr
+    operator_catalog_ecr.validate_route_coexistence(catalog['access_rules'])
 
 
 def initialize(conn) -> None:

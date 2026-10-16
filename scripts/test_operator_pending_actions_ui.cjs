@@ -224,7 +224,7 @@ const tests = [
     assert.match(f.node('pending-actions-status').textContent, /Loading/); assert(f.node('pending-actions-refresh').disabled);
     assert.equal(await f.view.refresh(), false); gate.release(response(capability())); await flush();
     assert.deepEqual(f.calls.map(call => call.path), [CAP, LIST]);
-    assert.equal(f.node('pending-actions-status').textContent, 'No pending actions visible to you.'); f.verify();
+    assert.equal(f.node('pending-actions-status').textContent, 'No individual requests awaiting approval.'); f.verify();
   }],
   ['role and authority list refusal never request metadata', async () => {
     for (const reason of ['role_required', 'authority_unavailable']) {

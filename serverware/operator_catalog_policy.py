@@ -56,16 +56,18 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
     from serverware import operator_common_apps
     from serverware import operator_demo_store as legacy
     from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy
-    from serverware import operator_catalog_aws
+    from serverware import operator_catalog_aws, operator_catalog_ecr
     from serverware import operator_catalog_x_oauth, operator_catalog_x_post
     from serverware import operator_catalog_npm_install
     aws_ids = {row['id'] for row in catalog['credentials'] if operator_catalog_aws.selected(row)}
     for rule in catalog['access_rules']:
         if operator_common_apps.selected(rule):
             operator_common_apps.validate_shape(rule)
-        if rule.get('credential_id') in aws_ids:
+        if rule.get('credential_id') in aws_ids and not operator_catalog_ecr.selected(rule):
             raise schema.CatalogIntegrityError('AWS credentials have no access-rule signing profile')
-        if operator_catalog_x_post.selected(rule):
+        if operator_catalog_ecr.selected(rule):
+            operator_catalog_ecr.validate_shape(rule)
+        elif operator_catalog_x_post.selected(rule):
             operator_catalog_x_post.validate_shape(rule)
         elif operator_catalog_npm_install.selected(rule):
             operator_catalog_npm_install.validate_shape(rule)
@@ -82,6 +84,7 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
         elif operator_catalog_gmail.selected(rule):
             operator_catalog_gmail.validate_shape(rule)
     operator_catalog_x_post.validate_route_coexistence(catalog['access_rules'], catalog['credentials'])
+    operator_catalog_ecr.validate_route_coexistence(catalog['access_rules'])
     credentials = {row['id']: row for row in catalog['credentials']}
     applications = {row['id']: row for row in catalog['applications']}
     selected = [row for row in catalog['access_rules'] if row['status'] == 'active'
@@ -106,7 +109,18 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
             # Reuse only the established envelope; replace the complete static
             # binding below with the verified account's OAuth contract.
             flat['auth_type'] = 'bearer'
-        generated = legacy._build([flat], sequence, initial_hash)
+        ecr = operator_catalog_ecr.selected(rule)
+        if ecr:
+            # The empty bundle supplies only established bundle metadata. AWS
+            # is never rendered through a fake bearer/header credential.
+            generated = legacy._build([], sequence, initial_hash)
+            generated['principals'] = [{'id': application['principal_id'], 'proxyAuthorization': {
+                'scheme': 'Bearer', 'tokenId': application['id'], 'tokenSha256': application['token_sha256'],
+                'expiresAtEpochMs': application['token_expires_at_epoch_ms']}}]
+            generated['credentials'] = [operator_catalog_ecr.credential_policy(credential)]
+            generated['routes'] = [operator_catalog_ecr.render_route(rule, credential, application['principal_id'])]
+        else:
+            generated = legacy._build([flat], sequence, initial_hash)
         principal = generated['principals'][0]
         principal['proxyAuthorization']['tokenId'] = application['id']
         if schema.application_proxy_authentication(application) == 'basic_and_bearer_v1':
@@ -139,7 +153,9 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
             route['adapter']['config']['credentialBinding'] = operator_catalog_google.route_binding(credential)
         if x_account:
             credential_policies[credential['id']] = operator_catalog_x_oauth.credential_policy(credential)
-        if operator_catalog_x_post.selected(rule):
+        if ecr:
+            route = operator_catalog_ecr.render_route(rule, credential, application['principal_id'])
+        elif operator_catalog_x_post.selected(rule):
             route = operator_catalog_x_post.render_route(rule, credential, application['principal_id'])
         elif operator_catalog_npm_install.selected(rule):
             emitted = operator_catalog_npm_install.render_routes(rule, credential, application['principal_id'])
@@ -167,7 +183,8 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
             if replacement is not None:
                 item['credentialHeader'] = dict(replacement)
             from serverware import operator_catalog_approvals
-            operator_catalog_approvals.apply(rule, item)
+            if not ecr:
+                operator_catalog_approvals.apply(rule, item)
             routes.append(item)
     bundle = generated
     bundle['principals'] = [principals[row['id']] for row in catalog['applications'] if row['id'] in principals]

@@ -382,7 +382,7 @@ def managed_database_identity(connection, snapshot, *, managed_x_unconfigured=Fa
     require(type(raw) is str and len(raw.encode("utf-8")) <= 16384, "managed_settings")
     settings = json.loads(raw)
     require(type(settings) is dict and set(settings) == {"allowed_upstreams", "fixture_cidrs"}
-        and type(settings["allowed_upstreams"]) is list and 1 <= len(settings["allowed_upstreams"]) <= 16
+        and type(settings["allowed_upstreams"]) is list and 1 <= len(settings["allowed_upstreams"]) <= 32
         and all(type(item) is str and 1 <= len(item) <= 2048 for item in settings["allowed_upstreams"])
         and len(set(settings["allowed_upstreams"])) == len(settings["allowed_upstreams"])
         and type(settings["fixture_cidrs"]) is list and len(settings["fixture_cidrs"]) <= 16

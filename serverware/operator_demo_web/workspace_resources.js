@@ -41,6 +41,7 @@ function operatorResponseSummary(rule) {
     ' ' + operatorResponseLimits(rule.response_mode) + ' ' + operatorResponseHeaderSummary(rule.response_mode);
 }
 function renderOperatorCompatibility(id, rule = {}) {
+  if (isEcrRule(rule)) { renderEcrCompatibility(id); return; }
   if (isXPostRule(rule)) { renderXPostCompatibility(id); return; }
   if (isAlchemyRule(rule)) { renderAlchemyCompatibility(id); return; }
   if (isXRule(rule)) { renderXCompatibility(id); return; }
@@ -93,6 +94,7 @@ function renderOperatorRequestBodyForm(prefix, catalog, credential, warningId, a
       'No request body is permitted when the field list is empty, even for POST, PUT and PATCH. List fields only if you deliberately want to restrict a JSON body.');
 }
 function operatorRuleRestrictions(rule) {
+  if (isEcrRule(rule)) return ecrRuleRestrictions(rule);
   if (isCommonAppRule(rule)) return commonAppRuleRestrictions(rule);
   if (isXPostRule(rule)) return xPostRuleRestrictions(rule);
   if (isAlchemyRule(rule)) return alchemyRuleRestrictions(rule);
@@ -119,6 +121,7 @@ function operatorRuleRestrictions(rule) {
   ];
 }
 function operatorRuleCredentialRows(rule, credential) {
+  if (isEcrRule(rule)) return [['Client credential input', 'Public SDK dummy only. Serverware signs the exact approved ECR requests; AWS secrets never leave the server.']];
   const rows = [['Client credential input', operatorCredentialInputModes[rule.credential_input] || 'Unsupported credential input']];
   try {
     const dummy = clientCredentialInput({credentialInput: rule.credential_input, placeholder: rule.placeholder, credential});
@@ -374,8 +377,9 @@ function createCredentialsView(workspace, actions = {}) {
         if (xAccount) card.append(textNode('p', credential.provider_account + ' · Connected X account. ' +
           (credential.status === 'active' ? 'Posting requires a separate permission and current paired gate. Saved consent is not proof of current entitlement or refresh health.' :
             'Unavailable locally. Provider cleanup is confirmed only by its operation result.'), 'small muted'));
-        if (isAwsCredential(credential)) card.append(textNode('p', operatorAwsNotice +
-          ' AWS validity and permissions have not been tested. No automatic renewal. These credentials cannot be used by applications or generic header rules.', 'small muted'));
+        if (isAwsCredential(credential)) card.append(textNode('p', (ecrAvailable(catalog, credential) ?
+          'Available for explicitly scoped ECR image publication with whole-image approval. ' : operatorAwsNotice + ' ') +
+          'AWS validity and permissions have not been tested. No automatic renewal or generic header access.', 'small muted'));
         if (isAlchemyCredential(credential)) card.append(textNode('p',
           'Alchemy chain-status reads only. Stored API or access key, never a key-bearing URL. Validity and provider entitlement are not tested here; Serverware does not renew this key.', 'small muted'));
         if (isXCredential(credential)) card.append(textNode('p',
@@ -393,7 +397,7 @@ function createCredentialsView(workspace, actions = {}) {
         card.append(textNode('p', 'Saved assignments are configuration, not proof of a valid app token, provider key, or loaded proxy policy.', 'small muted'));
         const details = textNode('details'); details.dataset.credentialDetails = ''; details.append(textNode('summary', 'Details'));
         const identity = textNode('dl', undefined, 'metadata');
-        for (const [label, value] of [['Credential ID', credential.id], ...(isAwsCredential(credential) ? awsCredentialRows(credential) : [
+        for (const [label, value] of [['Credential ID', credential.id], ...(isAwsCredential(credential) ? awsCredentialRows(credential, catalog) : [
           ['Authentication', xAccount ? 'X user account OAuth' : isAlchemyCredential(credential) ? 'Alchemy API or access key' : isXCredential(credential) ? 'X app-only bearer token' : isNpmCredential(credential) ? 'npm token' : isGithubAppCredential(credential) ? 'GitHub App installation token' : isGithubCredential(credential) ? 'GitHub personal access token' : credential.auth_type === 'bearer' ? 'Bearer token' : 'Custom header'],
           ['Header name', credential.header_name]]), ['Active rules', String(credential.active_rule_count)],
           ['Saved at', credential.created_at || 'Unavailable']]) identity.append(textNode('dt', label), textNode('dd', value));
@@ -420,7 +424,7 @@ function createCredentialsView(workspace, actions = {}) {
         appendOperatorAccountActivity(card, details, credential, catalog); card.append(details);
       }
       if (credential.legacy_upstream_origin) card.append(textNode('p', 'Migrated credential remains limited to ' + credential.legacy_upstream_origin + '.', 'small muted'));
-      if (credential.status === 'active' && !isAwsCredential(credential) && typeof actions.use === 'function') {
+      if (credential.status === 'active' && (!isAwsCredential(credential) || ecrAvailable(catalog, credential)) && typeof actions.use === 'function') {
         const use = textNode('button', 'Use with a client', 'secondary'); use.dataset.action = 'use-credential';
         use.disabled = workspace.state.busy || workspace.state.uncertain || !operatorCredentialCanSetUpAccess(credential, catalog);
         use.addEventListener('click', () => {
@@ -593,7 +597,7 @@ function createAccessRulesView(workspace) {
     chooseModeOptions('rule-response-mode', responseFormChoices(catalog, element('rule-response-mode').value), 'No supported response mode available');
     renderResponseMode();
     chooseOptions('rule-application-id', catalog.applications.filter(item => item.status === 'active'), 'Create an application first');
-    chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active' && !isCommonAppCredential(item) && !isAwsCredential(item) && !isGithubCredential(item) && !isNpmCredential(item) && !isXCredential(item) && !isXOAuthCredential(item) && !isAlchemyCredential(item)), 'Provider presets need Set up access; AWS storage cannot grant access');
+    chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active' && !isCommonAppCredential(item) && !isAwsCredential(item) && !isGithubCredential(item) && !isNpmCredential(item) && !isXCredential(item) && !isXOAuthCredential(item) && !isAlchemyCredential(item)), 'Provider presets and ECR need Set up access');
     chooseOptions('rule-credential-input', credentialInputModes.map(mode => ({id: mode, name: operatorCredentialInputModes[mode]})), 'No supported credential input available');
     renderCredentialInput();
     renderRequestBody();
@@ -610,7 +614,8 @@ function createAccessRulesView(workspace) {
       if (rule.status === 'active') {
         const approval = textNode('button', rule.approval_mode === 'host_review_v1' ? 'Remove human approval requirement' : 'Require human approval', 'secondary');
         approval.dataset.action = 'change-approval';
-        approval.disabled = workspace.state.busy || workspace.state.uncertain || !operatorHostApprovalAvailable(catalog, rule);
+        approval.hidden = isEcrRule(rule);
+        approval.disabled = isEcrRule(rule) || workspace.state.busy || workspace.state.uncertain || !operatorHostApprovalAvailable(catalog, rule);
         approval.addEventListener('click', () => {
           const current = workspace.state.catalog?.access_rules.find(item => item.id === rule.id && item.status === 'active');
           if (!current || workspace.state.busy || workspace.state.uncertain || !operatorHostApprovalAvailable(workspace.state.catalog, current)) return;

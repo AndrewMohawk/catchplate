@@ -154,7 +154,7 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
       'Your Serverware role does not allow access to this queue.' : 'The approval authority is unavailable.';
     if (!capability.can_open_native_review) return capability.reason === 'authority_unavailable' ?
       'The protected review authority is unavailable. These are saved request details, not an authorization to decide.' :
-      'Protected review and decisions are not available in this instance. Ordinary credential and proxy access remain separate.';
+      'Protected review and decisions for individual requests are not available in this instance. Ordinary credential and proxy access remain separate.';
     return !opener ? 'Protected review is not connected in this workspace. No private review or decision has been opened.' :
       capability.can_decide ? 'Open a request to inspect its protected review before deciding.' :
         'Protected review is available; this session cannot decide requests.';
@@ -355,12 +355,12 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
     controller?.abort(); controller = new AbortController();
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]);
     loading = true; capability = null; rows = null; selectedRecord = undefined; hostReview = null;
-    status('Loading pending actions…'); render();
+    status('Loading individual request approvals…'); render();
     try {
       const nextCapability = projectApprovalCapabilities(await request('/api/approvals/capabilities', signal));
       if (version !== generation || !visible) return false;
       capability = nextCapability;
-      if (!capability.can_list) { status('Pending actions are unavailable for this session.'); return false; }
+      if (!capability.can_list) { status('Individual request approvals are unavailable for this session.'); return false; }
       const prefix = hostMode() ? hostApprovalPrefix : '/api/approvals';
       const nextRows = projectPendingApprovals(await request(hostMode() ? prefix : prefix + '?status=pending', signal));
       if (hostMode() && nextRows.some(row => row.assurance !== 'host-trusted')) throw new Error('unavailable');
@@ -376,14 +376,14 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
         }
       }
       rows = nextRows;
-      status(rows.length ? rows.length + ' pending action' + (rows.length === 1 ? '' : 's') + ' visible to you. Showing at most the first 100.' :
-        'No pending actions visible to you.');
+      status(rows.length ? rows.length + ' individual request' + (rows.length === 1 ? '' : 's') + ' awaiting approval. Showing at most the first 100.' :
+        'No individual requests awaiting approval.');
       return true;
     } catch (error) {
       if (version !== generation || !visible) return false;
       capability = null; rows = null; selectedRecord = undefined;
       status(error.message === 'authentication' ? 'Your Serverware session could not be verified. Reload and sign in again.' :
-        'Pending actions could not be loaded. Refresh to try again; no private review or decision was requested.');
+        'Individual request approvals could not be loaded. Refresh to try again; no private review or decision was requested.');
       return false;
     } finally {
       if (version === generation) { loading = false; controller = null; render(); }

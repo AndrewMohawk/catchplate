@@ -111,6 +111,7 @@ function operatorRequestBodyInput(choice, requestFields, catalog, credential) {
   return {request_fields: requestFields, ...(choice === 'preserve_json_v1' ? {request_body_mode: choice} : {})};
 }
 function operatorRuleContentValid(rule, credential) {
+  if (isEcrRule(rule)) return ecrRuleValid(rule, credential);
   if (isCommonAppRule(rule) !== isCommonAppCredential(credential)) return false;
   if (isAwsCredential(credential)) return false; // Stored tuple is not a header credential or a grant.
   if (rule && ['quota', 'daily_quota'].some(key => Object.hasOwn(rule, key))) return false;
@@ -137,6 +138,7 @@ function operatorRuleContentValid(rule, credential) {
     !rule.request_fields.length && rule.methods.length === 1 && rule.methods[0] === 'GET';
 }
 function operatorRuleCredentialValid(rule, credential) {
+  if (isEcrRule(rule)) return ecrRuleValid(rule, credential);
   if (isAwsCredential(credential)) return false;
   try {
     if (!Object.hasOwn(operatorCredentialInputModes, rule.credential_input) ||
@@ -150,6 +152,12 @@ function operatorRuleCredentialValid(rule, credential) {
   } catch (_) { return false; }
 }
 function operatorRuleSupported(rule, catalog) {
+  if (isEcrRule(rule)) {
+    const credential = catalog?.credentials.find(item => item.id === rule.credential_id);
+    const application = catalog?.applications.find(item => item.id === rule.application_id && item.status === 'active');
+    return Boolean(application && applicationProxyAuthentication(application) === 'basic_and_bearer_v1' &&
+      applicationProxyAuthenticationSupported(catalog, application) && ecrRuleValid(rule, credential) && ecrAvailable(catalog, credential, rule));
+  }
   if (Object.hasOwn(rule || {}, 'approval_mode') &&
       (rule.approval_mode !== 'host_review_v1' || !operatorHostApprovalAvailable(catalog, rule))) return false;
   const credential = catalog?.credentials.find(item => item.id === rule?.credential_id && item.status === 'active');
@@ -195,6 +203,7 @@ function operatorHostApprovalAvailable(catalog, rule = {}) {
     (rule.operation_bundle ? capability.operation_bundles.includes(rule.operation_bundle) : capability.generic_rules));
 }
 function operatorApprovalRows(rule) {
+  if (isEcrRule(rule)) return [['Human approval', 'Required for the entire exact staged image. Approval does not publish; the client explicitly starts publication. Host-trusted: server administrators can bypass it.']];
   return rule.approval_mode === 'host_review_v1' ? [['Human approval',
     'Required for each exact request. Host-trusted; server administrators can bypass it. HTTP 428 stops the first request; approval permits one explicit identical retry.']] : [];
 }
@@ -481,7 +490,7 @@ function projectCatalog(value) {
   const accessRules = project(value.access_rules, ['application_id', 'credential_id', 'route_id', 'upstream_url', 'methods',
     'request_fields', 'response_fields', 'query_keys', 'allowed_headers', 'response_mode', 'credential_input', 'enforcement']);
   accessRules.forEach((rule, index) => {
-    for (const name of ['request_body_mode', 'placeholder', 'operation_bundle', 'age_policy', 'query_mode', 'repository', 'packages', 'package', 'tag', 'publishing_window', 'username', 'chain', 'quota', 'daily_quota', 'daily_post_attempt_limit', 'approval_mode', 'app_preset', 'app_operation', 'scope'])
+    for (const name of ['request_body_mode', 'placeholder', 'operation_bundle', 'age_policy', 'query_mode', 'repository', 'packages', 'package', 'tag', 'publishing_window', 'username', 'chain', 'quota', 'daily_quota', 'daily_post_attempt_limit', 'approval_mode', 'app_preset', 'app_operation', 'scope', 'registry_id', 'region', 'repository_name', 'image_tag', 'publication_approval_required'])
       if (Object.hasOwn(value.access_rules[index], name)) rule[name] = value.access_rules[index][name];
     if (Object.hasOwn(rule, 'approval_mode') && rule.approval_mode !== 'host_review_v1')
       throw operatorError('Saved approval mode is unsupported. Refresh before changing permissions.');
@@ -499,6 +508,9 @@ function projectCatalog(value) {
       throw operatorError('Saved rule content modes or resource references are inconsistent. Changes are disabled.');
   }
   const npmApplications = accessRules.filter(rule => rule.status === 'active' && (isNpmRule(rule) || isNpmPublishRule(rule) || isNpmInstallRule(rule))).map(rule => rule.application_id);
+  const ecrClients = accessRules.filter(rule => rule.status === 'active' && isEcrRule(rule)).map(rule => rule.application_id + ':' + rule.region);
+  if (new Set(ecrClients).size !== ecrClients.length)
+    throw operatorError('More than one active ECR permission belongs to a client in the same region. Changes are disabled.');
   if (new Set(npmApplications).size !== npmApplications.length)
     throw operatorError('More than one active npm permission belongs to an application. Changes are disabled.');
   for (const rule of accessRules.filter(item => item.status === 'active' && isNpmInstallRule(item)))
@@ -511,6 +523,7 @@ function projectCatalog(value) {
     'credential_input_modes', 'token_lifetime_seconds', 'oauth']);
   capabilities.host_approvals = projectHostApprovalsCapability(value.capabilities?.host_approvals);
   capabilities.common_apps = commonApps;
+  capabilities.ecr_publication = projectEcrCapability(value.capabilities?.ecr_publication);
   capabilities.static_key_replacement = projectStaticKeyReplacementCapability(value.capabilities?.static_key_replacement);
   capabilities.application_proxy_authentication = projectApplicationProxyAuthenticationCapability(value.capabilities?.application_proxy_authentication);
   capabilities.workload_renewal = value.capabilities?.workload_renewal == null ? null :

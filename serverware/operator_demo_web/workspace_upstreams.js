@@ -21,7 +21,7 @@ function upstreamOrigin(value, fixtureAllowed = false) {
     host.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
 }
 function upstreamOrigins(value, fixtureAllowed = false) {
-  return Array.isArray(value) && value.length >= 1 && value.length <= 16 && new Set(value).size === value.length &&
+  return Array.isArray(value) && value.length >= 1 && value.length <= 32 && new Set(value).size === value.length &&
     value.every(origin => upstreamOrigin(origin, fixtureAllowed));
 }
 function upstreamSettings(value) {
@@ -40,7 +40,7 @@ function projectUpstreamReview(value) {
     ![null, 'pending_operation', 'pending_google_setup', 'capacity'].includes(value.blocked_reason) ||
     value.eligible !== (value.blocked_reason === null) || value.pending_operation_id !== null && value.blocked_reason !== 'pending_operation' ||
     !(value.fixed_first_origin === null || value.fixed_first_origin === value.old_settings.allowed_upstreams[0]) ||
-    !Array.isArray(value.protected_origins) || value.protected_origins.length > 16) bad();
+    !Array.isArray(value.protected_origins) || value.protected_origins.length > 32) bad();
   let previous = '';
   for (const item of value.protected_origins) {
     if (!upstreamObject(item, ['origin', 'reasons']) || !value.old_settings.allowed_upstreams.includes(item.origin) || item.origin <= previous ||
@@ -54,7 +54,7 @@ function upstreamDelta(review, text) {
   const origins = text.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
   const before = review.old_settings.allowed_upstreams;
   if (!upstreamOrigins(origins, before.includes('https://demo-upstream:8443')))
-    throw operatorError('Enter 1–16 unique canonical HTTPS origins, one per line: lowercase host, no path, slash, port, IP address or credentials. Keep the existing diagnostic fixture exactly as shown.');
+    throw operatorError('Enter 1–32 unique canonical HTTPS origins, one per line: lowercase host, no path, slash, port, IP address or credentials. Keep the existing diagnostic fixture exactly as shown.');
   const added = origins.filter(origin => !before.includes(origin));
   const removed = before.filter(origin => !origins.includes(origin));
   if (!added.length && !removed.length) throw operatorError('Change at least one destination. Reordering the same list is not a configuration change.');

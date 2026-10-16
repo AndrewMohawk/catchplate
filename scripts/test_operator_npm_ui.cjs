@@ -14,7 +14,7 @@ const {publicCatalog, digest} = require('./test_operator_ordinary_modes_browser.
 const {clientCredentialInput, credentialHeaderTarget} = require('../serverware/operator_demo_web/app.js');
 const ASSETS = resolve(__dirname, '../serverware/operator_demo_web');
 const FILES = ['workspace_core.js', 'workspace_github.js', 'workspace_npm.js', 'workspace_npm_publish.js',
-  'workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js', 'workspace_resources.js', 'workspace_connect.js'];
+  'workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js', 'workspace_ecr.js', 'workspace_resources.js', 'workspace_connect.js'];
 const SOURCE = FILES.map(name => readFileSync(resolve(ASSETS, name), 'utf8')).join('\n');
 const HTML = readFileSync(resolve(ASSETS, 'index.html'), 'utf8');
 const NPM_EXAMPLE = resolve(__dirname, '../examples/npm-registry');

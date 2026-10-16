@@ -93,8 +93,18 @@ Follow the [worked custom-API guide](https://github.com/AndrewMohawk/serverware/
 
 Choose **Manual API key**, name the credential, and select how the provider expects it: a Bearer token or one custom header such as `X-API-Key`. Enter the provider secret without inventing an OAuth lifecycle. Later, a permission selects automatic insertion or exact public-dummy replacement, the approved origin, exact path and methods. This covers supported JSON APIs, not every authentication scheme, SDK or webhook. [Ordinary JSON contract](https://github.com/AndrewMohawk/serverware/blob/main/docs/ordinary-client-compatibility.md).
 
-## AWS: storage only
+## AWS: live storage; ECR source integration pending
 
 When offered in **Credentials**, select **AWS credentials — storage only**. Store either a long-term access-key pair, or the complete temporary tuple: access key ID, secret, session token and future UTC expiry. Imported sessions are not renewed automatically.
 
-These encrypted credentials cannot currently be assigned to client permissions or used for ECR publishing. Do not put them into a generic custom-header rule as a workaround. AWS removal is local storage removal, not AWS-side revocation. [AWS storage boundary](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-aws-credentials.md).
+The recorded live instance still offers storage only. New source adds exact ECR
+publication permissions and a stage → human review → explicit UUID activation →
+Boto3 publication workflow, but its matching proxy build and connected acceptance
+are pending; it is not deployed or real-AWS verified. See the
+[ECR recipe](https://github.com/AndrewMohawk/serverware/wiki/Clients-and-recipes#aws-ecr-publication--source-integration-not-deployed)
+and [current guide](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-ecr-publication.md).
+
+Do not put AWS credentials into a generic custom-header rule as a workaround.
+The dedicated source path signs exact requests without exporting the AWS tuple
+to clients. AWS removal is local storage removal, not AWS-side revocation.
+[AWS storage boundary](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-aws-credentials.md).

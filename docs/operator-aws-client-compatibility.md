@@ -1,6 +1,31 @@
 # AWS ordinary-client compatibility plan
 
-Status: **signing, exact-image preparation, sealed process-local content and
+## Current ordinary ECR integration
+
+The [ECR publication workflow](operator-ecr-publication.md) is now implemented in
+source and under integration, **not deployed or real-AWS verified**. It connects
+saved AWS credentials to an exact client/account/standard-region/repository/tag
+permission, verified staging, mandatory host-trusted review, explicit publication
+UUID activation and five stock Boto3 actions. It is not Docker push or arbitrary
+AWS SDK support. No provider keys reach the client; generic AWS leases remain
+closed and the dedicated signer returns only an encrypted exact-request headers
+lease. The original deadline is at most 30 minutes, clipped to client/AWS-session
+expiry, with no automatic retry after an uncertain write.
+
+The matching cached Rust build and connected acceptance remain pending. Live
+remains `1eff1fd` / `48953fea…` with 16 origins; the source-only 32-origin cap is
+not deployed. Four retained artifact slots are a temporary operational limit,
+and explicit terminal cleanup plus ECR action/audit notification projection are
+still missing. The parent-record bound is 1,024; locally delivered MCP tools
+exclude ECR. See the new guide and example for the current ordinary contract.
+
+## Historical foundation and future native design
+
+The sections below retain the earlier component evidence and native-assurance
+design. Hardware/YubiKey enforcement remains a future target, not a claim made
+by the ordinary host-trusted implementation.
+
+Historical status: **signing, exact-image preparation, sealed process-local content and
 bounded publication planning tested; storage-only credential management
 implemented; proxy publication is not implemented or accepted**. This document proposes a
 bounded operator-development feature,

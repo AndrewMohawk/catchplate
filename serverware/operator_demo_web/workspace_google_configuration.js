@@ -22,7 +22,7 @@ function googleConfigurationTarget(old, target) {
   if (!upstreamSettings(old) || !upstreamSettings(target)) return false;
   const origins = [...old.allowed_upstreams];
   if (!origins.includes('https://gmail.googleapis.com')) origins.push('https://gmail.googleapis.com');
-  return origins.length <= 16 && operatorExact(target, {allowed_upstreams: origins, fixture_cidrs: old.fixture_cidrs});
+  return origins.length <= 32 && operatorExact(target, {allowed_upstreams: origins, fixture_cidrs: old.fixture_cidrs});
 }
 function projectGoogleConfigurationOperation(value, reference = null) {
   const bad = () => { throw operatorError('The Google configuration receipt could not be verified. Keep its reference and check the result; do not resubmit.'); };

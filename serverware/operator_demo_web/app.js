@@ -68,6 +68,7 @@ else {
   connect = createConnectView(workspace, applications, proxy);
   const notifications = createNotificationsView(workspace);
   const pendingActions = createPendingActionsView({onAuthenticationLost: workspace.authenticationLost});
+  const ecrPublications = createEcrPublicationsView(workspace);
   workspace.subscribe(() => pendingActions.setCatalog(workspace.state.catalog));
   pendingActions.setReviewOpener(id => {
     if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id))
@@ -94,6 +95,7 @@ else {
     notifications.show(view === 'notifications');
     pendingActions.show(view === 'pending-actions', {requestedId: approvalLocation?.id,
       invalidLink: approvalLocation?.invalid === true});
+    ecrPublications.show(view === 'pending-actions');
     upstreams.show(view === 'proxy');
     googleConfiguration.show(view === 'proxy');
     xConfiguration.show(view === 'proxy');

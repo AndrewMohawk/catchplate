@@ -67746,6 +67746,42 @@ def _operator_aws_current(conn: Any, item_id: str):
     return current, metadata
 
 
+def open_operator_ecr_credentials(conn: Any, item_id: str, *, expected_version: int):
+    """Open an AWS tuple only inside the publication owner's signing transaction.
+
+    This does not grant a send or return a generic credential lease. The caller
+    owns the exact-image reservation, current route and original deadline, and
+    must commit its possible-send record before releasing signed request headers.
+    The existing AWS transaction guard requires the retained ordinary database,
+    active catalog and publication lock; no independent secret snapshot opens.
+    """
+    from serverware import operator_catalog_aws as aws, aws_ecr_signing as signing
+    from serverware.crypto import decrypt_secret_envelope
+
+    _operator_aws_transaction(conn)
+    if type(expected_version) is not int or not 1 <= expected_version <= 9_007_199_254_740_991:
+        raise MetadataStoreError("operator ECR signing generation refused")
+    state = _operator_aws_current(conn, item_id)
+    if state is None or state[0]["credential_version"] != expected_version:
+        raise MetadataStoreError("operator ECR signing generation refused")
+    _, metadata = state
+    row = conn.execute("SELECT * FROM credentials WHERE id=? AND credential_version=? "
+        "AND lifecycle_status='active'", (item_id, expected_version)).fetchone()
+    try:
+        if row is None:
+            raise ValueError()
+        secret = decrypt_secret_envelope(row)
+        if aws.metadata_from_secret(secret, metadata["provider_subject"]) != metadata:
+            raise ValueError()
+        value = aws.validate_secret(secret)
+        return signing.Credentials(kind=value["credential_kind"], access_key_id=value["access_key_id"],
+            secret_access_key=value["secret_access_key"], session_token=value["session_token"],
+            expires_at=value["expires_at"])
+    except Exception:
+        # Never include tuple material, ciphertext or decryptor diagnostics.
+        raise MetadataStoreError("operator ECR signing material unavailable") from None
+
+
 def replace_operator_aws_credential_if_version(conn: Any, item_id: str, *,
         expected_version: int, secret: str) -> dict[str, Any] | None:
     """Replace the whole tuple, always advancing generation; no old decryption."""

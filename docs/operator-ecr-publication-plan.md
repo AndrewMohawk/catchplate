@@ -1,5 +1,24 @@
 # ECR publication request and state planning
 
+## Current ordinary integration
+
+The [ordinary ECR publication guide](operator-ecr-publication.md) now describes
+the source workflow: exact client/account/region/repository/tag permission,
+verified artifact staging, host-trusted whole-image review, explicit UUID
+activation and the five stock Boto3 calls. Its matching Rust build and connected
+acceptance remain pending; it is not deployed or real-AWS verified. Generic AWS
+credential release remains closed: the dedicated signer leases encrypted headers
+for one exact request, not the AWS tuple. Four retained artifact slots and 1,024
+parent records currently bound storage; terminal cleanup and explicit ECR
+notification projection remain required work.
+
+## Historical planner and future native assurance
+
+The following checkpoints retain their original evidence and high-assurance
+requirements. Their statements that publishing is unavailable describe the
+earlier component-only state, not the newer ordinary source integration. Genuine
+hardware/native authority is still a future target; host trust is not its proof.
+
 This component advances the original exact-image publishing workflow; it does
 **not** enable AWS publishing in the app. It joins actual verified image content
 to a closed ECR SDK request/response contract and proposes bounded upload-state

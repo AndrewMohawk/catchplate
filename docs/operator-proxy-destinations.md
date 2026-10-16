@@ -38,7 +38,7 @@ Cancellation is a separate explicit operation and does not delete its history.
 
 ## Scope and preservation
 
-The target contains 1–16 unique canonical HTTPS origins. Public origins use
+The target contains 1–32 unique canonical HTTPS origins. Public origins use
 port 443, without paths, URL credentials, query strings, wildcards or literal IP
 addresses. This is not a private-network routing editor. The synthetic fixture
 origin and its CIDR stay unchanged.

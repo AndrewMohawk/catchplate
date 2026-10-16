@@ -191,7 +191,7 @@ const tests = [
   }],
   ['empty, failed refresh, and recovered metadata have distinct honest states', async (browser, html, artifacts) =>
     fixture(browser, html, artifacts, 'empty-error', {path: '/approvals'}, async (page, state) => {
-      await ready(page); assert.equal(await page.locator('#pending-actions-status').innerText(), 'No pending actions visible to you.');
+      await ready(page); assert.equal(await page.locator('#pending-actions-status').innerText(), 'No individual requests awaiting approval.');
       state.listStatus = 503; await page.locator('#pending-actions-refresh').click(); await ready(page);
       assert((await page.locator('#pending-actions-status').innerText()).includes('could not be loaded'));
       assert(!(await page.locator('#pending-actions').innerText()).includes(PRIVATE));

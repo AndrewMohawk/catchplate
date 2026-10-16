@@ -72,7 +72,7 @@ def parse_expected_upstreams(raw):
     require(type(raw) is str and 1 <= len(raw) <= 32768, message)
     try:
         origins = json.loads(raw)
-        require(type(origins) is list and 1 <= len(origins) <= 16, message)
+        require(type(origins) is list and 1 <= len(origins) <= 32, message)
         for value in origins:
             require(type(value) is str and 1 <= len(value) <= 2048
                     and all(33 <= ord(character) <= 126 for character in value), message)

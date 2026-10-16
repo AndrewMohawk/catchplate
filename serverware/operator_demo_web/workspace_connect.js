@@ -24,7 +24,8 @@ function operatorConnectResourceChoices(items, reserved = []) {
   return result;
 }
 function operatorCredentialCanSetUpAccess(item, catalog) {
-  if (!catalog || item?.status !== 'active' || isAwsCredential(item)) return false;
+  if (!catalog || item?.status !== 'active') return false;
+  if (isAwsCredential(item)) return ecrAvailable(catalog, item);
   if (isCommonAppCredential(item)) return commonAppAvailable(catalog, item);
   if (isGithubCredential(item)) return githubAvailable(catalog, item);
   if (isNpmCredential(item)) return npmAvailable(catalog, item) || npmInstallAvailable(catalog, item) || npmPublishAvailable(catalog, item);
@@ -57,7 +58,7 @@ function createConnectView(workspace, applications, proxy) {
   const githubCreationAvailable = () => newGithubApp() ? githubAppDestinationAvailable(catalog()) :
     element('connect-github-type').value === 'github_token_v1' && Boolean(projectGithubCapability(catalog()?.capabilities.github));
   const writable = () => Boolean(catalog() && !workspace.state.busy && !workspace.state.uncertain);
-  const credential = () => catalog()?.credentials.find(item => item.id === selectedCredential && item.status === 'active' && !isAwsCredential(item));
+  const credential = () => catalog()?.credentials.find(item => item.id === selectedCredential && item.status === 'active' && (!isAwsCredential(item) || ecrAvailable(catalog(), item)));
   const commonPreset = () => catalog()?.capabilities?.common_apps ? commonAppPreset(catalog(), connectionMethod === 'common' ? selectedCommonApp : credential()?.app_preset) : null;
   const application = () => catalog()?.applications.find(item => item.id === selectedApplication && item.status === 'active');
   const validApp = item => item?.token_status === 'valid' && Number.isSafeInteger(item.token_expires_at_epoch_ms) && item.token_expires_at_epoch_ms > Date.now();
@@ -118,6 +119,9 @@ function createConnectView(workspace, applications, proxy) {
   }
   function confirmCheckpoint() {
     if (!checkpoint || !catalog() || workspace.state.busy || workspace.state.uncertain || catalog().revision < checkpoint.revision) return;
+    if (checkpoint.ecrPolicyHash && catalog().revision === checkpoint.revision && catalog().policy.policy_hash !== checkpoint.ecrPolicyHash) {
+      checkpoint.message = 'The ECR receipt and refreshed policy disagree. Inspect saved state; do not submit again.'; return;
+    }
     if (checkpoint.xPolicyHash && catalog().revision === checkpoint.revision && catalog().policy.policy_hash !== checkpoint.xPolicyHash) {
       checkpoint.message = 'The saved X receipt and refreshed policy disagree. Inspect saved state; do not submit again.'; return;
     }
@@ -137,7 +141,7 @@ function createConnectView(workspace, applications, proxy) {
       if (checkpoint.savedKey && !operatorExact(operatorSavedKeyIdentity(item), checkpoint.savedKey)) {
         checkpoint.message = 'The saved credential does not match its creation receipt. Inspect saved state; do not submit again.'; return;
       }
-      if (isAwsCredential(item)) { checkpoint.message = 'AWS credentials are stored only; no application setup is available.'; return; }
+      if (isAwsCredential(item) && !ecrAvailable(catalog(), item)) { checkpoint.message = 'ECR publication is not available for this AWS credential.'; return; }
       if (checkpoint.github && item.connection_type !== 'github_token_v1') {
         message('The saved GitHub connection cannot be confirmed. Refresh saved state; do not submit again.'); return;
       }
@@ -209,6 +213,9 @@ function createConnectView(workspace, applications, proxy) {
           !operatorExact(alchemyRulePayload(item), alchemyRulePayload(review.rule)))) {
         checkpoint.message = 'The saved Alchemy permission does not match the reviewed chain and connection. Inspect saved state; no repeat request was sent.'; return;
       }
+      if (isEcrRule(review?.rule) && (!ecrRuleValid(item, credential()) || !operatorExact(ecrRulePayload(item), ecrRulePayload(review.rule)))) {
+        checkpoint.message = 'The saved ECR permission differs from the reviewed account, region, repository or tag. Inspect saved state; do not submit again.'; return;
+      }
       selectedRule = item.id; step = 4;
     }
     checkpoint = null; message(saveOnly && savedCredential ?
@@ -221,6 +228,12 @@ function createConnectView(workspace, applications, proxy) {
     if (collection === 'access_rules' && (result[key].approval_mode ?? 'automatic') !== (review?.rule.approval_mode ?? 'automatic'))
       throw operatorError('The saved human-approval requirement differs from the reviewed permission. Inspect saved state; no repeat request was sent.');
     const commonMutation = collection === 'access_rules' && isCommonAppRule(review?.rule);
+    const ecrMutation = collection === 'access_rules' && isEcrRule(review?.rule);
+    if (ecrMutation && (result.revision !== catalog().revision + 1 || result[key].status !== 'active' ||
+        result.policy?.sequence !== catalog().policy.sequence + 1 || !/^sha256:[a-f0-9]{64}$/.test(result.policy?.policy_hash || '') ||
+        result.policy.policy_hash === catalog().policy.policy_hash || !ecrRuleValid(result[key], credential()) ||
+        !operatorExact(ecrRulePayload(result[key]), ecrRulePayload(review.rule))))
+      throw operatorError('The saved ECR receipt did not match the exact reviewed scope and policy. Inspect saved state; do not repeat it.');
     if (commonMutation && (result.revision !== catalog().revision + 1 || result[key].status !== 'active' ||
         !/^sha256:[a-f0-9]{64}$/.test(result.policy?.policy_hash || '') ||
         !commonAppRuleValid(result[key], credential(), catalog()) ||
@@ -246,6 +259,7 @@ function createConnectView(workspace, applications, proxy) {
         !operatorExact(alchemyRulePayload(result[key]), alchemyRulePayload(review.rule))))
       throw operatorError('The Alchemy permission receipt did not match the reviewed chain. Inspect saved state; do not repeat automatically.');
     checkpoint = {collection, id: result[key].id, revision: result.revision,
+      ...(ecrMutation ? {ecrPolicyHash: result.policy.policy_hash} : {}),
       ...(commonMutation ? {commonPolicyHash: result.policy.policy_hash} : {}),
       ...(xMutation ? {xPolicyHash: result.policy.policy_hash} : {}),
       ...(alchemyMutation ? {alchemyPolicyHash: result.policy.policy_hash} : {}),
@@ -276,7 +290,7 @@ function createConnectView(workspace, applications, proxy) {
     const diagnostics = operatorDiagnosticResources(value);
     if (['key', 'github', 'npm', 'x', 'alchemy', 'common'].includes(connectionMethod)) choices('connect-credential-choice', [{id: 'new', name: 'New provider key'}], 'new');
     if (connectionMethod === 'saved') choices('connect-credential-choice', [{id: '', name: actionLabels.credential},
-      ...operatorConnectResourceChoices(value.credentials.filter(item => item.status === 'active' && !isAwsCredential(item) &&
+      ...operatorConnectResourceChoices(value.credentials.filter(item => item.status === 'active' && (!isAwsCredential(item) || ecrAvailable(value, item)) &&
         (includeDiagnostics || item.id === selectedCredential || item.id === savedChoice || !diagnostics.credentials.has(item.id))), [actionLabels.credential])], savedChoice);
     choices('connect-application-choice', [...operatorConnectResourceChoices(value.applications.filter(item => item.status === 'active' &&
       (includeDiagnostics || item.id === selectedApplication || !diagnostics.applications.has(item.id))), [actionLabels.application]), {id: 'new', name: actionLabels.application}], 'new');
@@ -299,10 +313,10 @@ function createConnectView(workspace, applications, proxy) {
       const npmChoices = npm ? [...(npmAvailable(value, credential()) ? [{id: operatorNpm.bundle, name: 'Read package metadata'}] : []),
         ...(npmInstallAvailable(value, credential()) ? [{id: operatorNpmInstall.bundle, name: 'Install packages and run npm audit'}] : []),
         ...(value.capabilities.npm_publish && npmPublishAvailable(value, credential()) ? [{id: 'npm_publish_v1', name: 'Publish package'}] : [])] : [];
-      choices('connect-operation', common ? commonChoices : xPost ? xPostAvailable(value, credential()) ? [{id: operatorXPost.bundle, name: 'Publish text as this X account'}] : [] : alchemy ? alchemyAvailable(value, credential()) ? [{id: operatorAlchemy.bundle, name: 'Read chain status'}] : [] : x ? xAvailable(value, credential()) ? [{id: operatorX.bundle, name: 'Look up one X username'}] : [] : npm ? npmChoices : github ? githubAvailable(value, credential()) ?
+      choices('connect-operation', isAwsCredential(credential()) ? [{id: operatorEcr.bundle, name: 'Publish a reviewed image to ECR'}] : common ? commonChoices : xPost ? xPostAvailable(value, credential()) ? [{id: operatorXPost.bundle, name: 'Publish text as this X account'}] : [] : alchemy ? alchemyAvailable(value, credential()) ? [{id: operatorAlchemy.bundle, name: 'Read chain status'}] : [] : x ? xAvailable(value, credential()) ? [{id: operatorX.bundle, name: 'Look up one X username'}] : [] : npm ? npmChoices : github ? githubAvailable(value, credential()) ?
         githubPermissionBundles(credential()).map(id => ({id, name: githubPermissionName(id)})) : [] :
         [...(bundle ? [{id: operatorGmail.bundle, name: 'Read Gmail'}] : []),
-          {id: 'exact', name: 'Advanced: one exact endpoint'}], common ? commonChoices[0]?.id : xPost ? operatorXPost.bundle : alchemy ? operatorAlchemy.bundle : x ? operatorX.bundle : npm ? npmChoices[0]?.id : github ? operatorGithub.read : bundle ? operatorGmail.bundle : 'exact');
+          {id: 'exact', name: 'Advanced: one exact endpoint'}], isAwsCredential(credential()) ? operatorEcr.bundle : common ? commonChoices[0]?.id : xPost ? operatorXPost.bundle : alchemy ? operatorAlchemy.bundle : x ? operatorX.bundle : npm ? npmChoices[0]?.id : github ? operatorGithub.read : bundle ? operatorGmail.bundle : 'exact');
       if (alchemy) {
         const select = element('connect-alchemy-chain'); const previous = select.value;
         const empty = textNode('option', 'Choose an approved chain'); empty.value = '';
@@ -330,7 +344,8 @@ function createConnectView(workspace, applications, proxy) {
     const alchemy = newRule && (isAlchemyCredential(credential()) || isAlchemyRule({operation_bundle: element('connect-operation').value}));
     const common = newRule && isCommonAppCredential(credential());
     const commonOperation = common ? commonPreset()?.operations.find(item => item.id === element('connect-operation').value) : null;
-    const providerPreset = github || npm || x || xPost || alchemy || common;
+    const ecr = newRule && isAwsCredential(credential());
+    const providerPreset = github || npm || x || xPost || alchemy || common || ecr;
     fields('connect-saved-choice', connectionMethod === 'saved'); fields('connect-credential-new', newCredential && !['x', 'alchemy'].includes(connectionMethod));
     fields('connect-x-new', connectionMethod === 'x');
     fields('connect-alchemy-new', connectionMethod === 'alchemy');
@@ -382,6 +397,7 @@ function createConnectView(workspace, applications, proxy) {
     // required controls. Switching permissions never clears the exact-rule draft.
     element('connect-operation-group').hidden = x || xPost || alchemy || !newRule || credential()?.auth_type !== 'google_oauth' && !gmail && !providerPreset;
     fields('connect-exact-destination', newRule && !gmail && !providerPreset);
+    fields('connect-ecr-permission', ecr);
     fields('connect-common-permission', common);
     if (common) renderCommonAppScopes(commonPreset(), commonOperation, true);
     else { element('connect-common-scopes').replaceChildren(); delete element('connect-common-scopes').dataset.signature; }
@@ -471,7 +487,7 @@ function createConnectView(workspace, applications, proxy) {
     const approvalDraft = {operation_bundle: common || element('connect-operation').value === 'exact' ? undefined : element('connect-operation').value,
       ...(xPost && element('connect-x-post-quota').value === 'daily' ? {daily_post_attempt_limit: 1} : {})};
     const approvalAvailable = operatorHostApprovalAvailable(catalog(), approvalDraft);
-    element('connect-approval-group').hidden = !newRule;
+    element('connect-approval-group').hidden = !newRule || ecr;
     element('connect-approval-required').disabled = !newRule || !approvalAvailable && !element('connect-approval-required').checked;
     element('connect-approval-help').textContent = Object.hasOwn(approvalDraft, 'daily_post_attempt_limit') ?
       'Human approval cannot currently be combined with an X daily posting-attempt limit. Keep the quota, or explicitly choose a different restriction; neither is removed automatically.' : approvalAvailable ?
@@ -480,7 +496,7 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-review').disabled = newRule && (gmail && (!gmailAvailable(catalog(), credential()) ||
       !['sdk', 'custom'].includes(element('connect-gmail-client').value) || gmailSdk && Boolean(gmailSdkProblem())) || github && !githubAvailable(catalog(), credential()) ||
       x && !xAvailable(catalog(), credential()) ||
-      common && !commonAppAvailable(catalog(), credential(), element('connect-operation').value) ||
+      ecr && !ecrAvailable(catalog(), credential()) || common && !commonAppAvailable(catalog(), credential(), element('connect-operation').value) ||
       xPost && (!xPostAvailable(catalog(), credential()) || Boolean(xPostQuotaProblem)) ||
       alchemy && !alchemyAvailable(catalog(), credential(), element('connect-alchemy-chain').value) ||
       npm && (npmInstall ? !npmInstallAvailable(catalog(), credential()) || !npmInstallNewRuleAvailable(catalog(), selectedApplication) :
@@ -590,12 +606,15 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-github-status').textContent = catalog()?.capabilities.github_app ?
       githubAppDestinationAvailable(catalog()) ? 'GitHub: choose a personal access token or GitHub App, then grant repository-scoped issue permissions. App installation tokens renew automatically; personal access tokens do not.' :
         'Approve api.github.com in Proxy setup before verifying a GitHub App. No destination is added automatically. Personal access tokens can still be saved when advertised.' :
-      !catalog()?.capabilities.github ? 'GitHub presets are not advertised by this deployment. AWS presets are not available here.' :
+      !catalog()?.capabilities.github ? 'GitHub presets are not advertised by this deployment.' :
       catalog().capabilities.github.destination_allowed && catalog().allowed_upstreams.includes(operatorGithub.origin) ?
         'GitHub: save a personal access token and grant repository-scoped issue permissions. GitHub App connections are not advertised by this deployment.' :
         'A GitHub token can be saved, but access cannot be granted until the operator approves api.github.com in deployment settings.';
     element('connect-use-saved').disabled = !writable() || Boolean(checkpoint) || !catalog()?.credentials.some(item =>
-      item.status === 'active' && !isAwsCredential(item) && (includeDiagnostics || !diagnostics.credentials.has(item.id)));
+      item.status === 'active' && (!isAwsCredential(item) || ecrAvailable(catalog(), item)) && (includeDiagnostics || !diagnostics.credentials.has(item.id)));
+    element('connect-ecr-status').textContent = projectEcrCapability(catalog()?.capabilities.ecr_publication) ?
+      'AWS ECR: save credentials in Credentials, choose Use with a client, and grant one exact account/region/repository/tag. Every staged image requires human approval before publication.' :
+      'AWS credentials may be stored in Credentials. ECR publishing remains unavailable until the publication owner and matching proxy advertise readiness; a manual header key is not a substitute.';
     element('connect-use-saved').hidden = saveOnly;
     for (const id of ['connect-actions', 'connect-leave-help', 'connect-compatibility']) element(id).hidden = googleOpen;
     if (saveOnly) element('connect-compatibility').hidden = true;
@@ -707,6 +726,15 @@ function createConnectView(workspace, applications, proxy) {
     render();
   });
   function draftRule() {
+    if (isAwsCredential(credential())) {
+      const scope = Object.fromEntries(['registry_id', 'region', 'repository_name', 'image_tag'].map(key => [key, element('connect-ecr-' + key).value.trim()]));
+      const rule = {...ecrRuleFields(scope), name: ('Publish ECR image · ' + scope.repository_name + ':' + scope.image_tag).slice(0, 128),
+        application_id: selectedApplication, credential_id: selectedCredential};
+      if (catalog().access_rules.some(item => item.status === 'active' && isEcrRule(item) && item.application_id === selectedApplication && item.region === scope.region))
+        throw operatorError('This client already has an ECR permission in this region. Reuse it or explicitly revoke it; no ambiguous permission was created.');
+      if (!supported(rule)) throw operatorError('ECR requires a ready publication owner, standard client proxy login, and this exact regional destination approved in Proxy setup: ' + ecrOrigin(scope.region));
+      return rule;
+    }
     if (isCommonAppCredential(credential())) {
       const preset = commonPreset(), operation = preset?.operations.find(item => item.id === element('connect-operation').value);
       if (!operation || !commonAppAvailable(catalog(), credential(), operation.id))
@@ -813,7 +841,7 @@ function createConnectView(workspace, applications, proxy) {
     try {
       const existing = element('connect-rule-choice').value !== 'new';
       const rule = existing ? matchingRules().find(item => item.id === element('connect-rule-choice').value) : draftRule();
-      if (!existing && element('connect-approval-required').checked) {
+      if (!existing && !isEcrRule(rule) && element('connect-approval-required').checked) {
         if (!operatorHostApprovalAvailable(catalog(), rule)) throw operatorError('Host-trusted approval is unavailable for this permission. Review the approval choice; no grant was sent.');
         rule.approval_mode = 'host_review_v1';
       }
@@ -834,8 +862,8 @@ function createConnectView(workspace, applications, proxy) {
       selectedRule = review.rule.id; goto(4); return;
     }
     if (!workspace.ready('access_rules')) return;
-    await workspace.mutate(isCommonAppRule(review.rule) ? 'access-rules/common-app' : isXPostRule(review.rule) ? 'access-rules/x-post' : isNpmInstallRule(review.rule) ? 'access-rules/npm-install' : isAlchemyRule(review.rule) ? 'access-rules/alchemy-chain-status' : isXRule(review.rule) ? 'access-rules/x-username' : isNpmPublishRule(review.rule) ? 'access-rules/npm-publish' : isNpmRule(review.rule) ? 'access-rules/npm-metadata' : isGithubRule(review.rule) ? 'access-rules/github' : isGmailRule(review.rule) ? 'access-rules/gmail-read' : 'access-rules',
-      {...(isCommonAppRule(review.rule) ? commonAppRulePayload(review.rule) : isXPostRule(review.rule) ? xPostRulePayload(review.rule) : isNpmInstallRule(review.rule) ? npmInstallRulePayload(review.rule) : isAlchemyRule(review.rule) ? alchemyRulePayload(review.rule) : isXRule(review.rule) ? xRulePayload(review.rule) : isNpmPublishRule(review.rule) ? npmPublishRulePayload(review.rule) : isNpmRule(review.rule) ? npmRulePayload(review.rule) : isGithubRule(review.rule) ? githubRulePayload(review.rule) : isGmailRule(review.rule) ? gmailRulePayload(review.rule) : review.rule),
+    await workspace.mutate(isEcrRule(review.rule) ? 'access-rules/aws-ecr-publication' : isCommonAppRule(review.rule) ? 'access-rules/common-app' : isXPostRule(review.rule) ? 'access-rules/x-post' : isNpmInstallRule(review.rule) ? 'access-rules/npm-install' : isAlchemyRule(review.rule) ? 'access-rules/alchemy-chain-status' : isXRule(review.rule) ? 'access-rules/x-username' : isNpmPublishRule(review.rule) ? 'access-rules/npm-publish' : isNpmRule(review.rule) ? 'access-rules/npm-metadata' : isGithubRule(review.rule) ? 'access-rules/github' : isGmailRule(review.rule) ? 'access-rules/gmail-read' : 'access-rules',
+      {...(isEcrRule(review.rule) ? ecrRulePayload(review.rule) : isCommonAppRule(review.rule) ? commonAppRulePayload(review.rule) : isXPostRule(review.rule) ? xPostRulePayload(review.rule) : isNpmInstallRule(review.rule) ? npmInstallRulePayload(review.rule) : isAlchemyRule(review.rule) ? alchemyRulePayload(review.rule) : isXRule(review.rule) ? xRulePayload(review.rule) : isNpmPublishRule(review.rule) ? npmPublishRulePayload(review.rule) : isNpmRule(review.rule) ? npmRulePayload(review.rule) : isGithubRule(review.rule) ? githubRulePayload(review.rule) : isGmailRule(review.rule) ? gmailRulePayload(review.rule) : review.rule),
         ...(review.rule.approval_mode ? {approval_mode: review.rule.approval_mode} : {})},
       'connect-status', result => receipt(result, 'access_rules', 'access_rule')); render();
   });

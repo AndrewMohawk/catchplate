@@ -15,6 +15,7 @@ function operatorExampleProjects(rule, catalog) {
   const guide = (label, filename) => ({label, kind: 'guide', href: source + 'blob/' + branch + 'docs/' + filename});
   if (isCommonAppRule(rule)) return [project('Python HTTP and official AI SDK examples', 'common-apps'), guide('App scopes and compatibility', 'common-apps.md')];
   switch (rule.operation_bundle) {
+    case 'aws_ecr_publish_v1': return [project('Python · Stage, review and publish an ECR image', 'ecr-publish-python')];
     case 'github_issues_read_v1':
     case 'github_issues_write_v1':
       return [project('Node.js + GitHub Actions', 'github-issues-node'),
@@ -106,6 +107,7 @@ function createProxyView(workspace, applications) {
     element('alchemy-client-controls').hidden = true;
     element('x-post-client-controls').hidden = true;
     element('provider-config-handoff').hidden = true;
+    element('ecr-client-controls').hidden = true;
     element('client-proxy-login').hidden = true;
     for (const id of ['client-proxy-auth-mode', 'client-proxy-host', 'client-proxy-port', 'client-proxy-username',
       'client-proxy-password-note', 'client-proxy-login-status']) element(id).textContent = '';
@@ -115,6 +117,10 @@ function createProxyView(workspace, applications) {
     const application = catalog.applications.find(item => item.id === element('proxy-application').value);
     chooseOptions('proxy-rule', catalog.access_rules.filter(item => item.status === 'active' && item.application_id === application?.id), 'Add an access rule for this application');
     const rule = catalog.access_rules.find(item => item.id === element('proxy-rule').value);
+    if (isEcrRule(rule) && application) {
+      renderEcrClient(workspace, application, rule, applications);
+      command = element('client-command').textContent; return;
+    }
     const gmail = isGmailRule(rule);
     const gmailSdk = operatorGmailSdkCompatible(rule, catalog);
     const github = isGithubRule(rule);
@@ -364,7 +370,8 @@ function createProxyView(workspace, applications) {
     render(); if (element('copy-command').disabled || !command) return;
     try {
       await navigator.clipboard.writeText(command);
-      element('client-copy-status').textContent = isCommonAppRule(workspace.state.catalog?.access_rules.find(item => item.id === element('proxy-rule').value)) ?
+      element('client-copy-status').textContent = isEcrRule(workspace.state.catalog?.access_rules.find(item => item.id === element('proxy-rule').value)) ?
+        'Copied the staging command. Review your local image stage and private config before running; no bytes were uploaded and nothing was published.' : isCommonAppRule(workspace.state.catalog?.access_rules.find(item => item.id === element('proxy-rule').value)) ?
         'Copied the scoped request example, including its example body or query. Review content before running; no request was sent. Set only the Serverware app token locally.' : !element('x-post-client-controls').hidden ?
         'Copied the X posting SDK recipe. Supply text and the app token locally; no post was sent. Do not automatically repeat an uncertain result.' : isNpmInstallRule(workspace.state.catalog?.access_rules.find(item => item.id === element('proxy-rule').value)) ?
         'Copied the npm install/ci example setup. Set the reviewed project/output paths and app token privately; no job was executed.' : !element('gmail-sdk-client-controls').hidden ?
@@ -382,6 +389,10 @@ function createProxyView(workspace, applications) {
     const catalog = workspace.state.catalog; const application = catalog.applications.find(item => item.id === element('proxy-application').value);
     const rule = catalog.access_rules.find(item => item.id === element('proxy-rule').value); const token = applications.tokenFor(application.id);
     if (!token) return;
+    if (isEcrRule(rule)) {
+      downloadEcrConfig(ecrClientConfig(catalog, application, rule, token, element('ca-path').value, element('ecr-proxy-ca-path').value));
+      element('client-copy-status').textContent = 'Downloaded private ECR client configuration. Contains only the Serverware client token, not AWS credentials or automatic publishing intent.'; return;
+    }
     const credential = catalog.credentials.find(item => item.id === rule.credential_id);
     const dummyHeader = clientCredentialInput({credentialInput: rule.credential_input, placeholder: rule.placeholder, credential});
     const config = {application_id: application.id, access_rule_id: rule.id, proxy_url: catalog.proxy_url, upstream_url: rule.upstream_url,

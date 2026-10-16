@@ -22,7 +22,7 @@ from serverware.operator_catalog_inputs import (
     GithubTokenInput, GithubAppInput, ReplaceGithubAppKeyInput, GithubRuleInput, NpmTokenInput, NpmMetadataRuleInput, NpmPublishRuleInput, NpmInstallRuleInput,
     XAppBearerInput, XUsernameRuleInput, XPostRuleInput,
     AlchemyKeyInput, AlchemyChainStatusRuleInput,
-    AwsSigV4CredentialInput, ReplaceAwsSigV4CredentialInput,
+    AwsSigV4CredentialInput, ReplaceAwsSigV4CredentialInput, AwsEcrRuleInput,
     MIN_TOKEN_LIFETIME_SECONDS, MAX_TOKEN_LIFETIME_SECONDS, DEFAULT_TOKEN_LIFETIME_SECONDS,
 )
 from serverware.operator_catalog_schema import CatalogConflict, CatalogIntegrityError
@@ -248,7 +248,10 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
         from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy
         from serverware import operator_catalog_npm_install
         from serverware import operator_catalog_x_post
-        if operator_catalog_x_post.selected(record):
+        from serverware import operator_catalog_ecr
+        if operator_catalog_ecr.selected(record):
+            result.update(operator_catalog_ecr.public_fields(record))
+        elif operator_catalog_x_post.selected(record):
             result.update(operator_catalog_x_post.public_fields(record))
         elif operator_catalog_npm_install.selected(record):
             result.update(operator_catalog_npm_install.public_fields(record))
@@ -268,7 +271,8 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
 
 
 def _mutate(payload, actor_id: str, collection: str, event: str, change) -> dict:
-    if collection == "access_rules" and getattr(payload, "approval_mode", None) == "host_review_v1":
+    if (collection == "access_rules" and getattr(payload, "approval_mode", None) == "host_review_v1"
+            and getattr(payload, "operation_bundle", None) != "aws_ecr_publish_v1"):
         from serverware import operator_catalog_approvals
         operator_catalog_approvals.require_available()
     db = store._require()
@@ -528,6 +532,28 @@ def replace_aws_credential(payload: ReplaceAwsSigV4CredentialInput, actor_id: st
             key_replaced_at=receipt["key_replaced_at"])
         return _Change(schema.save_resource(conn, "credentials", record), key_replacement=receipt)
     return _mutate(payload, actor_id, "credentials", "credential.aws_sigv4_replaced", change)
+
+
+def create_ecr_rule(payload: AwsEcrRuleInput, actor_id: str) -> dict:
+    from serverware import operator_catalog_ecr as ecr, operator_demo, ecr_publication_policy
+    if "https://" + ecr_publication_policy.host(payload.region) not in operator_demo.settings()["allowed_upstreams"]:
+        raise ValueError("ECR regional destination is not deployment-allowlisted")
+    ecr.require_available(payload.expected_policy_hash)
+
+    def change(db, conn, catalog):
+        _admit_create(conn, catalog, "access_rules")
+        _target(catalog, "applications", payload.application_id)
+        credential = _target(catalog, "credentials", payload.credential_id)
+        record = ecr.record_fields(payload)
+        ecr.admit_rule(record, catalog)
+        try:
+            ecr.validate_rule(record, credential)
+        except CatalogIntegrityError:
+            raise ValueError("ECR publication requires a stored AWS signing tuple") from None
+        identifier = str(uuid.uuid4())
+        record.update(id=identifier, route_id="operator." + identifier, created_at=db.iso_now(), status="active")
+        return _Change(schema.save_resource(conn, "access_rules", record, create=True), authority_changed=True)
+    return _mutate(payload, actor_id, "access_rules", "access_rule.ecr_publication_created", change)
 
 
 def replace_credential_key(payload: ReplaceCredentialKeyInput, actor_id: str) -> dict:
@@ -933,6 +959,9 @@ def set_application_proxy_authentication(payload: ApplicationProxyAuthentication
 def set_rule_approval(payload: RuleApprovalInput, actor_id: str) -> dict:
     def change(db, conn, catalog):
         record = _target(catalog, "access_rules", payload.id)
+        from serverware import operator_catalog_ecr
+        if operator_catalog_ecr.selected(record):
+            raise CatalogConflict("ECR publication review is mandatory")
         if record.get("approval_mode", "automatic") == payload.approval_mode:
             raise CatalogConflict()
         if payload.approval_mode == "automatic":
@@ -979,6 +1008,7 @@ def catalog_status() -> dict:
     from serverware import operator_workload_renewal_store
     from serverware import operator_catalog_approvals
     from serverware import operator_common_apps
+    from serverware import operator_catalog_ecr
     return {"schema": "serverware.operatorCatalog/v1", "mode": "operator-development",
         "productionReady": False, "hardwareVerified": False, "revision": catalog["revision"],
         "policy": observation, "proxy_url": settings["proxy_url"], "allowed_upstreams": settings["allowed_upstreams"],
@@ -998,6 +1028,7 @@ def catalog_status() -> dict:
             "static_key_replacement": {"schema": "serverware.operatorStaticKeyReplacement/v1",
                 "path": "/api/operator-demo/credentials/replace-key", "credential_types": ["bearer", "header"]},
             "aws_credentials": operator_catalog_aws.capability(),
+            "ecr_publication": operator_catalog_ecr.capability(state["policy_hash"]),
             "response_modes": ["projected_json", "unfiltered_json", "unfiltered_json_or_empty_v1",
                 "unfiltered_json_or_empty_v2"], "oauth": google_oauth is not None or x_post_available,
             "google_oauth": google_oauth,

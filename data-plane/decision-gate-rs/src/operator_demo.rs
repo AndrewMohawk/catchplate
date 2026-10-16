@@ -155,7 +155,7 @@ impl Deployment {
             return Err(refused());
         }
         let raw: Vec<String> = serde_json::from_str(origins).map_err(|_| refused())?;
-        if !(1..=16).contains(&raw.len()) {
+        if !(1..=32).contains(&raw.len()) {
             return Err(refused());
         }
         let origins = raw

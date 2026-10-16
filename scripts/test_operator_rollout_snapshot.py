@@ -289,6 +289,23 @@ class ManagedTransitionTests(unittest.TestCase):
         self.publish()
         return before, copies
 
+    def test_managed_origin_capacity_preserves_sixteen_and_accepts_thirty_two(self):
+        for capacity in (16, 32, 33):
+            self.settings['allowed_upstreams'] = ['https://demo-upstream:8443'] + [
+                f'https://service-{number}.example.com' for number in range(capacity - 1)]
+            with sqlite3.connect(self.database) as connection:
+                connection.execute('UPDATE operator_demo_settings SET settings_json=?',
+                    (json.dumps(self.settings, sort_keys=True),))
+            snapshot = self.receipt()
+            with self.subTest(capacity=capacity), sqlite3.connect(self.database) as connection:
+                if capacity <= 32:
+                    result = observer.managed_database_identity(connection, snapshot)
+                    self.assertEqual(result['effective_settings_digest'], 'sha256:' + observer.digest(self.settings))
+                else:
+                    with self.assertRaises(observer.SnapshotError) as raised:
+                        observer.managed_database_identity(connection, snapshot)
+                    self.assertEqual(raised.exception.code, 'managed_settings')
+
     def test_initial_addition_and_same_source_second_restart(self):
         before, copies = self.first()
         with sqlite3.connect(self.database) as connection:

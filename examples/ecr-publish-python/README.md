@@ -23,9 +23,12 @@ python3.12 -m venv .venv-ecr
 .venv-ecr/bin/python -m pip install -r examples/ecr-publish-python/requirements.txt
 ```
 
-The SDK is pinned to Boto3/Botocore 1.34.46, matching the existing serialization
-and publication tests. The local development machine also has that reviewed SDK
-available through `/usr/bin/python3`; no dependency installation is needed there.
+The maintained SDK is pinned to Boto3/Botocore 1.43.114, with urllib3 2.8.0 and
+Requests 2.34.2. All direct and transitive dependencies are pinned and checked at
+startup; use this environment rather than older system SDK packages. urllib3
+2.8.0 includes the [HTTPS proxy TLS and response-streaming security fixes](https://urllib3.readthedocs.io/en/stable/changelog.html).
+The example continues to use [documented SDK proxy/retry configuration](https://docs.aws.amazon.com/boto3/latest/guide/configuration.html),
+without transport patches.
 
 In Serverware, save your AWS credential, select an existing application, and add
 an ECR publication permission for one account, region, existing repository and
@@ -133,7 +136,7 @@ blindly repeating a stage, activation, or publication.**
 ## Offline checks
 
 ```sh
-/usr/bin/python3 -B examples/ecr-publish-python/test_publish.py
+.venv-ecr/bin/python -B examples/ecr-publish-python/test_publish.py
 ```
 
 Focused tests verify config/CA and identity checks, complete local staging,

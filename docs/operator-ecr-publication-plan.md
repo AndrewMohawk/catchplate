@@ -366,8 +366,11 @@ Run the pure protocol/planner checks without a provider or pilot:
 make verify-ecr-publication-plan
 ```
 
-The separate stock-SDK harness requires the existing pinned Boto3/Botocore
-1.34.46 installation, with no install or dependency resolution during a test:
+The historical offline stock-SDK harness below uses the retained Boto3/Botocore
+1.34.46 installation, with no install or dependency resolution during a test.
+Those old system dependencies are not the supported client installation: use
+the [maintained publication example](../examples/ecr-publish-python/README.md)
+and its pinned dependencies for the connected workflow.
 
 ```sh
 make verify-ecr-sdk-publication

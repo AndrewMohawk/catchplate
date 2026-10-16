@@ -33,7 +33,10 @@ SCHEMA = "serverware.awsEcrPublicationClient/v1"
 CONTROL_PATH = "/v1/ecr/publications"
 PART_BYTES = 4 * 1024 * 1024
 CONTROL_RESPONSE_BYTES = 256 * 1024
-PINS = {"boto3": "1.34.46", "botocore": "1.34.46"}
+PINS = {"boto3": "1.43.114", "botocore": "1.43.114", "certifi": "2026.7.22",
+    "charset-normalizer": "3.5.2", "idna": "3.20", "jmespath": "1.1.0",
+    "python-dateutil": "2.9.0.post0", "requests": "2.34.2", "s3transfer": "0.19.2",
+    "six": "1.17.0", "urllib3": "2.8.0"}
 CLIENT_ACCESS = "AKIAIOSFODNN7EXAMPLE"
 CLIENT_SECRET = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
 STATES = {"staging", "awaiting_review", "approved", "active", "suspended", "published", "denied", "expired", "failed", "uncertain"}

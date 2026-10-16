@@ -23,6 +23,12 @@ automatic enablement, replay or live receiver proof follows. Focused component
 checks passed; locally delivered MCP tools still exclude ECR. See the new guide
 and example for the current ordinary contract.
 
+The ordinary example now uses Boto3/Botocore 1.43.114, urllib3 2.8.0 and Requests
+2.34.2 with all dependencies pinned. Its eleven focused checks pass against that
+maintained environment. The older SDK versions in the historical evidence below
+are not the current installation recommendation; connected proxy acceptance is
+still separate.
+
 ## Historical foundation and future native design
 
 The sections below retain the earlier component evidence and native-assurance

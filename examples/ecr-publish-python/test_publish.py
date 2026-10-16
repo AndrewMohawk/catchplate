@@ -101,6 +101,8 @@ class ClientTests(unittest.TestCase):
 
     def test_configuration_and_all_ambient_credentials_are_separate(self):
         example.check_versions()
+        pinned = dict(line.split("==") for line in (Path(__file__).parent / "requirements.txt").read_text().splitlines() if line)
+        self.assertEqual(pinned, example.PINS)
         self.assertEqual(self.loaded["ca_file"], str(self.ca))
         self.assertIn("synthetic-private-proxy-token%3A%40%2F%3F%23%25", self.loaded["_proxy_url"])
         with patch.dict(os.environ, {"AWS_PROFILE": "bad", "AWS_ENDPOINT_URL": "https://bad.invalid",
@@ -182,6 +184,14 @@ class ClientTests(unittest.TestCase):
                 headers = {name.lower(): value.decode("ascii") if isinstance(value, bytes) else value for name, value in request.headers.items()}
                 self.assertEqual(request.url, "https://api.ecr.us-east-1.amazonaws.com/")
                 self.assertEqual(request.method, "POST")
+                self.assertLessEqual(set(headers), {"authorization", "x-amz-date", "x-amz-target", "user-agent",
+                    "amz-sdk-invocation-id", "amz-sdk-request", "host", "content-length", "content-type", "accept-encoding"})
+                self.assertTrue({"authorization", "x-amz-date", "x-amz-target", "user-agent",
+                    "amz-sdk-invocation-id", "amz-sdk-request"} <= set(headers))
+                self.assertIn(headers["amz-sdk-request"], {"attempt=1", "attempt=1; max=1"})
+                example.uuid(headers["amz-sdk-invocation-id"])
+                self.assertIn("SignedHeaders=content-type;host;x-amz-date;x-amz-target,", headers["authorization"])
+                self.assertEqual(headers["user-agent"].count("ServerwarePublication/" + PUBLICATION), 1)
                 self.assertIn("ServerwarePublication/" + PUBLICATION, headers["user-agent"])
                 self.assertIn("Credential=" + example.CLIENT_ACCESS + "/", headers["authorization"])
                 self.assertNotIn(TOKEN, json.dumps(headers))

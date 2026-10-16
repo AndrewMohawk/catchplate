@@ -6,13 +6,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 )
 
 const maxPrivateConfigBytes = 64 * 1024
 
-// Only connection values are consumed. Language, entrypoint, arguments and
-// other environment entries are inert, even when the recipe targets another SDK.
+// Only connection values and the top-level age hint are consumed. Language,
+// entrypoint, arguments and other environment entries are inert, even when the
+// recipe targets another SDK.
 type gmailSDKRecipe struct {
 	Schema         string `json:"schema"`
 	AccessRuleID   string `json:"access_rule_id"`
@@ -43,6 +45,29 @@ type downloadedConfig struct {
 	UpstreamURL         string          `json:"upstream_url"`
 	OperationBundle     string          `json:"operation_bundle"`
 	Methods             []string        `json:"methods"`
+	AgePolicy           json.RawMessage `json:"age_policy"`
+	QueryMode           string          `json:"query_mode"`
+}
+
+func agePolicyDays(raw json.RawMessage) (int, error) {
+	if len(raw) == 0 {
+		return 0, nil // Retained connection-only recipes have no policy metadata.
+	}
+	invalid := errors.New("invalid Gmail age policy")
+	var fields map[string]json.RawMessage
+	var mode string
+	if json.Unmarshal(raw, &fields) != nil || fields == nil || json.Unmarshal(fields["mode"], &mode) != nil {
+		return 0, invalid
+	}
+	if mode == "unrestricted" && len(fields) == 1 {
+		return 0, nil
+	}
+	var days int
+	if mode != "recent_internal_date_v1" || len(fields) != 2 ||
+		json.Unmarshal(fields["max_age_days"], &days) != nil || days < 1 || days > 3650 {
+		return 0, invalid
+	}
+	return days, nil
 }
 
 func configurationEnvironment(args []string, getenv func(string) string, now time.Time) (func(string) string, error) {
@@ -80,6 +105,10 @@ func downloadedEnvironment(path string, now time.Time) (func(string) string, err
 	if json.Unmarshal(raw, &saved) != nil {
 		return nil, errors.New("private configuration is not a supported JSON document")
 	}
+	ageDays, err := agePolicyDays(saved.AgePolicy)
+	if err != nil {
+		return nil, err
+	}
 	recipeBytes := raw
 	wrapped := len(saved.ClientRecipe) != 0
 	if wrapped {
@@ -108,6 +137,9 @@ func downloadedEnvironment(path string, now time.Time) (func(string) string, err
 		len(saved.Methods) != 1 || saved.Methods[0] != "GET") {
 		return nil, errors.New("private configuration connection fields and Gmail read-only permission must match its SDK recipe")
 	}
+	if ageDays > 0 && saved.QueryMode != "orderedFormV1" {
+		return nil, errors.New("recent Gmail policy requires orderedFormV1")
+	}
 	if !validCAPath(env.CAFile) || (env.ProxyCAFile != "" && !validCAPath(env.ProxyCAFile)) {
 		return nil, errors.New("private configuration requires printable CA paths of at most 512 bytes")
 	}
@@ -125,6 +157,9 @@ func downloadedEnvironment(path string, now time.Time) (func(string) string, err
 		"LANG": "C.UTF-8", "SERVERWARE_PROXY_URL": env.ProxyURL, "SERVERWARE_APP_ID": env.AppID,
 		"SERVERWARE_PROXY_TOKEN": env.ProxyToken, "SERVERWARE_CA_FILE": resolveCA(env.CAFile),
 		"SERVERWARE_PROXY_CA_FILE": resolveCA(env.ProxyCAFile),
+	}
+	if ageDays > 0 {
+		values["SERVERWARE_GMAIL_MAX_AGE_DAYS"] = strconv.Itoa(ageDays)
 	}
 	// Never fall back to ambient values, including an absent optional proxy CA.
 	selected := func(key string) string { return values[key] }
@@ -150,7 +185,7 @@ func validCAPath(value string) bool {
 // Only the --config CLI path replaces it; normal environment-based use is kept.
 func replaceConfigurationEnvironment(getenv func(string) string) error {
 	keys := []string{"LANG", "SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID", "SERVERWARE_PROXY_TOKEN",
-		"SERVERWARE_CA_FILE", "SERVERWARE_PROXY_CA_FILE"}
+		"SERVERWARE_CA_FILE", "SERVERWARE_PROXY_CA_FILE", "SERVERWARE_GMAIL_MAX_AGE_DAYS"}
 	values := make([]string, len(keys))
 	for i, key := range keys {
 		values[i] = getenv(key)

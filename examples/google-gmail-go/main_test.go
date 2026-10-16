@@ -63,6 +63,11 @@ func TestConfigRequiresExplicitInputs(t *testing.T) {
 		{"SERVERWARE_APP_ID", "invalid"},
 		{"SERVERWARE_PROXY_TOKEN", "not-an-issued-app-token"},
 		{"SERVERWARE_CA_FILE", ""},
+		{"SERVERWARE_GMAIL_MAX_AGE_DAYS", "0"},
+		{"SERVERWARE_GMAIL_MAX_AGE_DAYS", "01"},
+		{"SERVERWARE_GMAIL_MAX_AGE_DAYS", "3651"},
+		{"SERVERWARE_GMAIL_MAX_AGE_DAYS", "7.0"},
+		{"SERVERWARE_GMAIL_MAX_AGE_DAYS", "true"},
 		{"GOOGLE_API_USE_CLIENT_CERTIFICATE", "TRUE"},
 	} {
 		t.Run(tc.key+"/"+tc.value, func(t *testing.T) {
@@ -166,6 +171,44 @@ func TestStockSDKListPaginationAndMetadataSerialization(t *testing.T) {
 	got, err := readMailbox(context.Background(), client)
 	if err != nil || got != (summary{Pages: 2, MessagesRead: 2}) || calls != 4 {
 		t.Fatal("bounded stock SDK sequence failed")
+	}
+}
+
+func TestRecentSampleUsesOneExplicitQueryAcrossPages(t *testing.T) {
+	query, err := sampleQuery(7, time.UnixMilli(1800000000001))
+	if err != nil || query != "after:1799395201" {
+		t.Fatal("millisecond cutoff was not rounded up")
+	}
+	if exact, err := sampleQuery(7, time.UnixMilli(1800000000000)); err != nil || exact != "after:1799395200" {
+		t.Fatal("exact second cutoff changed")
+	}
+	if unrestricted, err := sampleQuery(0, time.UnixMilli(1800000000001)); err != nil || unrestricted != "" {
+		t.Fatal("unrestricted query changed")
+	}
+	paths := []string{}
+	client := clientForTest(t, func(r *http.Request) (*http.Response, error) {
+		paths = append(paths, r.URL.RequestURI())
+		body := `{}`
+		if len(paths) == 1 {
+			body = `{"messages":[{"id":"one"}],"nextPageToken":"next+page /="}`
+		} else if len(paths) == 2 {
+			body = `{"id":"one","internalDate":"1800000000000"}`
+		}
+		return response(r, 200, body), nil
+	})
+	result, err := readMailboxQuery(context.Background(), client, query)
+	if err != nil || result != (summary{Pages: 2, MessagesRead: 1}) || len(paths) != 3 {
+		t.Fatal("bounded restricted sample failed")
+	}
+	want := []string{
+		"/gmail/v1/users/me/messages?alt=json&labelIds=INBOX&maxResults=5&prettyPrint=false&q=after%3A1799395201",
+		"/gmail/v1/users/me/messages/one?alt=json&format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date&prettyPrint=false",
+		"/gmail/v1/users/me/messages?alt=json&labelIds=INBOX&maxResults=5&pageToken=next%2Bpage+%2F%3D&prettyPrint=false&q=after%3A1799395201",
+	}
+	for i := range want {
+		if paths[i] != want[i] {
+			t.Fatal("query order, repeated headers or fixed cutoff changed")
+		}
 	}
 }
 

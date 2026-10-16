@@ -92,7 +92,7 @@ function createProxyView(workspace, applications) {
     return {proxyUrl: catalog.proxy_url, applicationId: application.id, accessRuleId: rule.id,
       tokenExpiresAtEpochMs: application.token_expires_at_epoch_ms,
       caPath: element('ca-path').value, proxyCaPath: element('gmail-proxy-ca-path').value,
-      language: element('gmail-sdk-language').value};
+      language: element('gmail-sdk-language').value, agePolicy: gmailAgePolicy(rule.age_policy)};
   }
   renderOperatorCompatibility('client-compatibility-content');
   function render() {
@@ -237,7 +237,8 @@ function createProxyView(workspace, applications) {
         repository: rule.repository, bundle: rule.operation_bundle, operation: element('github-client-operation').value,
         caPath: element('ca-path').value, proxyCaPath: element('github-proxy-ca-path').value}) :
         gmailSdk ? buildGmailSdkClientRecipe(gmailSdkOptions(catalog, application, rule)) :
-        (isCommonAppRule(rule) ? commonAppCurlCommand : buildCurlCommand)({proxyUrl: catalog.proxy_url, upstreamUrl: rule.upstream_url + (messageRead ? '/' + messageId : ''), method: element('proxy-method').value,
+        (isCommonAppRule(rule) ? commonAppCurlCommand : buildCurlCommand)({proxyUrl: catalog.proxy_url, upstreamUrl: rule.upstream_url +
+          (messageRead ? '/' + messageId : gmail && rule.age_policy.mode === 'recent_internal_date_v1' ? '?maxResults=32' : ''), method: element('proxy-method').value,
         caPath: element('ca-path').value, allowedHeaders: rule.allowed_headers,
         credentialInput: rule.credential_input, placeholder: rule.placeholder, credential,
         proxyAuthentication, applicationId: application.id}, rule, catalog);
@@ -284,7 +285,7 @@ function createProxyView(workspace, applications) {
       element('client-guidance').textContent = (ready ?
         'The exact saved policy is loaded and the application token is not expired. ' :
         'Wait for the exact saved policy to load and resolve uncertain changes before copying or running. ') +
-        'From ' + gmailProfile.directory + ', run the copied Bash recipe after preparing the selected runtime and pinned dependencies, with your application token set privately. No provider credentials are inherited by the job. The SDK reads a bounded inbox sample and prints counts only; no complete-mailbox or age-policy claim. ' +
+        'From ' + gmailProfile.directory + ', run the copied Bash recipe after preparing the selected runtime and pinned dependencies, with your application token set privately. No provider credentials are inherited by the job. The SDK reads a bounded inbox sample and prints counts only; not a complete-mailbox result. ' + gmailAgePolicySummary(rule.age_policy) + ' ' +
         'The optional private JSON download contains the matching application token and explicit SDK environment/entrypoint. It is not an executable; keep it out of source control. No client connection was tested here.';
       return;
     }
@@ -333,7 +334,9 @@ function createProxyView(workspace, applications) {
     if (gmail) {
       element('client-guidance').textContent = (ready ? 'Policy loaded and app token not expired. No Gmail request or refresh was tested here. ' :
         'Waiting for the exact policy to load; resolve uncertain changes before use. ') +
-        'Use GET lists and individual message reads; no request body. Your client may follow nextPageToken and request full or metadata message JSON. No age restriction, attachments, history, Calendar or writes. ' +
+        'Use GET lists and individual message reads; no request body. Your client may follow nextPageToken and request full or metadata message JSON. No attachments, history, Calendar or writes. ' +
+        gmailAgePolicySummary(rule.age_policy) + ' ' + (rule.age_policy.mode === 'recent_internal_date_v1' ?
+          'List requests require maxResults 1–32. Metadata checks verify each message’s internalDate; an old message or unverifiable age blocks the whole page. Add an explicit Gmail q search to narrow the list when needed; search does not authorize older mail. ' : '') +
         (rule.query_mode === 'orderedFormV1' ? 'Supported query parameters may remain in client order; operation and value limits still apply. ' :
           'This retained permission still requires legacy canonical query encoding/order. ') +
         (dummyHeader ? 'Send the displayed exact dummy Authorization header once; it is not the app token or a provider secret. ' :
@@ -434,7 +437,7 @@ function createProxyView(workspace, applications) {
       config.note += ' X app-only username lookup only: GET with no query or body. Fixed public dummy; no posting or user OAuth. Provider entitlement and ordinary SDK compatibility have not been verified by this page.';
     }
     if (isGmailRule(rule)) {
-      config.operation_bundle = rule.operation_bundle; config.age_policy = {mode: rule.age_policy.mode};
+      config.operation_bundle = rule.operation_bundle; config.age_policy = gmailAgePolicy(rule.age_policy);
       if (Object.hasOwn(rule, 'query_mode')) config.query_mode = rule.query_mode;
       config.operations = [{name: 'List messages', method: 'GET', url: rule.upstream_url},
         {name: 'Read message', method: 'GET', url_template: rule.upstream_url + '/{message_id}', message_id_source: 'id returned by this account message list'}];
@@ -442,8 +445,11 @@ function createProxyView(workspace, applications) {
         try { config.client_recipe = gmailSdkClientConfiguration(gmailSdkOptions(catalog, application, rule), token); }
         catch (_) { element('client-copy-status').textContent = 'Private Gmail SDK configuration is unavailable; refresh and confirm this application token and CA paths.'; return; }
         config.proxy_ca_file = element('gmail-proxy-ca-path').value || null;
-        config.note += ' Gmail Node, Python and Go examples accept this complete file with --config. Relative CA paths resolve beside this JSON file, not the example directory. Contains only the Serverware application token, not Google credentials. The example reads connection settings; this JSON is never executed. Bounded inbox sample, no age restriction. Keep out of source control.';
-      } else config.note += ' Your client performs pagination and separate message reads; this is not an automated mail job. No age restriction.';
+        config.note += ' Gmail Node, Python and Go examples accept this complete file with --config. Relative CA paths resolve beside this JSON file, not the example directory. Contains only the Serverware application token, not Google credentials. The example reads connection settings; this JSON is never executed. Bounded inbox sample, not complete-mailbox coverage. Keep out of source control.';
+      } else config.note += ' Your client performs pagination and separate message reads; this is not an automated mail job.';
+      config.note += ' ' + gmailAgePolicySummary(rule.age_policy);
+      if (rule.age_policy.mode === 'recent_internal_date_v1') config.note +=
+        ' List requests require maxResults 1–32. Metadata checks verify every message’s internalDate; an old message or unverifiable age blocks the whole page. Search is only a convenience, never the age-policy authority.';
     }
     if (isGithubRule(rule)) {
       config.operation_bundle = rule.operation_bundle; config.repository = {...rule.repository}; config.query_mode = rule.query_mode;

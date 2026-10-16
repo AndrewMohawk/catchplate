@@ -13,20 +13,24 @@ function operatorExact(value, expected) {
     Object.keys(value).length === Object.keys(expected).length && Object.keys(expected).every(key => Object.hasOwn(value, key) && operatorExact(value[key], expected[key]));
   return value === expected;
 }
-function operatorGmailDescriptor() {
+function operatorGmailDescriptor(recent = false) {
   return {operation_bundle: operatorGmail.bundle, create_path: '/api/operator-demo/access-rules/gmail-read',
     credential_type: 'google_oauth', permission_preset: 'gmail_readonly', api_origin: operatorGmail.origin,
     methods: ['GET'], paths: [operatorGmail.path, operatorGmail.path + '/{message_id}'], query_mode: 'orderedFormV1',
-    age_policy: {mode: 'unrestricted'}, response_mode: operatorGmail.response,
+    age_policy: {mode: 'unrestricted'}, ...(recent ? {age_policy_options: [{mode: 'unrestricted'},
+      {mode: 'recent_internal_date_v1', min_age_days: 1, max_age_days: 3650, max_list_results: 32}]} : {}), response_mode: operatorGmail.response,
     response_contract: {mode: 'gmailReadJsonV1', body_presence: 'required', content_types: ['application/json'],
       success_status_codes: [200], error_status_codes: [400, 401, 403, 404, 429, 500, 502, 503, 504],
       max_body_bytes: 1048576, max_error_body_bytes: 65536, unlisted_header_policy: 'discardUnselectedV1'}};
 }
+function gmailDescriptorValid(value) {
+  return operatorExact(value, operatorGmailDescriptor()) || operatorExact(value, operatorGmailDescriptor(true));
+}
 function projectOperationBundles(value, google) {
   if (value === undefined) return []; // Old catalog: no authority to create a bundle.
-  if (!Array.isArray(value) || value.length > 1 || value.some(item => !google || !operatorExact(item, operatorGmailDescriptor())))
+  if (!Array.isArray(value) || value.length > 1 || value.some(item => !google || !gmailDescriptorValid(item)))
     throw operatorError('Operation capability metadata is unsupported. Refresh before making changes.');
-  return value.map(() => operatorGmailDescriptor());
+  return value.map(item => JSON.parse(JSON.stringify(item)));
 }
 function isGmailRule(rule) { return rule?.operation_bundle === operatorGmail.bundle; }
 function isGithubAppCredential(credential) { return credential?.connection_type === 'github_app_v1'; }
@@ -45,18 +49,33 @@ function isAlchemyRule(rule) { return rule?.operation_bundle === 'alchemy_chain_
 function isAwsCredential(credential) { return credential?.auth_type === 'aws_sigv4_v1' || credential?.connection_type === 'aws_sigv4_v1'; }
 function isCommonAppCredential(value) { return Object.hasOwn(value || {}, 'app_preset'); }
 function isCommonAppRule(value) { return ['app_preset', 'app_operation', 'scope'].some(key => Object.hasOwn(value || {}, key)); }
-function gmailAvailable(catalog, credential) {
+function gmailAgePolicy(value = {mode: 'unrestricted'}) {
+  if (operatorExact(value, {mode: 'unrestricted'})) return {mode: 'unrestricted'};
+  if (Number.isSafeInteger(value?.max_age_days) && value.max_age_days >= 1 && value.max_age_days <= 3650 &&
+      operatorExact(value, {mode: 'recent_internal_date_v1', max_age_days: value.max_age_days}))
+    return {mode: 'recent_internal_date_v1', max_age_days: value.max_age_days};
+  throw operatorError('Choose all mail, or a whole number of days from 1 to 3650.');
+}
+function gmailRecentAvailable(catalog) {
+  return Boolean(catalog?.capabilities.operation_bundles?.some(item => operatorExact(item, operatorGmailDescriptor(true))));
+}
+function gmailAvailable(catalog, credential, agePolicy = {mode: 'unrestricted'}) {
+  try { agePolicy = gmailAgePolicy(agePolicy); } catch (_) { return false; }
   return credential?.status === 'active' && credential.auth_type === 'google_oauth' &&
     credential.permission_preset === 'gmail_readonly' && Boolean(catalog?.capabilities.google_oauth) &&
-    catalog.capabilities.operation_bundles?.some(item => operatorExact(item, operatorGmailDescriptor()));
+    catalog.capabilities.operation_bundles?.some(gmailDescriptorValid) &&
+    (agePolicy.mode === 'unrestricted' || gmailRecentAvailable(catalog));
 }
-function gmailRuleFields() {
-  return {operation_bundle: operatorGmail.bundle, age_policy: {mode: 'unrestricted'}, query_mode: 'orderedFormV1',
+function gmailRuleFields(agePolicy = {mode: 'unrestricted'}) {
+  return {operation_bundle: operatorGmail.bundle, age_policy: gmailAgePolicy(agePolicy), query_mode: 'orderedFormV1',
     upstream_url: operatorGmail.origin + operatorGmail.path, methods: ['GET'], request_fields: [], response_fields: [],
     query_keys: [...operatorGmail.queries], allowed_headers: [...operatorGmail.headers], response_mode: operatorGmail.response};
 }
 function gmailRuleValid(rule, credential) {
-  const expected = gmailRuleFields(); delete expected.query_mode;
+  let expected;
+  try { expected = gmailRuleFields(rule.age_policy); } catch (_) { return false; }
+  if (!Object.hasOwn(rule, 'age_policy') || expected.age_policy.mode !== 'unrestricted' && rule.query_mode !== 'orderedFormV1') return false;
+  delete expected.query_mode;
   if (!Object.hasOwn(rule, 'query_mode')) expected.allowed_headers = [...operatorGmail.legacyHeaders];
   return credential?.auth_type === 'google_oauth' && credential.header_name === 'Authorization' &&
     credential.permission_preset === 'gmail_readonly' && !Object.hasOwn(rule, 'request_body_mode') &&
@@ -65,7 +84,7 @@ function gmailRuleValid(rule, credential) {
 }
 function gmailRulePayload(rule) {
   return {name: rule.name, application_id: rule.application_id, credential_id: rule.credential_id,
-    operation_bundle: operatorGmail.bundle, age_policy: {mode: 'unrestricted'}, credential_input: rule.credential_input,
+    operation_bundle: operatorGmail.bundle, age_policy: gmailAgePolicy(rule.age_policy), credential_input: rule.credential_input,
     ...(rule.credential_input === 'replace_exact' ? {placeholder: rule.placeholder} : {})};
 }
 const operatorResponseModes = Object.freeze({unfiltered_json_or_empty_v2: 'Keep JSON content or empty response',
@@ -182,7 +201,7 @@ function operatorRuleSupported(rule, catalog) {
       githubRuleValid(rule, credential) && operatorRuleCredentialValid(rule, credential) && githubAvailable(catalog, credential));
   return Boolean(credential && application && applicationProxyAuthenticationSupported(catalog, application) &&
     operatorRuleContentValid(rule, credential) && operatorRuleCredentialValid(rule, credential) &&
-    (isGmailRule(rule) ? gmailAvailable(catalog, credential) : availableResponseModes(catalog).includes(rule.response_mode)) && availableCredentialInputModes(catalog).includes(rule.credential_input) &&
+    (isGmailRule(rule) ? gmailAvailable(catalog, credential, rule.age_policy) : availableResponseModes(catalog).includes(rule.response_mode)) && availableCredentialInputModes(catalog).includes(rule.credential_input) &&
     (!Object.hasOwn(rule, 'request_body_mode') || availableRequestBodyChoices(catalog, credential).includes(rule.request_body_mode)));
 }
 function projectHostApprovalsCapability(value) {

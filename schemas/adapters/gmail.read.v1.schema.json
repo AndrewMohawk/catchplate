@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://serverware.local/schemas/adapters/gmail.read.v1.schema.json",
   "title": "Serverware closed Gmail message-read authority v1",
-  "$comment": "Additive unrestricted-age message reads only. Optional queryMode orderedFormV1 binds original query wire and ordered decoded pairs in canonical request v3; absence retains legacy canonical query admission. Legacy gmail.v1, optional age enforcement and response proofs are unchanged.",
+  "$comment": "Unrestricted message reads retain their exact contract. Optional recent_internal_date_v1 requires orderedFormV1, explicit list maxResults 1..32 and fresh internalDate evidence at the Rust gate, never query-only age proof. Legacy gmail.v1 is unchanged.",
   "type": "object",
   "additionalProperties": false,
   "required": ["credentialBinding", "request", "agePolicy", "response"],
@@ -35,7 +35,15 @@
         "requiredScopes": {"const": ["https://www.googleapis.com/auth/gmail.readonly"]}
       }
     },
-    "agePolicy": {"const": {"mode": "unrestricted"}},
+    "agePolicy": {"oneOf": [
+      {"const": {"mode": "unrestricted"}},
+      {"type": "object", "additionalProperties": false,
+        "required": ["mode", "maxAgeDays"],
+        "properties": {
+          "mode": {"const": "recent_internal_date_v1"},
+          "maxAgeDays": {"type": "integer", "minimum": 1, "maximum": 3650}
+        }}
+    ]},
     "request": {
       "type": "object", "additionalProperties": false,
       "required": ["allowedHeaders", "allowedQueryKeys", "allowedMediaTypes", "maxBodyBytes", "valueRules"],
@@ -74,5 +82,11 @@
         "error": {"$ref": "#/$defs/errorResponse"}
       }
     }
-  }
+  },
+  "allOf": [{
+    "if": {"properties": {"agePolicy": {"properties": {
+      "mode": {"const": "recent_internal_date_v1"}
+    }, "required": ["mode"]}}, "required": ["agePolicy"]},
+    "then": {"properties": {"request": {"required": ["queryMode"]}}}
+  }]
 }

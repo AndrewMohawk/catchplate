@@ -13,11 +13,14 @@ Pagination/returned-ID/body preservation needs the separate paired runtime job;
 these tests establish the catalog's single-route authority and persisted contract.
 """
 from contextlib import closing
+from copy import deepcopy
+import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -135,6 +138,9 @@ def signed_bundle():
         "api_origin": "https://gmail.googleapis.com", "methods": ["GET"],
         "paths": ["/gmail/v1/users/me/messages", "/gmail/v1/users/me/messages/{message_id}"],
         "query_mode": "orderedFormV1", "age_policy": {"mode": "unrestricted"},
+        "age_policy_options": [{"mode": "unrestricted"},
+            {"mode": "recent_internal_date_v1", "min_age_days": 1,
+                "max_age_days": 3650, "max_list_results": 32}],
         "response_mode": "gmail_read_json_v1", "response_contract": {
             "mode": "gmailReadJsonV1", "body_presence": "required",
             "content_types": ["application/json"], "success_status_codes": [200],
@@ -145,6 +151,62 @@ def signed_bundle():
     for secret in (google.ACCESS_TOKEN, google.REFRESH_TOKEN, google.CLIENT_SECRET):
         assert secret not in json.dumps(status) and secret not in json.dumps(raw)
     return {"one_route_two_operations": True, "closed_source_capability": True}
+
+
+def recent_bundle():
+    f = Fixture()
+    old = f.bundle(f.application())["access_rule"]
+    old_route = next(row for row in f.signed()["routes"] if row["id"] == old["route_id"])
+    old_bytes = f.bundles.canonical_json(old_route)
+    core = f.core()
+    selected = {"mode": "recent_internal_date_v1", "max_age_days": 30}
+    rule = f.bundle(f.application(), age_policy=selected)["access_rule"]
+    assert rule["age_policy"] == selected and rule["query_mode"] == "orderedFormV1"
+    raw = f.signed()
+    route = next(row for row in raw["routes"] if row["id"] == rule["route_id"])
+    assert route["adapter"]["config"]["agePolicy"] == {
+        "mode": "recent_internal_date_v1", "maxAgeDays": 30}
+    for key in ("request", "response", "credentialBinding"):
+        assert route["adapter"]["config"][key] == old_route["adapter"]["config"][key]
+    assert route["constraints"] == [f.bundles.gmail_read_response_envelope(rule["route_id"] + ".envelope")]
+    assert f.bundles.canonical_json(next(row for row in raw["routes"] if row["id"] == old["route_id"])) == old_bytes
+    public = f.call(f.mutations.catalog_status)
+    assert next(row for row in public["access_rules"] if row["id"] == rule["id"])["age_policy"] == selected
+    assert f.core() == core
+
+    invalid = [None, {}, {"mode": "recent_internal_date_v1"},
+        {"mode": "unrestricted", "maxAgeDays": 30},
+        {"mode": "recent_internal_date_v1", "max_age_days": 30},
+        {"mode": "recent_internal_date_v1", "maxAgeDays": 30, "cacheTtlSeconds": 60}]
+    invalid += [{"mode": "recent_internal_date_v1", "maxAgeDays": days}
+        for days in (None, True, False, 0, -1, 3651, "30", 30.0)]
+    route_index = next(index for index, row in enumerate(raw["routes"]) if row["id"] == rule["route_id"])
+    for schema in (False, True):
+        for age in invalid:
+            candidate = deepcopy(raw)
+            candidate["routes"][route_index]["adapter"]["config"]["agePolicy"] = age
+            google.refused(lambda: f.bundles.compile_policy_bundle(candidate,
+                verify_signature=False, validate_schema=schema), f.bundles.PolicyBundleError)
+        for days in (1, 3650):
+            candidate = deepcopy(raw)
+            candidate["routes"][route_index]["adapter"]["config"]["agePolicy"]["maxAgeDays"] = days
+            f.bundles.compile_policy_bundle(candidate, verify_signature=False, validate_schema=schema)
+        candidate = deepcopy(raw)
+        candidate["routes"][route_index]["adapter"]["config"]["request"] = f.bundles.provider_request_profile("gmail.read.v1")
+        google.refused(lambda: f.bundles.compile_policy_bundle(candidate,
+            verify_signature=False, validate_schema=schema), f.bundles.PolicyBundleError)
+
+    # The Python prototype cannot prove fresh age evidence, including when its
+    # response hooks are invoked directly. It must not act as an age bypass.
+    from serverware import adapters
+    compiled = f.bundles.compile_policy_bundle(raw, verify_signature=True, validate_schema=True)
+    policy = next(row for row in compiled.routes if row.id == rule["route_id"])
+    adapter = adapters.get_adapter("gmail.read.v1")
+    for check in (adapter.validate_request, adapter.prepare_response, adapter.validate_response):
+        decision = check(SimpleNamespace(), policy, {})
+        assert not decision.allowed and decision.payload["error"] == "gmail_read_age_evidence_unsupported"
+    return {"recent_policy_signed": True, "unrestricted_route_bytes_unchanged": True,
+        "compiler_refusals": 2 * (len(invalid) + 1), "python_prototype_refused": True}
 
 
 def legacy_retained():
@@ -176,7 +238,7 @@ def legacy_retained():
     assert "query_mode" not in pre_query_record
     assert "queryMode" not in pre_query_route["adapter"]["config"]["request"]
     caps = f.call(f.mutations.catalog_status)["capabilities"]
-    f.bundle(f.application())
+    f.bundle(f.application(), age_policy={"mode": "recent_internal_date_v1", "max_age_days": 7})
     assert next(row for row in f.signed()["routes"] if row["id"] == old["route_id"]) == old_route
     assert next(row for row in workspace.catalog(f.db, f.schema)["access_rules"] if row["id"] == old["id"]) == old_record
     assert next(row for row in f.signed()["routes"] if row["id"] == pre_query["route_id"]) == pre_query_route
@@ -284,6 +346,9 @@ def guarded_http():
         assert f.request("POST", ENDPOINT, body=fields, auth=False)[0] == 401
         assert f.request("POST", ENDPOINT, body=fields, origin=False)[0] == 403
         assert f.request("POST", ENDPOINT, body={**fields, "methods": ["POST"]})[0] == 422
+        for days in (True, 0, 3651, "30"):
+            assert f.request("POST", ENDPOINT, body={**fields, "age_policy": {
+                "mode": "recent_internal_date_v1", "max_age_days": days}})[0] == 422
         duplicate = json.dumps(fields)[:-1] + ',"operation_bundle":"gmail_read_v1"}'
         assert f.request("POST", ENDPOINT, body=duplicate.encode())[0] == 422
         assert f.request("POST", ENDPOINT, body=b" " * 4097)[0] == 413
@@ -294,11 +359,16 @@ def guarded_http():
         assert result["access_rule"]["operation_bundle"] == "gmail_read_v1"
         assert [value for name, value in headers if name.lower() == b"cache-control"] == [b"no-store"]
         assert f.request("POST", ENDPOINT, body=fields)[0] == 409
+        selected = {"mode": "recent_internal_date_v1", "max_age_days": 30}
+        recent = f.fields(f.application(), age_policy=selected)
+        code, raw, _ = f.request("POST", ENDPOINT, body=recent)
+        assert code == 201 and json.loads(raw)["access_rule"]["age_policy"] == selected
         assert provider.call_count == 0
     return {"guarded_http": True, "provider_contacts": 0}
 
 
 OPERATIONS = {"strict-input": strict_input, "signed-bundle": signed_bundle,
+    "recent-bundle": recent_bundle,
     "legacy-retained": legacy_retained, "refused-bindings": refused_bindings,
     "shared-lifecycle": shared_lifecycle, "guarded-http": guarded_http,
     "disabled-capability": disabled_capability}
@@ -324,6 +394,12 @@ class OperatorCatalogGmailTests(unittest.TestCase):
     def test_one_signed_route_binds_both_reads_and_closed_source_capability(self):
         self.assertTrue(self.worker("signed-bundle")["one_route_two_operations"])
 
+    def test_recent_policy_signed_compiled_and_prototype_fail_closed(self):
+        result = self.worker("recent-bundle")
+        self.assertTrue(result["recent_policy_signed"])
+        self.assertTrue(result["unrestricted_route_bytes_unchanged"])
+        self.assertTrue(result["python_prototype_refused"])
+
     def test_old_rule_render_and_repeat_initialization_are_unchanged(self):
         self.assertTrue(self.worker("legacy-retained")["legacy_rule_unchanged"])
 
@@ -338,6 +414,56 @@ class OperatorCatalogGmailTests(unittest.TestCase):
 
     def test_real_guarded_endpoint_refuses_bad_requests_without_provider_io(self):
         self.assertEqual(self.worker("guarded-http")["provider_contacts"], 0)
+
+
+class GmailAgePolicyContractTests(unittest.TestCase):
+    def test_strict_age_input_and_persisted_shape(self):
+        from serverware import operator_catalog_gmail as gmail, operator_catalog_inputs as inputs
+        from serverware.operator_catalog_schema import CatalogIntegrityError
+        fields = {"expected_revision": 1, "expected_policy_hash": "sha256:" + "0" * 64,
+            "name": "Gmail age fixture", "application_id": "00000000-0000-4000-8000-000000000001",
+            "credential_id": "00000000-0000-4000-8000-000000000002", "operation_bundle": "gmail_read_v1"}
+        omitted = inputs.GmailReadRuleInput(**fields)
+        explicit = inputs.GmailReadRuleInput(**fields, age_policy={"mode": "unrestricted"})
+        self.assertEqual(omitted.model_dump(), explicit.model_dump())
+        self.assertEqual(omitted.age_policy.model_dump(), {"mode": "unrestricted"})
+        for days in (1, 30, 3650):
+            policy = {"mode": "recent_internal_date_v1", "max_age_days": days}
+            value = inputs.GmailReadRuleInput(**fields, age_policy=policy)
+            record = gmail.record_fields(value)
+            self.assertEqual(value.age_policy.model_dump(), policy)
+            self.assertEqual(gmail.public_fields(record)["age_policy"], policy)
+            legacy = dict(record)
+            legacy.pop("query_mode")
+            legacy.update(gmail._derived_fields())
+            with self.assertRaises(CatalogIntegrityError):
+                gmail.validate_shape(legacy)
+        invalid = [None, {}, {"mode": "recent_internal_date_v1"},
+            {"mode": "unrestricted", "max_age_days": 30},
+            {"mode": "recent_internal_date_v1", "maxAgeDays": 30},
+            {"mode": "recent_internal_date_v1", "max_age_days": 30, "extra": True}]
+        invalid += [{"mode": "recent_internal_date_v1", "max_age_days": days}
+            for days in (None, True, False, 0, -1, 3651, "30", 30.0)]
+        record = gmail.record_fields(omitted)
+        for policy in invalid:
+            with self.subTest(policy=policy):
+                with self.assertRaises(ValueError):
+                    inputs.GmailReadRuleInput(**fields, age_policy=policy)
+                with self.assertRaises(CatalogIntegrityError):
+                    gmail.validate_shape({**record, "age_policy": policy})
+
+    def test_unrestricted_route_bytes_match_pre_change_fingerprints(self):
+        from serverware import operator_catalog_gmail as gmail
+        credential = {"id": "credential:test", "provider_subject": "subject:test", "oauth_client_id": "client:test"}
+        original = {"operation_bundle": gmail.BUNDLE, "age_policy": {"mode": "unrestricted"}, "route_id": "route:test"}
+        # Captured from both retained profiles before adding the new age mode.
+        expected = {None: "fdab47ea1a8744c76e6ec4e2b86e71d4e465e360cc6431627237d8d17db0086a",
+            gmail.QUERY_MODE: "9bca686dbbe526c4b12f37e41633aeb41ebd8acc2f16bab596cb66490b889dc7"}
+        for mode, digest in expected.items():
+            rule = {**original, **gmail._derived_fields(mode), **({"query_mode": mode} if mode else {})}
+            encoded = json.dumps(gmail.render_route(rule, credential, "principal:test"),
+                sort_keys=True, separators=(",", ":")).encode()
+            self.assertEqual(hashlib.sha256(encoded).hexdigest(), digest)
 
 
 if __name__ == "__main__":

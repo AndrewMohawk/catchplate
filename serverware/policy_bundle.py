@@ -6285,6 +6285,20 @@ def _validate_signed_npm_publish_response_contract(
         )
 
 
+def validate_gmail_read_age_policy(route_id: str, age_policy: Any, *,
+        query_mode: str | None) -> int | None:
+    """Closed age authority; request query alone cannot establish message age."""
+    if age_policy == {"mode": "unrestricted"}:
+        return None
+    if (not isinstance(age_policy, dict) or set(age_policy) != {"mode", "maxAgeDays"}
+            or age_policy["mode"] != "recent_internal_date_v1"
+            or type(age_policy["maxAgeDays"]) is not int
+            or not 1 <= age_policy["maxAgeDays"] <= 3650
+            or query_mode != ORDERED_FORM_QUERY_MODE):
+        raise PolicyBundleError(f"route {route_id} Gmail read age policy is invalid")
+    return age_policy["maxAgeDays"]
+
+
 def gmail_read_response_profile() -> dict[str, Any]:
     """The explicit typed read profile is not a generic/V1 mode alias."""
     return {"mode": GMAIL_READ_RESPONSE_MODE, "maxBodyBytes": 1048576,
@@ -6589,12 +6603,13 @@ def _validate_adapter_security_invariants(
 
     if adapter_type == GMAIL_READ_ADAPTER:
         request = adapter_config.get("request") or {}
+        validate_gmail_read_age_policy(route_id, adapter_config.get("agePolicy"),
+            query_mode=request_query_mode(adapter_type, adapter_config))
         expected_request = provider_request_profile(adapter_type,
             query_mode=request_query_mode(adapter_type, adapter_config))
         if (not credential_ref or host != "gmail.googleapis.com" or methods != frozenset({"GET"})
                 or paths != GMAIL_READ_PATHS
                 or jit.get("required") is True
-                or adapter_config.get("agePolicy") != {"mode": "unrestricted"}
                 or request.get("valueRules") != []
                 or request.get("discardHeaders", []) != expected_request["discardHeaders"]):
             raise PolicyBundleError(f"route {route_id} Gmail read authority is invalid")

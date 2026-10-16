@@ -234,3 +234,45 @@ func TestConfigurationReplacesSDKProcessEnvironment(t *testing.T) {
 		t.Fatal("selected SDK process environment was refused")
 	}
 }
+
+func TestOptionalAgePolicyPreservesLegacyAndRestrictedHints(t *testing.T) {
+	legacy := recipeForTest("serverware.gmailSdkClient/v1", "go")
+	legacy["environment"].(map[string]any)["SERVERWARE_GMAIL_MAX_AGE_DAYS"] = "9"
+	for _, value := range []map[string]any{legacy, wrapperForTest(legacy)} {
+		getenv, err := downloadedEnvironment(writeConfiguration(t, value), configTestNow)
+		if err != nil || getenv("SERVERWARE_GMAIL_MAX_AGE_DAYS") != "" {
+			t.Fatal("absent top-level age policy inherited a nested recipe hint")
+		}
+	}
+	for _, days := range []int{1, 7, 3650} {
+		wrapped := wrapperForTest(recipeForTest("serverware.gmailSdkClient/v2", "python"))
+		wrapped["query_mode"] = "orderedFormV1"
+		wrapped["age_policy"] = map[string]any{"mode": "recent_internal_date_v1", "max_age_days": days}
+		getenv, err := downloadedEnvironment(writeConfiguration(t, wrapped), configTestNow)
+		if err != nil {
+			t.Fatal("valid age policy refused", err)
+		}
+		c, err := readConfig(getenv)
+		if err != nil || c.maxAgeDays != days {
+			t.Fatal("selected age policy was lost")
+		}
+	}
+	for _, raw := range []string{`null`, `{}`, `[]`, `{"mode":"future"}`, `{"mode":"unrestricted","max_age_days":7}`,
+		`{"mode":"recent_internal_date_v1","max_age_days":0}`, `{"mode":"recent_internal_date_v1","max_age_days":3651}`,
+		`{"mode":"recent_internal_date_v1","max_age_days":true}`, `{"mode":"recent_internal_date_v1","max_age_days":"7"}`,
+		`{"mode":"recent_internal_date_v1","max_age_days":1.5}`} {
+		if _, err := agePolicyDays(json.RawMessage(raw)); err == nil {
+			t.Fatal("invalid age policy accepted")
+		}
+	}
+	for _, raw := range []json.RawMessage{nil, json.RawMessage(`{"mode":"unrestricted"}`)} {
+		if days, err := agePolicyDays(raw); err != nil || days != 0 {
+			t.Fatal("legacy unrestricted policy changed")
+		}
+	}
+	wrapped := wrapperForTest(recipeForTest("serverware.gmailSdkClient/v2", "python"))
+	wrapped["age_policy"] = map[string]any{"mode": "recent_internal_date_v1", "max_age_days": 7}
+	if _, err := downloadedEnvironment(writeConfiguration(t, wrapped), configTestNow); err == nil {
+		t.Fatal("recent policy without ordered query mode accepted")
+	}
+}

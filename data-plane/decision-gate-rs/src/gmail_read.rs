@@ -73,10 +73,17 @@ pub(crate) fn validate_envelope(mode: Option<&str>, constraints: &[Value]) -> Re
 pub(crate) fn validate_config(config: &Value, constraints: &[Value]) -> Result<(), String> {
     let object = config.as_object().ok_or("Gmail read config must be an object")?;
     if !exact_keys(object, &["credentialBinding", "request", "agePolicy", "response"], &[])
-        || object.get("agePolicy") != Some(&json!({"mode":"unrestricted"}))
         || object.get("response") != Some(&response_profile(false))
     {
         return Err("gmail.read.v1 config or unsupported age/response policy".into());
+    }
+    let age = crate::gmail_read_age::parse_policy(&object["agePolicy"])
+        .map_err(|_| "gmail.read.v1 age policy is invalid")?;
+    if age != crate::gmail_read_age::AgePolicy::Unrestricted
+        && config.pointer("/request/queryMode").and_then(Value::as_str)
+            != Some(crate::request_query_compat::MODE)
+    {
+        return Err("restricted Gmail age requires orderedFormV1".into());
     }
     let binding = object.get("credentialBinding").and_then(Value::as_object)
         .ok_or("Gmail read credential binding missing")?;
@@ -165,6 +172,10 @@ pub(crate) fn normalize_request(req: &DecisionRequest, headers: &BTreeMap<String
         return Err(json!({"error":"gmail_read_request_denied","status_code":403}));
     }
     let id = message_id(url)?;
+    crate::gmail_read_age::validate_request(
+        crate::gmail_read_age::parse_policy(&route.adapter_config["agePolicy"])
+            .map_err(|error| json!({"error":error.code(),"status_code":403}))?, url)
+        .map_err(|error| json!({"error":error.code(),"status_code":403}))?;
     if ordered_query(route) {
         crate::request_query_compat::parse_gmail_query(url.query(), if id.is_some() { "gmail.message.get" } else { "gmail.messages.list" })
             .map_err(|_| json!({"error":"gmail_read_query_denied","status_code":403}))?;
@@ -375,6 +386,278 @@ pub(crate) fn inspect_response(url: &Url, status: StatusCode, content_type: Opti
         }
     }
     Ok(body)
+}
+
+/// Restricted age evidence is owned by the original request. Supplemental
+/// reads reuse its exact lease and pinned client; they cannot obtain authority.
+pub(crate) struct AgeExecution {
+    policy: crate::gmail_read_age::AgePolicy,
+    binding: crate::CredentialLeaseReleaseBinding,
+    authorization: crate::SensitiveString,
+    prepared: crate::PreparedUpstream,
+    decision: crate::SensitiveJsonValue,
+    url: Url,
+    deadline: std::time::Instant,
+    deadlines: crate::UpstreamSendDeadlines,
+    principal_expiry: u128,
+    anchor_wall: u128,
+    anchor: std::time::Instant,
+    previous_now: std::cell::Cell<u128>,
+    evidence: Option<crate::gmail_read_age::ResponseAgeCheck>,
+    probes: usize,
+}
+
+impl AgeExecution {
+    pub(crate) fn prepare(
+        state: &crate::GateState, snapshot: &std::sync::Arc<Snapshot>, decision: &Value,
+        url: &Url, headers: &reqwest::header::HeaderMap, prepared: &crate::PreparedUpstream,
+        binding: Option<&crate::CredentialLeaseReleaseBinding>, deadline: std::time::Instant,
+        ordinary_terminal: bool,
+    ) -> Result<Option<Self>, &'static str> {
+        let matched = crate::decision_route_context(snapshot, decision, "GET", url)
+            .map_err(|_| "gmail_read_age_parent_invalid")?;
+        if matched.route.adapter_type != ADAPTER { return Ok(None); }
+        let policy = crate::gmail_read_age::parse_policy(&matched.route.adapter_config["agePolicy"])
+            .map_err(|error| error.code())?;
+        if policy == crate::gmail_read_age::AgePolicy::Unrestricted { return Ok(None); }
+        let binding = binding.ok_or("gmail_read_age_parent_binding_missing")?;
+        if !ordinary_terminal || !state.policy_shadow.is_operator_demo() || state.is_production
+            || binding.profile != crate::ReleaseProfile::Legacy
+            || binding.request_authority.is_some() || binding.release_authorization.is_some()
+            || state.atomic_release_authorization_enabled || state.native_secret_broker.is_some()
+            || state.native_serving_privileges.is_some()
+            || prepared.policy_hash != snapshot.hash || prepared.route_id != matched.route.id
+            || prepared.host != "gmail.googleapis.com" || prepared.port != 443
+            || binding.scope.route_id != matched.route.id
+            || decision["principal_id"].as_str() != Some(binding.scope.principal_id.as_str())
+            || matched.route.credential_ref.as_deref() != Some(binding.scope.credential_id.as_str())
+        { return Err("gmail_read_age_parent_authority_unsupported"); }
+        // This admission is the same ordinary Google owner used for the parent,
+        // not a new authorization or a generic provider credential fallback.
+        if !matches!(crate::operator_google_reconciliation::admitted(state, snapshot,
+            &binding.scope, None, None).map_err(|_| "gmail_read_age_parent_authority_changed")?,
+            Some(crate::operator_google_reconciliation::Admission::Google(_)))
+        { return Err("gmail_read_age_parent_authority_unsupported"); }
+        let authorization = headers.get(reqwest::header::AUTHORIZATION)
+            .filter(|_| headers.get_all(reqwest::header::AUTHORIZATION).iter().count() == 1)
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| value.starts_with("Bearer ") && value.len() > 7)
+            .ok_or("gmail_read_age_parent_credential_missing")?;
+        let principal_expiry = crate::operator_static_preparation::principal_expiry(snapshot, &binding.scope)
+            .map_err(|_| "gmail_read_age_principal_expired")?;
+        let deadlines = crate::UpstreamSendDeadlines {
+            policy_expires_at_epoch_ms: crate::policy_upstream_send_deadline(snapshot, decision, "GET", url)
+                .map_err(|_| "gmail_read_age_policy_deadline_invalid")?,
+            ..Default::default()
+        };
+        let wall = crate::now_epoch_ms();
+        let execution = Self { policy, binding: binding.clone(),
+            authorization: crate::SensitiveString::new(authorization.to_owned()),
+            prepared: prepared.clone(), decision: crate::SensitiveJsonValue::new(decision.clone()),
+            url: url.clone(), deadline: deadline.min(binding.expires_at_monotonic), deadlines,
+            principal_expiry, anchor_wall: wall, anchor: std::time::Instant::now(),
+            previous_now: std::cell::Cell::new(wall), evidence: None, probes: 0 };
+        execution.check_current(state, snapshot, false)?;
+        Ok(Some(execution))
+    }
+
+    fn now(&self) -> Result<u128, &'static str> {
+        let now = crate::gmail_read_age::checked_now_ms(self.anchor_wall, self.anchor.elapsed(),
+            crate::now_epoch_ms(), self.previous_now.get()).map_err(|error| error.code())?;
+        self.previous_now.set(now);
+        Ok(now)
+    }
+
+    fn check_current(&self, state: &crate::GateState, snapshot: &std::sync::Arc<Snapshot>,
+        require_evidence: bool) -> Result<(), &'static str>
+    {
+        let now = self.now()?;
+        if std::time::Instant::now() >= self.deadline || now >= self.principal_expiry
+            || self.deadlines.minimum_epoch_ms().is_some_and(|expiry| now >= u128::from(expiry))
+        { return Err("gmail_read_age_deadline_expired"); }
+        crate::validate_response_release_context(state, snapshot, &self.decision, "GET", &self.url)
+            .map_err(|_| "gmail_read_age_parent_authority_changed")?;
+        let authority = crate::acquire_upstream_send_authority(state, snapshot, Some(&self.binding))
+            .map_err(|_| "gmail_read_age_parent_authority_changed")?;
+        drop(authority);
+        if require_evidence {
+            self.evidence.as_ref().ok_or("gmail_read_age_evidence_missing")?
+                .validate_release(now).map_err(|error| error.code())?;
+        }
+        Ok(())
+    }
+
+    fn inspect_metadata(mut response: reqwest::blocking::Response,
+        guard: &ResponseSecretGuard, probe_deadline: std::time::Instant)
+        -> Result<SensitiveResponseBytes, &'static str>
+    {
+        use std::io::Read;
+        let headers = crate::response_metadata::prepare(response.headers(), &[], guard)
+            .map_err(|_| "gmail_read_age_metadata_headers_invalid")?;
+        if response.status() != StatusCode::OK
+            || !crate::response_content_encoding_is_identity_or_absent(&headers)
+            || headers.get(reqwest::header::CONTENT_TYPE).and_then(|value| value.to_str().ok())
+                .and_then(normalized_media_type).as_deref() != Some("application/json")
+        { return Err("gmail_read_age_metadata_response_invalid"); }
+        let length = metadata_length(&headers)?;
+        if length.is_some_and(|length| length > crate::gmail_read_age::MAX_METADATA_BYTES as u64) {
+            return Err("gmail_read_age_metadata_too_large");
+        }
+        let mut bytes = zeroize::Zeroizing::new(Vec::new());
+        // The request timeout includes the body read. The absolute deadline is
+        // checked again after the bounded read, so header success cannot reset it.
+        (&mut response).take(crate::gmail_read_age::MAX_METADATA_BYTES as u64 + 1)
+            .read_to_end(&mut bytes).map_err(|_| "gmail_read_age_metadata_read_failed")?;
+        if std::time::Instant::now() >= probe_deadline { return Err("gmail_read_age_metadata_timeout"); }
+        if bytes.len() > crate::gmail_read_age::MAX_METADATA_BYTES
+            || length.is_some_and(|length| length != bytes.len() as u64)
+        { return Err("gmail_read_age_metadata_length_invalid"); }
+        let (bytes, _) = crate::buffered_response::inspect_json_bytes(ADAPTER,
+            std::mem::take(&mut *bytes).into(), crate::gmail_read_age::MAX_METADATA_BYTES as u64, guard, true)
+            .map_err(|_| "gmail_read_age_metadata_json_invalid")?;
+        Ok(bytes)
+    }
+
+    pub(crate) fn inspect_success(&mut self, state: &crate::GateState,
+        snapshot: &std::sync::Arc<Snapshot>, body: &[u8], guard: &ResponseSecretGuard)
+        -> Result<Value, &'static str>
+    {
+        if self.evidence.is_some() { return Err("gmail_read_age_evidence_reused"); }
+        self.check_current(state, snapshot, false)?;
+        let mut evidence = crate::gmail_read_age::inspect_success(self.policy, &self.url, body, self.now()?)
+            .map_err(|error| error.code())?;
+        let total_deadline = self.deadline.min(std::time::Instant::now() + crate::gmail_read_age::TOTAL_TIMEOUT);
+        while let Some(id) = evidence.next_metadata_id() {
+            self.check_current(state, snapshot, false)?;
+            if self.probes >= crate::gmail_read_age::MAX_MESSAGES { return Err("gmail_read_age_probe_limit"); }
+            let id = crate::SensitiveString::new(id.to_owned());
+            let url = crate::gmail_read_age::metadata_url(id.as_str()).map_err(|error| error.code())?;
+            let now = self.now()?;
+            let expiry = self.deadlines.minimum_epoch_ms().map(u128::from)
+                .unwrap_or(self.principal_expiry).min(self.principal_expiry);
+            let remaining_ms = u64::try_from(expiry.checked_sub(now)
+                .ok_or("gmail_read_age_deadline_expired")?).map_err(|_| "gmail_read_age_deadline_invalid")?;
+            let timeout = total_deadline.checked_duration_since(std::time::Instant::now())
+                .ok_or("gmail_read_age_metadata_timeout")?.min(crate::gmail_read_age::PROBE_TIMEOUT)
+                .min(std::time::Duration::from_millis(remaining_ms));
+            if timeout.is_zero() { return Err("gmail_read_age_metadata_timeout"); }
+            let probe_deadline = std::time::Instant::now() + timeout;
+            let builder = self.prepared.client.get(url.clone())
+                .header(reqwest::header::ACCEPT, "application/json")
+                .header(reqwest::header::ACCEPT_ENCODING, "identity")
+                .header(reqwest::header::AUTHORIZATION, self.authorization.as_str());
+            self.probes += 1;
+            let mut probe_deadlines = self.deadlines;
+            probe_deadlines.dispatch_expires_at_epoch_ms = Some(u64::try_from(now + timeout.as_millis())
+                .map_err(|_| "gmail_read_age_deadline_invalid")?);
+            let mut probe_binding = self.binding.clone();
+            probe_binding.expires_at_monotonic = probe_binding.expires_at_monotonic.min(probe_deadline);
+            let response = crate::send_upstream_request_with_final_check(
+                state, snapshot, Some(&probe_binding), builder, Some(timeout), probe_deadlines, false, None,
+                |built| {
+                    if built.method() != reqwest::Method::GET || built.url() != &url
+                        || built.body().is_some() || built.headers().len() != 3
+                        || built.headers().get(reqwest::header::AUTHORIZATION)
+                            .and_then(|value| value.to_str().ok()) != Some(self.authorization.as_str())
+                        || built.headers().get(reqwest::header::ACCEPT).and_then(|value| value.to_str().ok()) != Some("application/json")
+                        || built.headers().get(reqwest::header::ACCEPT_ENCODING).and_then(|value| value.to_str().ok()) != Some("identity")
+                    { return Err("gmail_read_age_metadata_request_changed"); }
+                    Ok(())
+                }, |_| Ok(None), || {
+                    if std::time::Instant::now() >= probe_deadline || self.now()? >= expiry {
+                        return Err("gmail_read_age_metadata_timeout");
+                    }
+                    Ok(())
+                }).map_err(|_| "gmail_read_age_metadata_send_failed")?;
+            let bytes = Self::inspect_metadata(response, guard, probe_deadline)?;
+            self.check_current(state, snapshot, false)?;
+            evidence.record_metadata(id.as_str(), &bytes, self.now()?).map_err(|error| error.code())?;
+        }
+        if std::time::Instant::now() >= total_deadline { return Err("gmail_read_age_metadata_timeout"); }
+        evidence.validate_release(self.now()?).map_err(|error| error.code())?;
+        self.evidence = Some(evidence);
+        self.check_current(state, snapshot, true)?;
+        let crate::gmail_read_age::AgePolicy::RecentInternalDate { max_age_days } = self.policy
+            else { return Err("gmail_read_age_policy_invalid"); };
+        Ok(json!({"ok":true,"mode":MODE,"body_bytes_preserved":true,"allowed_fields_redacted":false,
+            "adapter":ADAPTER,"age_policy":crate::gmail_read_age::MODE,"max_age_days":max_age_days,
+            "metadata_probes":self.probes}))
+    }
+
+    fn write_deadline(&self) -> Result<std::time::Instant, &'static str> {
+        let now = self.now()?;
+        let expiry = self.evidence.as_ref().and_then(|evidence| evidence.earliest_expiry_ms())
+            .unwrap_or(self.principal_expiry).min(self.principal_expiry)
+            .min(self.deadlines.minimum_epoch_ms().map(u128::from).unwrap_or(self.principal_expiry));
+        let millis = u64::try_from(expiry.checked_sub(now).ok_or("gmail_read_age_deadline_expired")?)
+            .map_err(|_| "gmail_read_age_deadline_invalid")?;
+        Ok(self.deadline.min(std::time::Instant::now() + std::time::Duration::from_millis(millis)))
+    }
+
+    /// A released audit records validation, not client delivery. A later change
+    /// gets a distinct blocked terminal outcome; a partial write is never retried.
+    pub(crate) fn write_response(&self, state: &crate::GateState, snapshot: &std::sync::Arc<Snapshot>,
+        writer: &mut dyn crate::TerminalDeadlineWrite, response: &[u8]) -> bool
+    {
+        let check = self.check_current(state, snapshot, true).and_then(|()| self.write_deadline());
+        let deadline = match check {
+            Ok(deadline) => deadline,
+            Err(error) => {
+                let blocked = crate::block_forward_response(state, snapshot, &self.decision, "GET", &self.url,
+                    StatusCode::OK, json!({"error":error,"stage":"gmail_age_terminal","client_delivery":"not_started"}));
+                crate::write_snapshot_guarded_response(state, snapshot, writer, &blocked);
+                return false;
+            }
+        };
+        writer.set_terminal_write_deadline(Some(deadline));
+        let written = {
+            let mut guarded = AgeWriter { state, snapshot, execution: self, inner: writer };
+            crate::write_snapshot_guarded_response(state, snapshot, &mut guarded, response)
+        };
+        writer.set_terminal_write_deadline(None);
+        if !written {
+            crate::enqueue_audit(state, "data_plane.response.blocked", crate::decision_audit_event(
+                &self.decision, "GET", &self.url, "blocked", json!({"error":"gmail_read_age_terminal_write_refused",
+                    "stage":"gmail_age_terminal","client_delivery":"incomplete_or_unknown"})));
+        }
+        written
+    }
+}
+
+struct AgeWriter<'a> {
+    state: &'a crate::GateState,
+    snapshot: &'a std::sync::Arc<Snapshot>,
+    execution: &'a AgeExecution,
+    inner: &'a mut dyn crate::TerminalDeadlineWrite,
+}
+
+fn metadata_length(headers: &reqwest::header::HeaderMap) -> Result<Option<u64>, &'static str> {
+    let length = crate::strict_response_content_length(headers)
+        .map_err(|_| "gmail_read_age_metadata_length_invalid")?;
+    if headers.contains_key(reqwest::header::TRANSFER_ENCODING)
+        && (length.is_some() || headers.get_all(reqwest::header::TRANSFER_ENCODING).iter().count() != 1
+            || headers.get(reqwest::header::TRANSFER_ENCODING).and_then(|value| value.to_str().ok())
+                .is_none_or(|value| !value.trim().eq_ignore_ascii_case("chunked")))
+    { return Err("gmail_read_age_metadata_framing_invalid"); }
+    Ok(length)
+}
+
+impl std::io::Write for AgeWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.execution.check_current(self.state, self.snapshot, true)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::PermissionDenied, error))?;
+        let written = self.inner.write(bytes)?;
+        self.execution.check_current(self.state, self.snapshot, true)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::PermissionDenied, error))?;
+        Ok(written)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.execution.check_current(self.state, self.snapshot, true)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::PermissionDenied, error))?;
+        self.inner.flush()?;
+        self.execution.check_current(self.state, self.snapshot, true)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::PermissionDenied, error))
+    }
 }
 
 #[cfg(test)]

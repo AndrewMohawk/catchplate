@@ -32,6 +32,39 @@ PINS = {"google-api-python-client": "2.201.0", "httplib2": "0.32.0",
 REQUIRED_ENV = ("SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID", "SERVERWARE_PROXY_TOKEN", "SERVERWARE_CA_FILE")
 FAILURE = "Gmail read failed; check application permission, proxy trust and the operator audit log."
 MAX_CONFIG_BYTES = 64 * 1024
+AGE_ENV = "SERVERWARE_GMAIL_MAX_AGE_DAYS"
+
+
+def age_policy_days(value):
+    if type(value) is not dict:
+        raise ValueError("Invalid Gmail age policy")
+    if value == {"mode": "unrestricted"}:
+        return 0
+    if (set(value) != {"mode", "max_age_days"} or value["mode"] != "recent_internal_date_v1"
+            or type(value["max_age_days"]) is not int or not 1 <= value["max_age_days"] <= 3650):
+        raise ValueError("Invalid Gmail age policy")
+    return value["max_age_days"]
+
+
+def age_days_environment(env):
+    value = env.get(AGE_ENV)
+    if value is None:
+        return 0
+    if type(value) is not str or not re.fullmatch(r"[1-9][0-9]{0,3}", value) or int(value) > 3650:
+        raise ValueError("Invalid Gmail age hint")
+    return int(value)
+
+
+def sample_query(days, now_ms=None):
+    if type(days) is not int or not 0 <= days <= 3650:
+        raise ValueError("Invalid Gmail age hint")
+    if not days:
+        return None
+    now_ms = time.time_ns() // 1_000_000 if now_ms is None else now_ms
+    if type(now_ms) is not int or not 0 < now_ms <= 2**53 - 1:
+        raise ValueError("Invalid sample time")
+    # A client convenience, never evidence of a message's actual internalDate.
+    return "after:" + str((now_ms - days * 86400000 + 999) // 1000)
 
 
 def configuration_environment(config_file):
@@ -66,6 +99,7 @@ def configuration_environment(config_file):
         parse_float=number, parse_constant=invalid_constant)
     if type(value) is not dict:
         raise ValueError("Invalid configuration object")
+    age_days = age_policy_days(value.get("age_policy", {"mode": "unrestricted"}))
     recipe = value.get("client_recipe")
     if (type(recipe) is not dict
             or recipe.get("schema") not in ("serverware.gmailSdkClient/v1", "serverware.gmailSdkClient/v2")
@@ -102,6 +136,8 @@ def configuration_environment(config_file):
         raise ValueError("Gmail proxy CA values disagree")
     if proxy_ca is not None:
         selected["SERVERWARE_PROXY_CA_FILE"] = proxy_ca
+    if age_days:
+        selected[AGE_ENV] = str(age_days)
 
     for key in ("SERVERWARE_CA_FILE", "SERVERWARE_PROXY_CA_FILE"):
         if key in selected:
@@ -144,6 +180,9 @@ def settings(env):
 def child_environment(env):
     settings(env)
     selected = {key: env[key] for key in REQUIRED_ENV}
+    age_days = age_days_environment(env)
+    if age_days:
+        selected[AGE_ENV] = str(age_days)
     if "SERVERWARE_PROXY_CA_FILE" in env:
         selected["SERVERWARE_PROXY_CA_FILE"] = env["SERVERWARE_PROXY_CA_FILE"]
     # No ADC, netrc, environment proxy/CA override, mTLS discovery or TLS key log.
@@ -305,7 +344,8 @@ def execute(request):
     return request.execute(num_retries=0)
 
 
-def read_mail(http):
+def read_mail(http, age_days=0, now_ms=None):
+    q = sample_query(age_days, now_ms)
     # Bundled discovery: no discovery fetch, ADC, credentials file or refresh code.
     service = build("gmail", "v1", http=http, static_discovery=True,
         cache_discovery=False, num_retries=0, client_options={"api_endpoint": ORIGIN + "/"})
@@ -313,6 +353,8 @@ def read_mail(http):
     seen, tokens, next_page, pages, count = set(), set(), "", 0, 0
     for _ in range(2):
         args = {"userId": "me", "maxResults": 5, "labelIds": ["INBOX"]}
+        if q is not None:
+            args["q"] = q
         if next_page:
             args["pageToken"] = next_page
         value = execute(messages.list(**args))
@@ -372,8 +414,9 @@ def main(argv=None):
             raise ValueError("Downloaded configuration is parent-only")
         if args.child:
             check_versions()
-            with configured_http(private_child_environment(os.environ)) as http:
-                value = read_mail(http)
+            env = private_child_environment(os.environ)
+            with configured_http(env) as http:
+                value = read_mail(http, age_days_environment(env))
         else:
             env = os.environ if args.config is None else configuration_environment(args.config)
             value = launch(env)

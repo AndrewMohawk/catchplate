@@ -168,6 +168,48 @@ class LegacyTests(unittest.TestCase):
         self.assertEqual(body, None)
         self.assertEqual(query, ())
 
+    def test_gmail_recent_policy_advertises_bound_without_rewriting_query(self):
+        policy = {"mode": "recent_internal_date_v1", "max_age_days": 7}
+        with patch.object(legacy.time, "time_ns", return_value=1800000000001000000):
+            loaded = self.load("gmail", {"age_policy": policy})
+            descriptors = legacy.describe(loaded, "mail")
+        self.assertEqual(descriptors[0]["scope"]["age_policy"], policy)
+        properties = descriptors[0]["input_schema"]["properties"]
+        self.assertEqual(properties["max_results"]["maximum"], 32)
+        self.assertEqual(properties["q"]["examples"], ["after:1799395201"])
+        configured, _, _ = legacy.prepare(loaded, "mail.gmail_list_messages", "mail", {})
+        self.assertEqual(parse_qsl(urlsplit(configured["upstream_url"]).query), [("maxResults", "10"), ("includeSpamTrash", "false")])
+        args = {"max_results": 32, "label_ids": ["INBOX", "UNREAD", "INBOX"],
+            "q": "older_than:10y OR after:1799395201", "page_token": "opaque/+="}
+        configured, _, _ = legacy.prepare(loaded, "mail.gmail_list_messages", "mail", args)
+        self.assertEqual(parse_qsl(urlsplit(configured["upstream_url"]).query), [
+            ("maxResults", "32"), ("includeSpamTrash", "false"), ("labelIds", "INBOX"),
+            ("labelIds", "UNREAD"), ("labelIds", "INBOX"), ("q", args["q"]), ("pageToken", "opaque/+=")])
+        with self.assertRaises(legacy.LegacyArgumentError):
+            legacy.prepare(loaded, "mail.gmail_list_messages", "mail", {"max_results": 33})
+        import operations
+        collection = operations.OperationSet({"mail": self.path}, allow_actions=set(), console_origin=None)
+        self.assertEqual(collection.describe()[0]["scope"]["age_policy"], policy)
+        with self.assertRaises(operations.OperationError):
+            collection.prepare("mail.gmail_list_messages", {"max_results": 33})
+        self.assertEqual(collection.prepare("mail.gmail_list_messages", args)._config["upstream_url"],
+            configured["upstream_url"])
+        configured, _, _ = legacy.prepare(loaded, "mail.gmail_get_message", "mail",
+            {"message_id": "one", "metadata_headers": ["Subject", "From", "Subject"]})
+        self.assertEqual(parse_qsl(urlsplit(configured["upstream_url"]).query), [
+            ("format", "metadata"), ("metadataHeaders", "Subject"), ("metadataHeaders", "From"), ("metadataHeaders", "Subject")])
+        self.assertEqual(configured["age_policy"], policy)
+        for bad in [None, {}, {"mode": "unrestricted", "max_age_days": 7},
+                *({"mode": "recent_internal_date_v1", "max_age_days": value} for value in (0, True, "7", 1.5, 3651))]:
+            with self.assertRaises(legacy.LegacyConfigurationError):
+                self.load("gmail", {"age_policy": bad})
+        absent = configuration("gmail")
+        absent.pop("age_policy")
+        self.path.write_text(json.dumps(absent))
+        loaded = legacy.load_configuration(self.path)
+        self.assertEqual(legacy.describe(loaded, "mail")[0]["scope"]["age_policy"], {"mode": "unrestricted"})
+        self.assertEqual(legacy.describe(loaded, "mail")[0]["input_schema"]["properties"]["max_results"]["maximum"], 500)
+
     def test_typed_arguments_cannot_choose_paths_headers_methods_tokens_or_outside_scope(self):
         cases = [("github_write", "github_get_issue", {"issue_number": "../other"}),
             ("github_write", "github_list_issues", {"per_page": True}),

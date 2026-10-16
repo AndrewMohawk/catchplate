@@ -85,6 +85,29 @@ class ConfigurationTests(unittest.TestCase):
         self.path.write_text(json.dumps(self.value if value is None else value), encoding="utf-8")
         return self.path
 
+    def test_optional_age_policy_and_internal_hint_are_strict(self):
+        for days in (1, 7, 3650):
+            value = {**self.value, "age_policy": {"mode": "recent_internal_date_v1", "max_age_days": days}}
+            selected = example.configuration_environment(self.write(value))
+            self.assertEqual(selected[example.AGE_ENV], str(days))
+            self.assertEqual(example.child_environment(selected)[example.AGE_ENV], str(days))
+        absent = deepcopy(self.value)
+        absent.pop("age_policy")
+        absent["client_recipe"]["environment"][example.AGE_ENV] = "9"
+        self.assertNotIn(example.AGE_ENV, example.configuration_environment(self.write(absent)))
+        self.assertNotIn(example.AGE_ENV, example.configuration_environment(self.write()))
+        invalid = [None, {}, [], {"mode": "future"}, {"mode": "unrestricted", "max_age_days": 7}]
+        invalid += [{"mode": "recent_internal_date_v1", "max_age_days": value} for value in (None, True, "7", 0, 1.5, 3651)]
+        for policy in invalid:
+            with self.subTest(policy=policy), self.assertRaises(ValueError):
+                example.configuration_environment(self.write({**self.value, "age_policy": policy}))
+        for value in ("", "0", "01", "3651", "7.0"):
+            with self.assertRaises(ValueError):
+                example.age_days_environment({example.AGE_ENV: value})
+        self.assertEqual(example.sample_query(7, 1800000000001), "after:1799395201")
+        self.assertEqual(example.sample_query(7, 1800000000000), "after:1799395200")
+        self.assertIsNone(example.sample_query(0, 1800000000001))
+
     def test_all_producer_languages_map_only_connection_data_and_resolve_ca_beside_json(self):
         for language in ("go", "node", "python"):
             value = deepcopy(self.value)
@@ -345,6 +368,24 @@ class GmailTests(unittest.TestCase):
         self.assertEqual(parse_qs(urlsplit(calls[0][0].url).query), {"maxResults": ["5"], "labelIds": ["INBOX"], "alt": ["json"]})
         self.assertEqual(parse_qs(urlsplit(calls[1][0].url).query), {"format": ["metadata"], "metadataHeaders": ["From", "Subject", "Date"], "alt": ["json"]})
         self.assertEqual(parse_qs(urlsplit(calls[2][0].url).query)["pageToken"], [token])
+
+    def test_actual_sdk_recent_query_is_fixed_across_pages(self):
+        calls = []
+        def send(adapter, request, **options):
+            calls.append(request.url)
+            if urlsplit(request.url).path == example.LIST_PATH:
+                value = {} if "pageToken=" in request.url else {"messages": [{"id": "one"}], "nextPageToken": "next+page /="}
+            else:
+                value = {"id": "one", "internalDate": "1800000000000"}
+            return response(request, value=value)
+        with patch.object(HTTPAdapter, "send", send), example.configured_http(self.env) as http, \
+                patch.object(example.time, "time_ns", return_value=1800000000001000000) as clock:
+            result = example.read_mail(http, 7)
+        self.assertEqual(result, {"pages": 2, "messages_read": 1, "more_pages": False})
+        clock.assert_called_once_with()
+        self.assertEqual(urlsplit(calls[0]).query, "maxResults=5&labelIds=INBOX&q=after%3A1799395201&alt=json")
+        self.assertEqual(urlsplit(calls[2]).query, "maxResults=5&labelIds=INBOX&q=after%3A1799395201&pageToken=next%2Bpage+%2F%3D&alt=json")
+        self.assertNotIn("fields=", calls[1])
 
     def test_maximum_two_pages_and_ten_returned_ids(self):
         calls = []

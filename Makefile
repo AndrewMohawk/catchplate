@@ -11377,6 +11377,7 @@ verify-operator-gmail-sdk-choice:
 	node scripts/test_operator_gmail_sdk_browser.cjs
 	node scripts/test_operator_gmail_sdk_choice_browser.cjs
 	node scripts/test_operator_gmail_bundle_browser.cjs
+	node scripts/test_operator_gmail_age_ui.cjs
 	node scripts/test_operator_example_links.cjs
 	node scripts/test_operator_examples_browser.cjs
 

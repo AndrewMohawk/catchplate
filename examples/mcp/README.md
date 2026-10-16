@@ -105,7 +105,7 @@ output-token ceiling is not a spending budget.
 | --- | --- |
 | Common apps | All 15 [common-app operations](../../docs/common-apps.md#included-operations): OpenAI, Anthropic, Gemini, OpenRouter, Slack, Discord, Notion, Stripe, Resend, GitLab, Cloudflare and Sentry. |
 | GitHub PAT or App | List issues, read an issue and list comments in the configured repository; a write bundle also permits creating issues/comments. |
-| Google/Gmail | List message IDs and read a message using the unrestricted-age read bundle. Repeated label/header query fields retain their order. No attachments or age-filtered adapter yet. |
+| Google/Gmail | List message IDs and read a message using unrestricted or saved last-N-days permissions. Restricted lists accept at most 32 results. Repeated label/header query fields retain their order; no attachments. |
 | Alchemy | `eth_chainId` and `eth_blockNumber` for the configured chain only. |
 | X | Exact configured username lookup, or text-only posting through an enabled account permission. |
 | npm | Current-version metadata summary for the configured package, including scoped packages. Requires the pinned [Node/npm example dependencies](../npm-registry/README.md#prepare-the-application) and Node 25.5.0 on the launcher's PATH. |
@@ -116,6 +116,16 @@ pagination. The npm adapter returns the existing client's bounded summary, not
 the full registry document. Provider credentials, account entitlements and
 approved proxy destinations must already be configured; installing MCP creates
 none of them.
+
+Gmail discovery includes the exact saved `age_policy`. Missing policy metadata
+means unrestricted; recent permissions use
+`{"mode":"recent_internal_date_v1","max_age_days":N}` with N from 1 through
+3650. Restricted list tools advertise `max_results` from 1 through 32 (default
+10), and their `q` schema includes an `after:<epoch-seconds>` example based on
+the current clock. Supply that query explicitly if useful and reuse it unchanged
+with later `page_token` calls. MCP never injects or rewrites it. The proxy checks
+actual Gmail `internalDate` evidence; a caller's query or clock is not proof of
+age. Direct reads expose no `fields` projection that could hide that evidence.
 
 ## Results, approval and interruption
 

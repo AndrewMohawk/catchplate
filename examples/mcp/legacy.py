@@ -81,6 +81,16 @@ def _fresh(config):
     _require(type(expiry) is int and time.time_ns() // 1000000 < expiry <= 2**53 - 1)
 
 
+def _gmail_age_policy(config):
+    value = config.get("age_policy", {"mode": "unrestricted"})
+    _require(type(value) is dict)
+    if value == {"mode": "unrestricted"}:
+        return value
+    _require(set(value) == {"mode", "max_age_days"} and value["mode"] == "recent_internal_date_v1")
+    _integer(value["max_age_days"], 3650)
+    return value
+
+
 def _family(config):
     _fresh(config)
     bundle = config.get("operation_bundle")
@@ -99,10 +109,10 @@ def _family(config):
         provider, scope = "github", {"repository": deepcopy(repo)}
         mode, placeholder = "unfiltered_json_or_empty_v2", "token serverware-github-placeholder-v1"
     elif bundle == "gmail_read_v1":
-        _require(config.get("age_policy") == {"mode": "unrestricted"}
-            and config.get("query_mode") == "orderedFormV1")
+        policy = _gmail_age_policy(config)
+        _require(config.get("query_mode") == "orderedFormV1")
         target = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
-        provider, scope = "gmail", {"account": "me", "age_policy": "unrestricted"}
+        provider, scope = "gmail", {"account": "me", "age_policy": deepcopy(policy)}
         mode, placeholder = "gmail_read_json_v1", "Bearer serverware-gmail-placeholder-v1"
     elif bundle == "alchemy_chain_status_read_v1":
         chain = _enum(config.get("chain"), {"eth-mainnet", "eth-sepolia"})
@@ -217,9 +227,16 @@ def _definitions(provider, config):
             ])
         return result
     if provider == "gmail":
+        policy = _gmail_age_policy(config)
+        restricted = policy["mode"] == "recent_internal_date_v1"
+        query = _string(2048)
+        query["description"] = "Optional caller-selected Gmail query; not proof of message age. Reuse it unchanged with page_token."
+        if restricted:
+            cutoff = (time.time_ns() // 1000000 - policy["max_age_days"] * 86400000 + 999) // 1000
+            query["examples"] = ["after:" + str(cutoff)]
         return [
             _definition("gmail_list_messages", "List Gmail message IDs (one page)", {
-                "max_results": _number(500, 10), "q": _string(2048), "page_token": _string(4096),
+                "max_results": _number(32 if restricted else 500, 10), "q": query, "page_token": _string(4096),
                 "label_ids": {"type": "array", "minItems": 0, "maxItems": 32, "items": _string(128)}}),
             _definition("gmail_get_message", "Read one Gmail message", {
                 "message_id": _string(512), "format": _string(enum=("metadata", "full"), default="metadata"),
@@ -300,7 +317,8 @@ def _prepare(config, operation_id, alias, arguments):
             method, body = "POST", _json_bytes({"body": _text(arguments["body"], maximum=60000)})
     elif provider == "gmail":
         if suffix == "gmail_list_messages":
-            pairs = [("maxResults", str(_integer(arguments.get("max_results", 10), 500))), ("includeSpamTrash", "false")]
+            maximum = 32 if _gmail_age_policy(config)["mode"] == "recent_internal_date_v1" else 500
+            pairs = [("maxResults", str(_integer(arguments.get("max_results", 10), maximum))), ("includeSpamTrash", "false")]
             labels = arguments.get("label_ids", [])
             _require(type(labels) is list and len(labels) <= 32)
             pairs.extend(("labelIds", _text(value, maximum=128, pattern=r"[A-Za-z0-9_-]{1,128}")) for value in labels)

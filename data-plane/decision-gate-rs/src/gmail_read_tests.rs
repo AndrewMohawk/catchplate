@@ -329,6 +329,140 @@ fn ordered_route() -> Route {
     route
 }
 
+#[test]
+fn gmail_read_recent_policy_requires_ordered_queries_and_explicit_small_lists() {
+    let mut recent = ordered_route();
+    recent.adapter_config["agePolicy"] = json!({"mode":"recent_internal_date_v1","maxAgeDays":1});
+    validate_route(&recent).unwrap();
+    let schema: Value = serde_json::from_str(include_str!("../../../schemas/adapters/gmail.read.v1.schema.json")).unwrap();
+    assert!(jsonschema::validator_for(&schema).unwrap().is_valid(&recent.adapter_config));
+    for (suffix, allowed) in [("",false),("?maxResults=0",false),("?maxResults=1",true),
+        ("?maxResults=32",true),("?maxResults=33",false),("?maxResults=01",false)]
+    {
+        let target = format!("https://gmail.googleapis.com{LIST_PATH}{suffix}");
+        let mut req = request(&target); req.headers.remove("accept-encoding");
+        assert_eq!(normalize_request(&req,&req.headers,&Url::parse(&target).unwrap(),&recent).is_ok(),allowed);
+    }
+    for days in [json!(0),json!(3651),json!(true),json!(1.5),json!("1")] {
+        let mut invalid = recent.clone(); invalid.adapter_config["agePolicy"]["maxAgeDays"] = days;
+        assert!(validate_route(&invalid).is_err());
+    }
+    let mut old = route(); old.adapter_config["agePolicy"] = recent.adapter_config["agePolicy"].clone();
+    assert!(validate_route(&old).is_err());
+    // Unrestricted routes retain the old larger/implicit list allowance.
+    let target = format!("https://gmail.googleapis.com{LIST_PATH}?maxResults=500");
+    let req = request(&target);
+    normalize_request(&req,&req.headers,&Url::parse(&target).unwrap(),&route()).unwrap();
+}
+
+#[test]
+fn gmail_read_age_metadata_framing_is_bounded_and_unambiguous() {
+    let mut headers = HeaderMap::new();
+    headers.insert("transfer-encoding",HeaderValue::from_static("chunked"));
+    assert_eq!(metadata_length(&headers),Ok(None));
+    headers.insert("content-length",HeaderValue::from_static("2"));
+    assert!(metadata_length(&headers).is_err());
+    headers.remove("content-length");
+    for coding in ["gzip","gzip, chunked","chunked, chunked",""] {
+        headers.insert("transfer-encoding",HeaderValue::from_str(coding).unwrap());
+        assert!(metadata_length(&headers).is_err());
+    }
+    headers.insert("transfer-encoding",HeaderValue::from_static("chunked"));
+    headers.append("transfer-encoding",HeaderValue::from_static("chunked"));
+    assert!(metadata_length(&headers).is_err());
+    headers.remove("transfer-encoding");
+    headers.insert("content-length",HeaderValue::from_static("8192"));
+    assert_eq!(metadata_length(&headers),Ok(Some(8192)));
+}
+
+#[test]
+fn gmail_read_age_metadata_inspection_bounds_and_scans_before_evidence() {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let raw = br#" {"id":"a","internalDate":"1000"} "#;
+    let checked = AgeExecution::inspect_metadata(upstream(200,"Content-Type: application/json\r\n",raw),
+        &ResponseSecretGuard::default(),deadline).unwrap();
+    assert_eq!(&*checked,raw);
+    for extra in ["Content-Type: application/json\r\nContent-Encoding: gzip\r\n",
+        "Content-Type: text/plain\r\n","Content-Type: application/json\r\nSet-Cookie: forbidden=1\r\n"]
+    {
+        assert!(AgeExecution::inspect_metadata(upstream(200,extra,raw),
+            &ResponseSecretGuard::default(),deadline).is_err());
+    }
+    let mut guard = ResponseSecretGuard::default(); guard.add_text_encodings("private-token");
+    for body in [br#"{"secret":"private-token"}"#.as_slice(),br#"{"secret":"\u0070rivate-token"}"#] {
+        assert!(AgeExecution::inspect_metadata(upstream(200,"Content-Type: application/json\r\n",body),
+            &guard,deadline).is_err());
+    }
+    assert!(AgeExecution::inspect_metadata(upstream(200,"Content-Type: application/json\r\nX-Discarded: private-token\r\n",raw),
+        &guard,deadline).is_err());
+    assert!(AgeExecution::inspect_metadata(upstream(200,"Content-Type: application/json\r\n",&vec![b' ';8193]),
+        &guard,deadline).is_err());
+    assert!(AgeExecution::inspect_metadata(upstream(200,"Content-Type: application/json\r\n",raw),
+        &guard,Instant::now()-Duration::from_millis(1)).is_err());
+}
+
+fn age_terminal_fixture() -> (Arc<Snapshot>,GateState,AgeExecution) {
+    let mut snapshot = (*ordered_snapshot()).clone();
+    snapshot.routes[0].adapter_config["agePolicy"] = json!({"mode":"recent_internal_date_v1","maxAgeDays":1});
+    let snapshot = Arc::new(snapshot);
+    let state = test_gate_state(Arc::clone(&snapshot));
+    let (_,url,_,mut decision) = ordered_material(&snapshot,
+        &format!("https://gmail.googleapis.com{LIST_PATH}?maxResults=1"));
+    decision["snapshot_epoch"] = json!(snapshot.epoch);
+    let now = now_epoch_ms(); let mono = Instant::now();
+    let scope = CredentialLeaseScope::new("agent:test","route:test","credential:gmail-test");
+    let metadata = BTreeMap::new(); let metadata_sha256 = credential_lease_metadata_sha256(&metadata);
+    let lease = SecretLease { profile:ReleaseProfile::Legacy,scope:scope.clone(),version:7,
+        secret:zeroize::Zeroizing::new("synthetic-parent-token".into()),metadata:metadata.clone(),
+        metadata_sha256:metadata_sha256.clone(),policy_hash:snapshot.hash.clone(),
+        request_authority:None,release_authorization:None,expires_at_epoch_ms:now+60_000,
+        expires_at_monotonic:mono+Duration::from_secs(60) };
+    let binding = credential_lease_release_binding(&lease);
+    state.credential_leases.lock().unwrap().insert(CredentialLeaseCacheKey::for_lease(&lease),lease);
+    state.credential_generations.lock().unwrap().insert(scope,CredentialLeaseGeneration {
+        profile:ReleaseProfile::Legacy,policy_hash:snapshot.hash.clone(),version:7,metadata,metadata_sha256,
+        expires_at_epoch_ms:now+60_000,expires_at_monotonic:mono+Duration::from_secs(60) });
+    let policy = gmail_read_age::AgePolicy::RecentInternalDate { max_age_days:1 };
+    let evidence = gmail_read_age::inspect_success(policy,&url,b"{\"messages\":[]}",now).unwrap();
+    let execution = AgeExecution { policy,binding,authorization:SensitiveString::new("Bearer synthetic-parent-token".into()),
+        prepared:PreparedUpstream { policy_hash:snapshot.hash.clone(),route_id:"route:test".into(),
+            host:"gmail.googleapis.com".into(),port:443,socket_addr:"127.0.0.1:443".parse().unwrap(),answer_count:1,
+            client:Client::builder().no_proxy().timeout(Duration::from_secs(1)).build().unwrap() },
+        decision:SensitiveJsonValue::new(decision),url,deadline:mono+Duration::from_secs(10),
+        deadlines:UpstreamSendDeadlines::default(),principal_expiry:now+60_000,anchor_wall:now,
+        anchor:mono,previous_now:std::cell::Cell::new(now),evidence:Some(evidence),probes:0 };
+    (snapshot,state,execution)
+}
+
+#[test]
+fn gmail_read_age_finalizer_requires_request_owned_evidence() {
+    let (snapshot,state,execution) = age_terminal_fixture();
+    let wire = finalized(&snapshot,&state,&execution.decision,&execution.url,
+        upstream(200,"Content-Type: application/json\r\n",b"{\"messages\":[]}"),&ResponseSecretGuard::default());
+    let parsed = parse_buffered_response(&wire).unwrap();
+    assert_eq!(parsed.status,502); assert!(!parsed.headers.contains_key("x-serverware-policy-hash"));
+    assert!(String::from_utf8_lossy(parsed.body).contains("gmail_read_age_execution_missing"));
+}
+
+#[test]
+fn gmail_read_age_terminal_guard_checks_binding_and_deadline_without_replay() {
+    let (snapshot,state,mut execution) = age_terminal_fixture();
+    execution.check_current(&state,&snapshot,true).unwrap();
+    let raw = b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\nPRIVATE";
+    let mut writer = Vec::new();
+    assert!(execution.write_response(&state,&snapshot,&mut writer,raw));
+    assert_eq!(writer,raw);
+    execution.deadline = Instant::now()-Duration::from_millis(1);
+    let mut expired = Vec::new();
+    assert!(!execution.write_response(&state,&snapshot,&mut expired,raw));
+    assert!(!String::from_utf8_lossy(&expired).contains("PRIVATE"));
+    execution.deadline = Instant::now()+Duration::from_secs(10);
+    state.credential_generations.lock().unwrap().get_mut(&execution.binding.scope).unwrap().version = 8;
+    let mut rotated = Vec::new();
+    assert!(!execution.write_response(&state,&snapshot,&mut rotated,raw));
+    assert!(!String::from_utf8_lossy(&rotated).contains("PRIVATE"));
+}
+
 fn ordered_snapshot() -> Arc<Snapshot> {
     let mut snapshot = (*test_snapshot(1)).clone();
     snapshot.routes = vec![ordered_route()];

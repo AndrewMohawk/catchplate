@@ -15,6 +15,7 @@ mod post_dispatch_outcome;
 #[cfg(test)]
 mod post_dispatch_outcome_tests;
 mod gmail_read;
+mod gmail_read_age;
 mod github_issues;
 mod npm_metadata;
 mod x_app_read;
@@ -24329,6 +24330,14 @@ where
             *request.timeout_mut() = Some(request.timeout().copied()
                 .map_or(remaining, |selected| selected.min(remaining)));
         }
+        // Dispatch barriers must not rearm the earlier monotonic lease budget.
+        // Supplemental Gmail reads narrow this same parent binding to their
+        // original probe/aggregate deadline, without acquiring a new lease.
+        if let Some(remaining) = credential_lease_send_timeout(authority.lease_deadline)
+            .map_err(UpstreamSendError::CredentialAuthority)? {
+            *request.timeout_mut() = Some(request.timeout().copied()
+                .map_or(remaining, |selected| selected.min(remaining)));
+        }
         if let Some(owner) = quota.as_deref_mut() {
             owner.consume_before_execute(state, snapshot,
                 binding.ok_or(UpstreamSendError::CredentialAuthority("operator_x_quota_binding_missing"))?, &request)
@@ -45792,12 +45801,19 @@ fn validate_policy_json_response(
         };
     }
     if adapter_type == gmail_read::ADAPTER {
+        let restricted = decision_route_context(snapshot, decision, method, url).is_ok_and(|matched|
+            matched.route.adapter_config["agePolicy"]["mode"].as_str() != Some("unrestricted"));
+        if restricted && status.is_success() {
+            return block_forward_response(state, snapshot, decision, method, url, status,
+                json!({"error":"gmail_read_age_execution_missing"})).into();
+        }
         return match gmail_read::inspect_response(url, status, content_type, response_config, body, response_secret_guard) {
             Ok(bytes) => release_forward_response(
                 state, snapshot, decision, method, url, status, Some("application/json"),
                 released_headers, bytes, response_secret_guard,
                 json!({"ok":true,"mode":gmail_read::MODE,"body_bytes_preserved":true,
-                    "allowed_fields_redacted":false,"adapter":gmail_read::ADAPTER,"age_policy":"unrestricted"}),
+                    "allowed_fields_redacted":false,"adapter":gmail_read::ADAPTER,
+                    "age_policy":if restricted { "not_evaluated_provider_error" } else { "unrestricted" }}),
             ),
             Err(payload) => block_forward_response(state, snapshot, decision, method, url, status, payload).into(),
         };
@@ -45956,6 +45972,19 @@ fn validate_forward_response(
     gmail_metadata_fanout: Option<&GmailMetadataFanoutExecution<'_>>,
     gmail_proof_commit_output: Option<&mut Option<Vec<SensitiveString>>>,
 ) -> SensitiveResponseBytes {
+    validate_forward_response_with_gmail_age(state, snapshot, decision, method, url, status,
+        content_type, released_headers, body, response_secret_guard, gmail_metadata_fanout,
+        gmail_proof_commit_output, None)
+}
+
+fn validate_forward_response_with_gmail_age(
+    state: &GateState, snapshot: &Arc<Snapshot>, decision: &Value, method: &str, url: &Url,
+    status: StatusCode, content_type: Option<&str>, released_headers: &SensitiveReleasedHeaders,
+    body: SensitiveResponseBytes, response_secret_guard: &ResponseSecretGuard,
+    gmail_metadata_fanout: Option<&GmailMetadataFanoutExecution<'_>>,
+    gmail_proof_commit_output: Option<&mut Option<Vec<SensitiveString>>>,
+    gmail_age: Option<&mut gmail_read::AgeExecution>,
+) -> SensitiveResponseBytes {
     let route_match =
         match validate_response_release_context(state, snapshot, decision, method, url) {
             Ok(route_match) => route_match,
@@ -46041,6 +46070,26 @@ fn validate_forward_response(
             )
             .into();
         }
+    }
+    if route_match.route.adapter_type == gmail_read::ADAPTER && status.is_success()
+        && route_match.route.adapter_config["agePolicy"]["mode"].as_str() != Some("unrestricted")
+    {
+        if let Err(payload) = validate_response_constraints(route_match.route, &body, operation) {
+            return block_forward_response(state, snapshot, decision, method, url, status,
+                bind_response_validation_evidence(decision, &body, payload)).into();
+        }
+        let inspected = gmail_read::inspect_response(url, status, content_type, &response_config,
+            body, response_secret_guard).and_then(|bytes| {
+                let execution = gmail_age.ok_or_else(|| json!({"error":"gmail_read_age_execution_missing"}))?;
+                let validation = execution.inspect_success(state, snapshot, &bytes, response_secret_guard)
+                    .map_err(|error| json!({"error":error}))?;
+                Ok((bytes, validation))
+            });
+        return match inspected {
+            Ok((bytes, validation)) => release_forward_response(state, snapshot, decision, method, url,
+                status, Some("application/json"), released_headers, bytes, response_secret_guard, validation),
+            Err(payload) => block_forward_response(state, snapshot, decision, method, url, status, payload).into(),
+        };
     }
     if route_match.route.adapter_type != "gmail.v1" {
         if status.is_success() {
@@ -46550,7 +46599,7 @@ fn finalize_upstream_response(
     decision: &Value,
     request_method: &str,
     upstream_url: &Url,
-    mut response: reqwest::blocking::Response,
+    response: reqwest::blocking::Response,
     response_secret_guard: &ResponseSecretGuard,
     shadow_response_hook: Option<&policy_core::ShadowResponseHook>,
     stream_writer: Option<&mut dyn TerminalDeadlineWrite>,
@@ -46558,12 +46607,31 @@ fn finalize_upstream_response(
     streaming_response_proof: Option<StreamingResponseProofExecution<'_>>,
     gmail_metadata_fanout: Option<&GmailMetadataFanoutExecution<'_>>,
     gmail_proof_commit_output: Option<&mut Option<Vec<SensitiveString>>>,
-    mut response_observation: Option<&mut ResponseObservationTrace>,
+    response_observation: Option<&mut ResponseObservationTrace>,
     durable_policy_reservation: Option<&ValidatedDurablePolicyReservation>,
-    mut durable_policy_completion_output: Option<
+    durable_policy_completion_output: Option<
         &mut Option<DurablePolicyCompletionEvidence>,
     >,
     _keep_alive: bool,
+) -> ForwardResult {
+    finalize_upstream_response_with_gmail_age(state, snapshot, decision, request_method, upstream_url,
+        response, response_secret_guard, shadow_response_hook, stream_writer, response_proof_upstream_output,
+        streaming_response_proof, gmail_metadata_fanout, gmail_proof_commit_output, response_observation,
+        durable_policy_reservation, durable_policy_completion_output, _keep_alive, None)
+}
+
+fn finalize_upstream_response_with_gmail_age(
+    state: &GateState, snapshot: &Arc<Snapshot>, decision: &Value, request_method: &str, upstream_url: &Url,
+    mut response: reqwest::blocking::Response, response_secret_guard: &ResponseSecretGuard,
+    shadow_response_hook: Option<&policy_core::ShadowResponseHook>, stream_writer: Option<&mut dyn TerminalDeadlineWrite>,
+    response_proof_upstream_output: Option<&mut Option<ResponseProofUpstreamResponse>>,
+    streaming_response_proof: Option<StreamingResponseProofExecution<'_>>,
+    gmail_metadata_fanout: Option<&GmailMetadataFanoutExecution<'_>>,
+    gmail_proof_commit_output: Option<&mut Option<Vec<SensitiveString>>>,
+    mut response_observation: Option<&mut ResponseObservationTrace>,
+    durable_policy_reservation: Option<&ValidatedDurablePolicyReservation>,
+    mut durable_policy_completion_output: Option<&mut Option<DurablePolicyCompletionEvidence>>,
+    _keep_alive: bool, gmail_age: Option<&mut gmail_read::AgeExecution>,
 ) -> ForwardResult {
     let status = response.status();
     // Explicit metadata-discard profiles bound and scan the parsed header set before
@@ -47020,7 +47088,7 @@ fn finalize_upstream_response(
                     content_type.as_ref().map(|value| value.as_str()),
                 )))
             };
-            let response = validate_forward_response(
+            let response = validate_forward_response_with_gmail_age(
                 state,
                 snapshot,
                 decision,
@@ -47037,6 +47105,7 @@ fn finalize_upstream_response(
                 response_secret_guard,
                 gmail_metadata_fanout,
                 gmail_proof_commit_output,
+                gmail_age,
             );
             let released = parse_buffered_response(&response)
                 .is_ok_and(|parsed| parsed.headers.contains_key("x-serverware-policy-hash"));
@@ -47517,7 +47586,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
         prepared_upstream, shadow_admission, precomputed_decision_request, authenticated_principal_id,
         client_request_digest, response_proof_authorization_output, response_proof_upstream_output,
         stream_writer, streaming_response_proof_request, response_observation_v2,
-        response_observation, keep_alive, None)
+        response_observation, keep_alive, None, None)
 }
 
 fn forward_absolute_request_inner_with_prepared_and_connect<'a>(
@@ -47537,6 +47606,7 @@ fn forward_absolute_request_inner_with_prepared_and_connect<'a>(
     mut response_observation: Option<&mut ResponseObservationTrace>,
     keep_alive: bool,
     connect_ingress: Option<native_buffered_request::Ingress<'_>>,
+    gmail_age_output: Option<&mut Option<gmail_read::AgeExecution>>,
 ) -> ForwardResult {
     // Starts before the decision's preparation budget, so post-audit static
     // acquisition cannot restart or expand the existing fifteen-second bound.
@@ -48107,6 +48177,19 @@ fn forward_absolute_request_inner_with_prepared_and_connect<'a>(
         }
     };
     let request_method = request.method.clone();
+    let mut gmail_age = if decision_route_context(snapshot, &decision, &request_method, &upstream_url)
+        .is_ok_and(|matched| matched.route.adapter_type == gmail_read::ADAPTER)
+    {
+        match gmail_read::AgeExecution::prepare(state, snapshot, &decision, &upstream_url,
+            &provider_request.headers, &prepared_upstream, credential_release_binding.as_ref(),
+            operator_release_deadline, gmail_age_output.is_some() && !v2_proof_requested
+                && shadow_finalization.is_none() && release_authorization.is_none())
+        {
+            Ok(execution) => execution,
+            Err(error) => buffered!(json_status_response(StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":error}))),
+        }
+    } else { None };
     let mut builder = provider_request.take_builder(&prepared_upstream.client, method);
     if !request.body.is_empty() {
         // Ownership crosses into reqwest here. The application-owned Vec is
@@ -48436,7 +48519,7 @@ fn forward_absolute_request_inner_with_prepared_and_connect<'a>(
         .as_ref()
         .and_then(|release| release.reservation.durable_policy.as_ref());
     let mut durable_policy_completion = None;
-    let mut result = finalize_upstream_response(
+    let mut result = finalize_upstream_response_with_gmail_age(
         state,
         snapshot,
         &decision,
@@ -48454,6 +48537,7 @@ fn forward_absolute_request_inner_with_prepared_and_connect<'a>(
         durable_policy_reservation,
         Some(&mut durable_policy_completion),
         keep_alive,
+        gmail_age.as_mut(),
     );
     if let Some(release) = release_authorization.as_mut() {
         if release.requires_response_evidence() {
@@ -48517,6 +48601,11 @@ fn forward_absolute_request_inner_with_prepared_and_connect<'a>(
             &upstream_url,
             message_ids,
         );
+    }
+    if let (Some(output), ForwardResult::Buffered(response)) = (gmail_age_output, &result) {
+        if parse_buffered_response(response).is_ok_and(|parsed|
+            parsed.status == 200 && parsed.headers.contains_key("x-serverware-policy-hash"))
+        { *output = gmail_age; }
     }
     result
 }
@@ -50387,6 +50476,7 @@ fn forward_absolute_request_to_with_connect<W: TerminalDeadlineWrite>(
     let mut response_proof_authorization = None;
     let mut response_proof_upstream = None;
     let mut response_observation_trace = ResponseObservationTrace::new();
+    let mut gmail_age = None;
     let result = match response_proof.as_ref() {
         Some(ResponseProofRequestContext::Buffered(_)) => {
             forward_absolute_request_inner_with_prepared_and_connect(
@@ -50407,6 +50497,7 @@ fn forward_absolute_request_to_with_connect<W: TerminalDeadlineWrite>(
                 keep_alive,
                 connect_context.map(|context| native_buffered_request::Ingress::Borrowed(
                     context, writer.retained_proxy_ingress())),
+                None,
             )
         }
         Some(ResponseProofRequestContext::Streaming(context)) => {
@@ -50493,6 +50584,7 @@ fn forward_absolute_request_to_with_connect<W: TerminalDeadlineWrite>(
             None,
             keep_alive,
             connect_context.map(native_buffered_request::Ingress::FromWriter),
+            Some(&mut gmail_age),
         ),
     };
     match result {
@@ -50612,7 +50704,10 @@ fn forward_absolute_request_to_with_connect<W: TerminalDeadlineWrite>(
                 }
             }
             let response = override_response_connection(response, keep_alive);
-            let written = write_snapshot_guarded_response(state, snapshot, writer, &response);
+            let written = match gmail_age.as_ref() {
+                Some(execution) => execution.write_response(state, snapshot, writer, &response),
+                None => write_snapshot_guarded_response(state, snapshot, writer, &response),
+            };
             if response_proof.is_none() {
                 operator_response_failure_diagnostics::observe(state,
                     operator_response_failure_diagnostics::Boundary::BufferedTerminal,

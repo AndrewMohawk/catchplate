@@ -459,12 +459,19 @@ class GmailReadAgePolicy(BaseModel):
     mode: Literal["unrestricted"]
 
 
+class GmailRecentReadAgePolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    mode: Literal["recent_internal_date_v1"]
+    max_age_days: int = Field(ge=1, le=3650)
+
+
 class GmailReadRuleInput(ApprovalRuleInput):
     """A typed operation bundle, not caller-defined URL or content authority."""
     application_id: str = Field(min_length=36, max_length=36)
     credential_id: str = Field(min_length=36, max_length=36)
     operation_bundle: Literal["gmail_read_v1"]
-    age_policy: GmailReadAgePolicy = Field(default_factory=lambda: GmailReadAgePolicy(mode="unrestricted"))
+    age_policy: Annotated[GmailReadAgePolicy | GmailRecentReadAgePolicy,
+        Field(discriminator="mode")] = Field(default_factory=lambda: GmailReadAgePolicy(mode="unrestricted"))
     credential_input: Literal["insert", "replace_exact"] = "insert"
     placeholder: str | None = Field(default=None, min_length=1, max_length=1024, repr=False)
     _canonical_ids = field_validator("application_id", "credential_id")(_identifier)

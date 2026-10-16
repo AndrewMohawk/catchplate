@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
-import { configuration, loadClientConfig, parseArguments, proxyOptions, createTransport, perform, FAILURE } from './client.mjs';
+import { configuration, loadClientConfig, parseArguments, proxyOptions, createTransport, perform, sampleQuery, FAILURE } from './client.mjs';
 
 const env = { SERVERWARE_PROXY_URL: 'https://proxy.example:443',
   SERVERWARE_APP_ID: '11111111-2222-4333-8444-555555555555',
@@ -101,6 +101,28 @@ test('downloaded config refuses wrong scope, expiry and every duplicated connect
     writeFileSync(filename, JSON.stringify(value), { mode: 0o600 });
     assert.throws(() => loadClientConfig(filename, env, now), { message: FAILURE });
   }
+});
+
+test('optional exact age policy is validated; private download overrides ambient age hints', t => {
+  const { filename } = privateFile(t);
+  for (const policy of [undefined, { mode: 'unrestricted' },
+    { mode: 'recent_internal_date_v1', max_age_days: 1 }, { mode: 'recent_internal_date_v1', max_age_days: 3650 }]) {
+    const value = { ...downloadedConfig(), ...(policy === undefined ? {} : { age_policy: policy }) };
+    writeFileSync(filename, JSON.stringify(value));
+    assert.deepEqual(loadClientConfig(filename, { ...env, SERVERWARE_GMAIL_MAX_AGE_DAYS: '9' }, now).agePolicy, policy);
+  }
+  for (const age_policy of [null, {}, [], { mode: 'future' }, { mode: 'unrestricted', max_age_days: 1 },
+    ...[undefined, null, true, '7', 0, 1.5, 3651].map(max_age_days => ({ mode: 'recent_internal_date_v1', max_age_days }))]) {
+    writeFileSync(filename, JSON.stringify({ ...downloadedConfig(), age_policy }));
+    assert.throws(() => loadClientConfig(filename, env, now), { message: FAILURE });
+  }
+  const policy = { mode: 'recent_internal_date_v1', max_age_days: 7 };
+  assert.deepEqual(configuration({ ...env, SERVERWARE_GMAIL_MAX_AGE_DAYS: '7' }).agePolicy, policy);
+  for (const value of ['', '0', '01', '3651', 'true', '7.0'])
+    assert.throws(() => configuration({ ...env, SERVERWARE_GMAIL_MAX_AGE_DAYS: value }));
+  assert.equal(sampleQuery(policy, 1800000000001), 'after:1799395201');
+  assert.equal(sampleQuery(policy, 1800000000000), 'after:1799395200');
+  assert.equal(sampleQuery(undefined, 1800000000001), null);
 });
 
 test('private configuration is a bounded regular JSON file; filesystem/parser failures stay fixed', t => {
@@ -214,6 +236,15 @@ test('two-page bounded metadata job; no message content in counts', async () => 
   assert.deepEqual(seen.details.map(row => row.metadataHeaders), [['From', 'Subject', 'Date'], ['From', 'Subject', 'Date']]);
   assert.ok(seen.details.every(row => row.format === 'metadata' && row.userId === 'me'));
   assert.deepEqual(await perform(sdkFor([{}]).sdk), { pages: 1, messages_read: 0, more_pages: false });
+});
+
+test('restricted sample holds one explicit convenience query across pages', async () => {
+  const { sdk, seen } = sdkFor([{ messages: [{ id: 'one' }], nextPageToken: 'next+page /=' },
+    { messages: [{ id: 'two' }] }]);
+  await perform(sdk, { mode: 'recent_internal_date_v1', max_age_days: 7 }, 1800000000001);
+  assert.deepEqual(seen.lists.map(row => row.q), ['after:1799395201', 'after:1799395201']);
+  assert.ok(seen.lists.every(row => row.maxResults === 5));
+  assert.ok(seen.details.every(row => !Object.hasOwn(row, 'fields')));
 });
 
 test('validate whole page before detail calls; reject invalid/duplicate IDs and pagination', async () => {

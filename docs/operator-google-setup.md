@@ -35,6 +35,11 @@ The callback is derived from the admitted console URL plus
 not all Google services. An existing pending operation must be cancelled before
 preparing another; completed and cancelled IDs are not reusable.
 
+Message-age limits are a separate application-permission choice, not a different
+OAuth scope or administrator setup. All mail remains the unrestricted default.
+The additive last-N-days mode is in implementation, not yet accepted or deployed;
+see its [contract and verification boundary](operator-gmail-job-verification.md#optional-last-n-days-policy--implementation-in-progress).
+
 ## Retained-state contract
 
 Preparation retains the original destination order and fixture CIDRs, appending

@@ -102,11 +102,24 @@ function createConnectView(workspace, applications, proxy) {
   function goto(next) { step = next; render(); if (open) element('connect-progress').scrollIntoView({block: 'nearest'}); }
   function activePair() { return credential() && validApp(application()); }
   function supported(rule) { return operatorRuleSupported(rule, catalog()); }
+  function gmailAgeInput() {
+    const mode = element('connect-gmail-age-policy').value;
+    return gmailAgePolicy(mode === 'unrestricted' ? {mode} :
+      {mode, max_age_days: Number(element('connect-gmail-age-days').value)});
+  }
+  function gmailAgeProblem() {
+    try {
+      const policy = gmailAgeInput();
+      return policy.mode !== 'unrestricted' && !gmailRecentAvailable(catalog()) ?
+        'The last-N-days policy is no longer advertised. Refresh or explicitly choose all mail; no permission is changed automatically.' : '';
+    } catch (error) { return operatorMessage(error); }
+  }
   function gmailSdkRule() {
-    return {...gmailRuleFields(), name: 'Read Gmail', application_id: selectedApplication, credential_id: selectedCredential,
+    return {...gmailRuleFields(gmailAgeInput()), name: 'Read Gmail', application_id: selectedApplication, credential_id: selectedCredential,
       credential_input: 'replace_exact', placeholder: 'Bearer serverware-gmail-placeholder-v1'};
   }
   function gmailSdkProblem() {
+    const ageProblem = gmailAgeProblem(); if (ageProblem) return ageProblem;
     if (!gmailAvailable(catalog(), credential()) || !catalog()?.allowed_upstreams.includes(operatorGmail.origin) ||
         !availableCredentialInputModes(catalog()).includes('replace_exact'))
       return 'The exact Read Gmail permission, approved Gmail destination and dummy-header replacement must all be advertised. No fallback permission is selected.';
@@ -344,6 +357,8 @@ function createConnectView(workspace, applications, proxy) {
     const alchemy = newRule && (isAlchemyCredential(credential()) || isAlchemyRule({operation_bundle: element('connect-operation').value}));
     const common = newRule && isCommonAppCredential(credential());
     const commonOperation = common ? commonAppCreationOperations(commonPreset()).find(item => item.id === element('connect-operation').value) : null;
+    const gmailAgeProblemText = gmail ? gmailAgeProblem() : '';
+    const gmailAge = gmail && !gmailAgeProblemText ? gmailAgeInput() : null;
     const ecr = newRule && isAwsCredential(credential());
     const providerPreset = github || npm || x || xPost || alchemy || common || ecr;
     fields('connect-saved-choice', connectionMethod === 'saved'); fields('connect-credential-new', newCredential && !['x', 'alchemy'].includes(connectionMethod));
@@ -391,7 +406,7 @@ function createConnectView(workspace, applications, proxy) {
     const content = review && step >= 3 ? review.rule : {response_mode: element('connect-response-mode').value};
     if (!(review && step >= 3) && element('connect-request-body-mode').value === 'preserve_json_v1') content.request_body_mode = 'preserve_json_v1';
     renderOperatorCompatibility('connect-compatibility-content', providerPreset && !(review && step >= 3) ?
-      {operation_bundle: element('connect-operation').value} : gmail && !(review && step >= 3) ? gmailRuleFields() : content);
+      {operation_bundle: element('connect-operation').value} : gmail && !(review && step >= 3) ? {...gmailRuleFields(), age_policy: gmailAge} : content);
     renderBasicCompatibility('connect', catalog(), credential());
     // Apply these last: nested legacy field renderers must not re-enable hidden
     // required controls. Switching permissions never clears the exact-rule draft.
@@ -408,6 +423,16 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-credential-input-group').hidden = !newRule || providerPreset || gmailSdk;
     if (!newRule || providerPreset || gmailSdk) for (const input of element('connect-credential-input-group').querySelectorAll('input,select,textarea')) input.disabled = true;
     fields('connect-gmail-client-group', gmail);
+    const recentAge = element('connect-gmail-age-policy').value === 'recent_internal_date_v1';
+    choices('connect-gmail-age-policy', [{id: 'unrestricted', name: 'All mail (no age restriction)'},
+      ...(gmailRecentAvailable(catalog()) ? [{id: 'recent_internal_date_v1', name: 'Only mail from the last…'}] : [])], 'unrestricted');
+    fields('connect-gmail-age-group', gmail && (gmailRecentAvailable(catalog()) || recentAge));
+    fields('connect-gmail-age-days-group', gmail && recentAge);
+    element('connect-gmail-age-policy').setCustomValidity(gmailAgeProblemText);
+    element('connect-gmail-age-status').textContent = gmailAgeProblemText;
+    element('connect-gmail-age-help').textContent = recentAge ?
+      'Uses Gmail’s stored timestamp (internalDate), not the sender’s Date header. List requests need maxResults 1–32. Serverware checks message metadata; an old message or unverifiable age blocks the whole page. Search can narrow results but does not enforce this policy.' :
+      'All mail keeps the existing unrestricted behavior. Choosing a time window affects only the new permission reviewed here, never an existing grant.';
     element('connect-gmail-sdk-summary').hidden = !gmailSdk;
     element('connect-gmail-sdk-status').textContent = gmailSdk ? gmailSdkProblem() ||
       'The fixed public dummy and standard proxy login are supported. Review the permission below; this page does not run the SDK or verify Google access.' :
@@ -465,7 +490,9 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-gmail-summary').hidden = !gmail;
     element('connect-gmail-summary').textContent = gmail && !gmailAvailable(catalog(), credential()) ?
       'Read Gmail is no longer advertised for this account. Refresh or explicitly choose another permission; no rule is changed automatically.' :
-      'Read Gmail: list messages, follow pagination and read individual messages in this account. No age restriction or optional content filtering. No sending, changes, attachments, history or Calendar. GET only, no request body; bounded JSON responses only.';
+      'Read Gmail: list messages, follow pagination and read individual messages in this account. ' +
+      (gmailAge?.mode === 'unrestricted' ? 'No age restriction or optional content filtering.' : gmailAgePolicySummary(gmailAge)) +
+      ' No sending, changes, attachments, history or Calendar. GET only, no request body; bounded JSON responses only.';
     element('connect-credential-next').textContent = newGithubApp() ? 'Save and verify GitHub App' : newCredential ? saveOnly ? 'Save credential' : 'Save credential & continue' : 'Use saved credential';
     element('connect-credential-next').disabled = connectionMethod === 'common' && !commonPreset() || connectionMethod === 'github' && !githubCreationAvailable() ||
       !newCredential && !catalog()?.credentials.some(item => item.id === element('connect-credential-choice').value && item.status === 'active');
@@ -493,7 +520,7 @@ function createConnectView(workspace, applications, proxy) {
       'Human approval cannot currently be combined with an X daily posting-attempt limit. Keep the quota, or explicitly choose a different restriction; neither is removed automatically.' : approvalAvailable ?
       'Host-trusted: server administrators can bypass it. Each first request stops with HTTP 428; after approval the client must explicitly retry exactly that request once. No automatic replay.' :
       'Host-trusted approvals are unavailable until this permission and the running proxy advertise matching support. Leave unchecked for ordinary permission-controlled access.';
-    element('connect-review').disabled = newRule && (gmail && (!gmailAvailable(catalog(), credential()) ||
+    element('connect-review').disabled = newRule && (gmail && (!gmailAvailable(catalog(), credential()) || Boolean(gmailAgeProblemText) ||
       !['sdk', 'custom'].includes(element('connect-gmail-client').value) || gmailSdk && Boolean(gmailSdkProblem())) || github && !githubAvailable(catalog(), credential()) ||
       x && !xAvailable(catalog(), credential()) ||
       ecr && !ecrAvailable(catalog(), credential()) || common && !commonAppAvailable(catalog(), credential(), element('connect-operation').value) ||
@@ -814,7 +841,8 @@ function createConnectView(workspace, applications, proxy) {
         if (problem) throw operatorError(problem);
         return gmailSdkRule();
       }
-      const rule = {...gmailRuleFields(), name: 'Read Gmail', application_id: selectedApplication, credential_id: selectedCredential,
+      const ageProblem = gmailAgeProblem(); if (ageProblem) throw operatorError(ageProblem);
+      const rule = {...gmailRuleFields(gmailAgeInput()), name: 'Read Gmail', application_id: selectedApplication, credential_id: selectedCredential,
         credential_input: element('connect-credential-input').value};
       if (rule.credential_input === 'replace_exact') rule.placeholder = element('connect-placeholder').value;
       if (!supported(rule)) throw operatorError('Read Gmail is unavailable for this account or credential-input choice. Refresh before granting access.');
@@ -882,6 +910,8 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-credential-secret').value = ''; element('connect-github-private-key').value = ''; review = null; render();
   });
   for (const [id, event] of [['connect-x-post-quota', 'change'], ['connect-x-post-limit', 'input']])
+    element(id).addEventListener(event, () => { review = null; if (step === 3) step = 2; render(); });
+  for (const [id, event] of [['connect-gmail-age-policy', 'change'], ['connect-gmail-age-days', 'input']])
     element(id).addEventListener(event, () => { review = null; if (step === 3) step = 2; render(); });
   function renderCommonPicker() {
     const presets = catalog()?.capabilities?.common_apps?.presets || [];

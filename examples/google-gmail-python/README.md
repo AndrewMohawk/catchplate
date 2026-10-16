@@ -68,7 +68,7 @@ The loader requires a current integer token expiry and matching application,
 access-rule, proxy, token and CA values in the download and its nested recipe.
 Downloads for Go, Node.js or Python work with this Python entrypoint; language,
 entrypoint and argument metadata are never executed. Only allowlisted connection
-fields reach the existing clean child. A detached `client_recipe` is not a full
+fields and a validated age-policy hint reach the existing clean child. A detached `client_recipe` is not a full
 download, and `--config` is not accepted in the internal `--child` mode.
 
 Alternatively, the existing environment-only invocation remains available:
@@ -87,6 +87,27 @@ unset SERVERWARE_PROXY_TOKEN
 The `read` command above is for Bash. Use your shell's private-input mechanism;
 do not paste the token into source files, command-line arguments or shell history.
 `.env.example` is a reference only; no `.env` file is loaded.
+
+## Optional last-N-days policy
+
+Age is unrestricted by default. A full download can select
+`age_policy: {"mode":"recent_internal_date_v1","max_age_days":7}`;
+the day count must be an integer from 1 through 3650. This requires the saved
+`orderedFormV1` permission. Absent metadata and `{"mode":"unrestricted"}`
+preserve the original requests without a `q` parameter.
+
+For a restricted run, the sample computes `after:<epoch-seconds>` once as the
+ceiling of the client clock minus N days, then reuses it across both pages.
+Its explicit five-message page size fits the restricted maximum of 32.
+Direct metadata reads retain the normal response, including `internalDate`;
+there is no `fields` projection. The proxy verifies age from `internalDate` and
+can deny an entire response with old or missing evidence. The query is a
+convenience, not enforcement or a claim that this bounded inbox sample is complete.
+
+The copied Bash recipe and environment-only invocation support
+`SERVERWARE_GMAIL_MAX_AGE_DAYS='7'` for the same hint. A full `--config` download
+derives it only from the top-level policy and ignores ambient/nested recipe
+overrides. Neither setting changes the application's saved authority.
 
 `SERVERWARE_CA_FILE` trusts only the intercepted Gmail TLS connection. For an
 outer proxy certificate signed by a private CA, additionally set

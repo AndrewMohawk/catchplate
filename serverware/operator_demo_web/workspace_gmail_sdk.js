@@ -13,8 +13,20 @@ function gmailSdkLanguage(language = 'go') {
     throw new Error('Choose a supported Gmail SDK language');
   return profiles[language];
 }
+function gmailSdkAgeDays(policy) {
+  if (policy === undefined) return null; // Existing standalone connection recipe.
+  if (policy && typeof policy === 'object' && !Array.isArray(policy)) {
+    if (Object.hasOwn(policy, 'mode') && policy.mode === 'unrestricted' && Object.keys(policy).length === 1) return null;
+    if (Object.hasOwn(policy, 'mode') && Object.hasOwn(policy, 'max_age_days') &&
+        policy.mode === 'recent_internal_date_v1' && Object.keys(policy).length === 2 &&
+        Number.isSafeInteger(policy.max_age_days) && policy.max_age_days >= 1 && policy.max_age_days <= 3650)
+      return policy.max_age_days;
+  }
+  throw new Error('Choose all mail or a whole-number age limit from 1 to 3650 days');
+}
 function gmailSdkPublicConfiguration({proxyUrl, applicationId, accessRuleId, tokenExpiresAtEpochMs,
-    caPath = './serverware-ca.pem', proxyCaPath = '', nowEpochMs = Date.now(), language = 'go'}) {
+    caPath = './serverware-ca.pem', proxyCaPath = '', nowEpochMs = Date.now(), language = 'go', agePolicy}) {
+  gmailSdkAgeDays(agePolicy);
   const profile = gmailSdkLanguage(language);
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   const match = typeof proxyUrl === 'string' && proxyUrl.match(/^https:\/\/([a-z0-9.-]+)(?::([0-9]{1,5}))?\/?$/);
@@ -58,6 +70,8 @@ function buildGmailSdkClientRecipe(options) {
     'unset PWD OLDPWD SHLVL _', 'export SERVERWARE_PROXY_TOKEN'];
   for (const [key, value] of Object.entries(config.environment))
     if (key !== 'LANG') child.push('export ' + key + '=' + gmailSdkShellQuote(value));
+  const ageDays = gmailSdkAgeDays(options.agePolicy);
+  if (ageDays !== null) child.push('export SERVERWARE_GMAIL_MAX_AGE_DAYS=' + gmailSdkShellQuote(String(ageDays)));
   if (language !== 'go') {
     for (const key of ['SERVERWARE_CA_FILE', 'SERVERWARE_PROXY_CA_FILE'])
       if (Object.hasOwn(config.environment, key))

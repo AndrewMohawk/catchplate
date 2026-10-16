@@ -179,6 +179,7 @@ SUITES = (
     Suite("ui_contract", "test_operator_npm_install_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_github_app_ui.mjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_gmail_sdk_languages.cjs", "node", seconds=60),
+    Suite("ui_contract", "test_operator_gmail_age_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_x_accounts_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_x_configuration_ui.mjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_x_quota_ui.cjs", "node", seconds=60),
@@ -367,6 +368,9 @@ def node_completion(script, raw):
             "scope": "actual UI functions and core mutation; inert DOM and independent in-memory API, not provider acceptance"},
         "test_operator_gmail_sdk_languages.cjs": {"ok": True, "browser": False, "sdk": False,
             "providerRequests": 0, "scope": "pure UI helper and inert local shell stubs"},
+        "test_operator_gmail_age_ui.cjs": {"ok": True, "browser": False,
+            "providerRequests": 0, "applicationRequests": 0,
+            "scope": "actual backend descriptor and isolated UI draft/review/download functions"},
         "test_operator_x_accounts_ui.cjs": {"ok": True, "browser": False, "network": False,
             "scope": "actual public UI helpers and controller with inert DOM; no provider or backend acceptance"},
         "test_operator_x_configuration_ui.mjs": {"ok": True, "browser": False, "network": False,
@@ -407,7 +411,7 @@ def node_completion(script, raw):
         if type(count) is not int or not 0 < count <= 10000:
             return None
         if script in {"test_operator_catalog_browser.cjs", "test_operator_gmail_sdk_languages.cjs",
-                "test_operator_common_apps_ui.cjs"}:
+                "test_operator_gmail_age_ui.cjs", "test_operator_common_apps_ui.cjs"}:
             return count if len(lines) == 1 else None
         return count if len(lines) - 1 == count and all(line.startswith("PASS ") for line in lines[:-1]) else None
     except (OSError, ValueError, KeyError, UnicodeError):

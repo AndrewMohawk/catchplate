@@ -67,6 +67,21 @@ test('real SDK ordered queries, preserved headers, pagination and returned-ID me
   });
 });
 
+test('real SDK restricted query is explicit and unchanged on the next page', async () => {
+  await fixture(async ({ client, pool, requests, mock }) => {
+    const first = LIST + '&q=after%3A1799395201';
+    const replies = [[first, { messages: [{ id: 'one' }], nextPageToken: 'next+page /=' }],
+      [DETAIL('one'), { id: 'one', internalDate: '1800000000000' }],
+      [first + '&pageToken=next%2Bpage%20%2F%3D', {}]];
+    for (const [path, body] of replies) pool.intercept({ method: 'GET', path }).reply(200, body,
+      { headers: { 'content-type': 'application/json' } });
+    assert.deepEqual(await perform(client.sdk, { mode: 'recent_internal_date_v1', max_age_days: 7 }, 1800000000001),
+      { pages: 2, messages_read: 1, more_pages: false });
+    assert.deepEqual(requests.map(row => new URL(row.url).pathname + new URL(row.url).search), replies.map(row => row[0]));
+    mock.assertNoPendingInterceptors();
+  });
+});
+
 test('SDK 401/403/429/503 and redirect each stop after one dispatch; no OAuth refresh or retry', async () => {
   for (const status of [401, 403, 429, 503, 302]) await fixture(async ({ client, pool, requests }) => {
     pool.intercept({ path: LIST, method: 'GET' }).reply(status, { error: 'synthetic' },

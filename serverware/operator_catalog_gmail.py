@@ -1,8 +1,8 @@
 """Explicit Gmail message-read bundle; no legacy rule conversion or provider I/O.
 
-One catalog permission owns one signed route with two typed operations. The
-initial contract has no age restriction; admitting one requires a separately
-verified response-evidence path, never a query-only substitute.
+One catalog permission owns one signed route with two typed operations. Age
+restriction is explicit and requires fresh internalDate evidence at the Rust
+gate; it is never an implicit migration or a query-only substitute.
 """
 from __future__ import annotations
 
@@ -58,9 +58,22 @@ def record_fields(payload) -> dict:
     return value
 
 
+def _signed_age_policy(rule: dict) -> dict:
+    value = rule.get("age_policy")
+    if value == {"mode": "unrestricted"}:
+        return {"mode": "unrestricted"}
+    if (not isinstance(value, dict) or set(value) != {"mode", "max_age_days"}
+            or value["mode"] != "recent_internal_date_v1"
+            or type(value["max_age_days"]) is not int or not 1 <= value["max_age_days"] <= 3650
+            or _query_mode(rule) != QUERY_MODE):
+        raise CatalogIntegrityError("operator Gmail age policy refused")
+    return {"mode": "recent_internal_date_v1", "maxAgeDays": value["max_age_days"]}
+
+
 def validate_shape(rule: dict) -> None:
     query_mode = _query_mode(rule)
-    if (not selected(rule) or rule.get("age_policy") != {"mode": "unrestricted"}
+    _signed_age_policy(rule)
+    if (not selected(rule)
             or "request_body_mode" in rule
             or any(rule.get(key) != value for key, value in _derived_fields(query_mode).items())):
         raise CatalogIntegrityError("operator Gmail bundle contract refused")
@@ -90,7 +103,7 @@ def render_route(rule: dict, credential: dict, principal_id: str) -> dict:
                 "subjects": [credential["provider_subject"]],
                 "clientIds": [credential["oauth_client_id"]], "requiredScopes": [READ_SCOPE]},
             "request": provider_request_profile(ADAPTER, query_mode=_query_mode(rule)),
-            "agePolicy": {"mode": "unrestricted"},
+            "agePolicy": _signed_age_policy(rule),
             "response": gmail_read_response_profile()}},
         "constraints": [gmail_read_response_envelope(rule["route_id"] + ".envelope")]}
 
@@ -130,6 +143,9 @@ def capabilities(conn) -> list[dict]:
         "credential_type": "google_oauth", "permission_preset": profile.permission_preset,
         "api_origin": ORIGIN, "methods": ["GET"], "paths": list(PATHS),
         "query_mode": QUERY_MODE, "age_policy": {"mode": "unrestricted"},
+        "age_policy_options": [{"mode": "unrestricted"},
+            {"mode": "recent_internal_date_v1", "min_age_days": 1,
+                "max_age_days": 3650, "max_list_results": 32}],
         "response_mode": RESPONSE_MODE, "response_contract": {
             "mode": response["mode"], "body_presence": envelope["bodyPresence"],
             "content_types": list(response["contentTypes"]), "success_status_codes": [200],

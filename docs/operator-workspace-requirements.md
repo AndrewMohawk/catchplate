@@ -554,12 +554,18 @@ notifications; see the [current completion record](project-completion.md#p1--com
 Selecting a restriction still requires its actual request and response
 enforcement, and choosing an unfiltered mode must not silently discard it.
 
-Optional Gmail age restrictions remain an ordinary-product implementation gap.
-The current Read Gmail catalog bundle accepts only unrestricted age; its UI and
-runtime do not enforce a last-N-days limit. Keep the optional recent-mail
-requirement open, alongside the implemented unrestricted inbox job. A search
-query alone is not an age policy, and existing unrestricted grants must not be
-silently narrowed when an additive restricted mode is introduced.
+Optional Gmail age restrictions remain unfinished ordinary-product work. The
+deployed Read Gmail workflow is unrestricted; the approved October 16 additive
+contract is now in source implementation. It uses
+`age_policy: {"mode":"recent_internal_date_v1","max_age_days":N}`, N from 1
+through 3650, while preserving unrestricted defaults and existing grants.
+Restricted lists require explicit `maxResults` of at most 32 and bounded
+same-parent metadata evidence for every returned ID. A missing, old, future or
+otherwise invalid date blocks the whole page; no rows or query values are
+silently changed. Direct reads and final release also check the moving window.
+A client's date search is only a convenience, never the proof. Keep completion
+open until the source, build, connected and deployment boundaries are verified;
+see the [exact contract and limitations](operator-gmail-job-verification.md#optional-last-n-days-policy--implementation-in-progress).
 
 The Google delivery boundary is a **usable inbox job**, not merely a successful
 consent callback. Generic catalog rules still bind one literal path; the new

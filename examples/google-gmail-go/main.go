@@ -43,11 +43,19 @@ type config struct {
 	proxy               *url.URL
 	appID, proxyToken   string
 	caFile, proxyCAFile string
+	maxAgeDays          int
 }
 
 func readConfig(getenv func(string) string) (config, error) {
 	c := config{appID: getenv("SERVERWARE_APP_ID"), proxyToken: getenv("SERVERWARE_PROXY_TOKEN"),
 		caFile: getenv("SERVERWARE_CA_FILE"), proxyCAFile: getenv("SERVERWARE_PROXY_CA_FILE")}
+	if value := getenv("SERVERWARE_GMAIL_MAX_AGE_DAYS"); value != "" {
+		days, err := strconv.Atoi(value)
+		if err != nil || days < 1 || days > 3650 || strconv.Itoa(days) != value {
+			return config{}, errors.New("invalid Gmail age hint")
+		}
+		c.maxAgeDays = days
+	}
 	// Google checks this setting before honoring WithHTTPClient. Refuse ambient
 	// client-certificate discovery rather than inspecting local Google key files.
 	if strings.EqualFold(getenv("GOOGLE_API_USE_CLIENT_CERTIFICATE"), "true") {
@@ -196,12 +204,34 @@ func validPageToken(token string) bool {
 	return true
 }
 
+func sampleQuery(days int, now time.Time) (string, error) {
+	if days < 0 || days > 3650 || now.UnixMilli() <= 0 || now.UnixMilli() > 9007199254740991 {
+		return "", errors.New("invalid Gmail age hint or sample time")
+	}
+	if days == 0 {
+		return "", nil
+	}
+	cutoff := now.UnixMilli() - int64(days)*86400000
+	seconds := cutoff / 1000
+	if cutoff%1000 > 0 {
+		seconds++ // Integer ceil, including dates before the Unix epoch.
+	}
+	return "after:" + strconv.FormatInt(seconds, 10), nil
+}
+
 func readMailbox(ctx context.Context, client *gmail.Service) (summary, error) {
+	return readMailboxQuery(ctx, client, "")
+}
+
+func readMailboxQuery(ctx context.Context, client *gmail.Service, query string) (summary, error) {
 	var result summary
 	seenIDs, seenPages := map[string]bool{}, map[string]bool{}
 	page := ""
 	for result.Pages < maxPages {
 		call := client.Users.Messages.List("me").MaxResults(pageSize).LabelIds("INBOX").Context(ctx)
+		if query != "" {
+			call.Q(query)
+		}
 		if page != "" {
 			call.PageToken(page)
 		}
@@ -274,7 +304,11 @@ func run(getenv func(string) string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	result, err := readMailbox(ctx, client)
+	query, err := sampleQuery(c.maxAgeDays, time.Now())
+	if err != nil {
+		return err
+	}
+	result, err := readMailboxQuery(ctx, client, query)
 	if err != nil {
 		return err
 	}

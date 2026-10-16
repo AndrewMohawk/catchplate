@@ -40,6 +40,12 @@ function operatorResponseSummary(rule) {
       'Success fields: ' + (rule.response_fields.length ? rule.response_fields.join(', ') + '.' : 'none selected; cannot save.')) +
     ' ' + operatorResponseLimits(rule.response_mode) + ' ' + operatorResponseHeaderSummary(rule.response_mode);
 }
+function gmailAgePolicySummary(policy) {
+  try { policy = gmailAgePolicy(policy); } catch (_) { return 'Choose a valid mail-age policy before reviewing access.'; }
+  return policy.mode === 'unrestricted' ? 'Unrestricted. No age restriction or optional content filtering.' :
+    'Only mail from the last ' + policy.max_age_days + ' day' + (policy.max_age_days === 1 ? '' : 's') +
+    ', based on Gmail’s stored timestamp (internalDate), not the sender’s Date header. The window moves with time.';
+}
 function renderOperatorCompatibility(id, rule = {}) {
   if (isEcrRule(rule)) { renderEcrCompatibility(id); return; }
   if (isXPostRule(rule)) { renderXPostCompatibility(id); return; }
@@ -51,11 +57,14 @@ function renderOperatorCompatibility(id, rule = {}) {
   if (isGithubRule(rule)) { renderGithubCompatibility(id, rule); return; }
   if (isGmailRule(rule)) {
     element(id).replaceChildren(...[
-      'Read Gmail permits GET message lists, pagination and individual message reads for users/me. No request body, sending, modification, attachments, history, threads or Calendar operations. No age restriction is enforced; a search query is not an age policy.',
+      'Read Gmail permits GET message lists, pagination and individual message reads for users/me. No request body, sending, modification, attachments, history, threads or Calendar operations. ' + gmailAgePolicySummary(rule.age_policy) + ' A search query is not an age policy.',
       rule.query_mode === 'orderedFormV1' ?
         'This permission accepts the supported Gmail query parameters in client order using ordinary form-query encoding. Values, repeated names and operation-specific parameter combinations remain bounded; this is not unrestricted SDK compatibility.' :
         'Retained legacy permission: strict canonical query encoding and ordering still apply. This permission has not been upgraded to ordinary query compatibility.',
-      'Message reads support full or metadata JSON, not raw mail. Message IDs must come from the selected account. Lists are bounded to at most 500 messages per response; your client follows nextPageToken and makes each message request itself.',
+      'Message reads support full or metadata JSON, not raw mail. Message IDs must come from the selected account. ' +
+        (rule.age_policy?.mode === 'recent_internal_date_v1' ?
+          'Restricted lists require maxResults of 1–32. Extra metadata checks verify every message’s stored timestamp; an old message or unverifiable age blocks the whole page instead of silently omitting messages. Individual reads are checked too.' :
+          'Lists are bounded to at most 500 messages per response; your client follows nextPageToken and makes each message request itself.'),
       'Required JSON object responses only: HTTP 200 up to 1 MiB; errors 400, 401, 403, 404, 429, 500, 502, 503 and 504 up to 64 KiB. No empty 204, text, binary or streaming responses. Identity and credential-disclosure checks still apply; this is not optional field filtering.',
       'Standard response metadata is checked and discarded; no extra response headers are forwarded. ' +
         (rule.query_mode === 'orderedFormV1' ? 'Client compression offers are removed before forwarding; compressed responses remain unsupported. ' :
@@ -107,7 +116,9 @@ function operatorRuleRestrictions(rule) {
     ['Permission', 'Read Gmail · this connected account'],
     ['Allowed operations', 'List messages, follow pagination and read individual messages (GET only; no request body).'],
     ['Excluded operations', 'Sending, modifications, attachments, history, threads and Calendar.'],
-    ['Mail age', 'Unrestricted. No age policy or optional content filtering.'],
+    ['Mail age', gmailAgePolicySummary(rule.age_policy)],
+    ...(rule.age_policy?.mode === 'recent_internal_date_v1' ? [['Age verification',
+      'List requests require maxResults 1–32. Extra metadata checks verify internalDate; an old message or unverifiable age blocks the whole page. A search query can narrow results but cannot authorize older mail.']] : []),
     ['Queries', rule.query_mode === 'orderedFormV1' ? 'Supported Gmail parameters in client order; bounded values and operation-specific limits.' : 'Retained legacy canonical query rules; no automatic upgrade.'],
     ['Response', 'Required JSON objects; up to 1 MiB success / 64 KiB error. No empty 204 or streaming. Standard metadata is checked and discarded.'],
   ];

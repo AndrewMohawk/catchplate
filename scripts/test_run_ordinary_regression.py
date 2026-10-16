@@ -89,6 +89,14 @@ class RunnerTests(unittest.TestCase):
         gmail = next(row for row in runner.SUITES if row.script == "test_operator_gmail_sdk_languages.cjs")
         self.assertEqual((gmail.category, gmail.runtime, gmail.arguments, gmail.seconds),
             ("ui_contract", "node", (), 60))
+        gmail_age = next(row for row in runner.SUITES if row.script == "test_operator_gmail_age_ui.cjs")
+        self.assertEqual((gmail_age.category, gmail_age.runtime, gmail_age.arguments, gmail_age.seconds),
+            ("ui_contract", "node", (), 60))
+        age_receipt = {"ok": True, "groups": 8, "browser": False, "providerRequests": 0,
+            "applicationRequests": 0, "scope": "actual backend descriptor and isolated UI draft/review/download functions"}
+        self.assertEqual(runner.node_completion(gmail_age.script, json.dumps(age_receipt).encode()), 8)
+        self.assertIsNone(runner.node_completion(gmail_age.script,
+            json.dumps({**age_receipt, "groups": 0}).encode()))
         decisions = next(row for row in runner.SUITES if row.script == "test_approval_decision_ui.cjs")
         self.assertEqual((decisions.category, decisions.runtime, decisions.arguments, decisions.seconds),
             ("ui_contract", "node", (), 60))

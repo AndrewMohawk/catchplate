@@ -4,6 +4,12 @@
 
 ## Status and objective
 
+October 16 follow-up: the optional last-N-days permission contract is approved
+and source implementation is in progress. Existing unrestricted grants and
+ordered SDK queries remain unchanged. Its build, connected, deployment and
+real-Google acceptance are not established by the earlier receipts below; see
+the [current age-policy contract](operator-gmail-job-verification.md#optional-last-n-days-policy--implementation-in-progress).
+
 The first-Google administrator setup now has focused retained-state verification:
 six selected groups passed using 18 fresh-process workers, including activation,
 restart preservation and audit-failure rollback. It stages an exact public
@@ -12,7 +18,7 @@ cold restart without replacing the saved catalog. This is separate from account
 consent and does not enable Google in the live demo. See the
 [setup contract and verification](operator-google-setup.md).
 
-Current joined checkpoint, 2026-10-11 UTC: the actual checked-in official Go
+Historical joined checkpoint, 2026-10-11 UTC: the actual checked-in official Go
 Gmail SDK example passed through the normal Rust proxy in an isolated network
 fixture. It completed eight list/pagination/message requests across actual
 synthetic-token expiry, with one automatic refresh, Basic CONNECT over HTTPS,

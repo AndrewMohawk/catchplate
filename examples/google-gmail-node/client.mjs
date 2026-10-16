@@ -20,6 +20,25 @@ function requireValue(condition) {
   if (!condition) throw new Error(FAILURE);
 }
 
+export function agePolicyDays(value = { mode: 'unrestricted' }) {
+  requireValue(value !== null && typeof value === 'object' && !Array.isArray(value));
+  if (value.mode === 'unrestricted') {
+    requireValue(Object.keys(value).length === 1);
+    return 0;
+  }
+  requireValue(value.mode === 'recent_internal_date_v1' && Object.keys(value).length === 2
+    && Number.isInteger(value.max_age_days) && value.max_age_days >= 1 && value.max_age_days <= 3650);
+  return value.max_age_days;
+}
+
+export function sampleQuery(agePolicy, now = Date.now()) {
+  const days = agePolicyDays(agePolicy);
+  if (!days) return null;
+  requireValue(Number.isSafeInteger(now) && now > 0);
+  // Client convenience only. Serverware verifies internalDate independently.
+  return 'after:' + Math.ceil((now - days * 86400000) / 1000);
+}
+
 function required(env, name, maximum = 4096) {
   const value = env[name];
   requireValue(typeof value === 'string' && value.length > 0 && value.length <= maximum
@@ -46,9 +65,15 @@ export function configuration(env) {
   requireValue(/^[A-Za-z0-9_-]{43}$/.test(token)
     && Buffer.from(token, 'base64url').length === 32
     && Buffer.from(token, 'base64url').toString('base64url') === token);
-  return { proxyUrl, applicationId, token,
+  const config = { proxyUrl, applicationId, token,
     caFile: required(env, 'SERVERWARE_CA_FILE'),
     proxyCaFile: env.SERVERWARE_PROXY_CA_FILE ? required(env, 'SERVERWARE_PROXY_CA_FILE') : null };
+  if (env.SERVERWARE_GMAIL_MAX_AGE_DAYS !== undefined) {
+    const value = env.SERVERWARE_GMAIL_MAX_AGE_DAYS;
+    requireValue(typeof value === 'string' && /^[1-9][0-9]{0,3}$/.test(value) && Number(value) <= 3650);
+    config.agePolicy = { mode: 'recent_internal_date_v1', max_age_days: Number(value) };
+  }
+  return config;
 }
 
 function readConfigurationFile(path) {
@@ -76,6 +101,7 @@ export function loadClientConfig(path, env, now = Date.now()) {
     const value = readConfigurationFile(filename);
     const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
     requireValue(object(value) && object(value.client_recipe));
+    agePolicyDays(value.age_policy);
     const recipe = value.client_recipe;
     requireValue(['serverware.gmailSdkClient/v1', 'serverware.gmailSdkClient/v2'].includes(recipe.schema)
       && object(recipe.environment));
@@ -98,15 +124,19 @@ export function loadClientConfig(path, env, now = Date.now()) {
       && (connection.SERVERWARE_PROXY_CA_FILE ?? null) === (value.proxy_ca_file ?? null));
     const caPath = value => resolve(dirname(filename), required({ path: value }, 'path'));
     // Language, entrypoint, commands and arbitrary environment entries are inert.
-    // Import only connection values, clearing an absent outer CA from the caller.
-    return configuration({ ...env,
+    // Import only validated connection values and the explicit public age hint.
+    // Clear absent outer CA/age hints from the caller.
+    const config = configuration({ ...env,
       SERVERWARE_PROXY_URL: value.proxy_url,
       SERVERWARE_APP_ID: value.application_id,
       SERVERWARE_PROXY_TOKEN: value.proxy_password,
       SERVERWARE_CA_FILE: caPath(value.ca_file),
+      SERVERWARE_GMAIL_MAX_AGE_DAYS: undefined,
       SERVERWARE_PROXY_CA_FILE: value.proxy_ca_file === undefined || value.proxy_ca_file === null
         ? undefined : caPath(value.proxy_ca_file),
     });
+    if (value.age_policy !== undefined) config.agePolicy = { ...value.age_policy };
+    return config;
   } catch { throw new Error(FAILURE); }
 }
 
@@ -219,14 +249,15 @@ function validPageToken(value) {
     && !/[\u0000-\u001f\u007f-\u009f\\]/.test(value);
 }
 
-export async function perform(sdk) {
+export async function perform(sdk, agePolicy, now = Date.now()) {
+  const q = sampleQuery(agePolicy, now);
   const summary = { pages: 0, messages_read: 0, more_pages: false };
   const seenIds = new Set();
   const seenPages = new Set();
   let pageToken;
   for (let page = 0; page < 2; page++) {
     const result = await sdk.users.messages.list({ userId: 'me', maxResults: 5,
-      labelIds: ['INBOX'], ...(pageToken ? { pageToken } : {}) });
+      labelIds: ['INBOX'], ...(q ? { q } : {}), ...(pageToken ? { pageToken } : {}) });
     requireValue(result.status === 200 && result.data && typeof result.data === 'object'
       && !Array.isArray(result.data));
     const { messages = [], nextPageToken = '' } = result.data;
@@ -267,7 +298,7 @@ async function main() {
     ]);
     const client = createClient(config, { gmail, auth, ProxyAgent, request });
     proxy = client.proxy;
-    const summary = await perform(client.sdk);
+    const summary = await perform(client.sdk, config.agePolicy);
     await proxy.destroy();
     proxy = null;
     console.log(JSON.stringify(summary));

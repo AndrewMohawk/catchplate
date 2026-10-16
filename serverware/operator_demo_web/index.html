@@ -117,6 +117,11 @@
             </div>
             <div id="connect-common-permission" hidden><p id="connect-common-summary" class="notice"></p><div id="connect-common-scopes"></div><p id="connect-common-limits" class="small muted"></p><p class="small muted">Only this operation and the reviewed scopes are granted. No streaming, file uploads or arbitrary endpoints. Your provider token must already have the required access.</p></div>
             <p id="connect-gmail-summary" class="notice" hidden>Read Gmail: list messages, follow pagination and read individual messages in this account. No age restriction or optional content filtering. No sending, changes, attachments, history or Calendar. GET only, no request body; bounded JSON responses only.</p>
+            <div id="connect-gmail-age-group" hidden>
+              <label for="connect-gmail-age-policy">Mail age</label><select id="connect-gmail-age-policy" required disabled><option value="unrestricted" selected>All mail (no age restriction)</option></select>
+              <div id="connect-gmail-age-days-group" hidden><label for="connect-gmail-age-days">Last how many days?</label><input id="connect-gmail-age-days" type="number" min="1" max="3650" step="1" value="30" required disabled></div>
+              <p id="connect-gmail-age-help" class="small muted"></p><p id="connect-gmail-age-status" class="notice" role="status"></p>
+            </div>
             <div id="connect-gmail-client-group" hidden>
               <label for="connect-gmail-client">Gmail client</label><select id="connect-gmail-client" required disabled><option value="sdk" selected>Official Gmail SDK</option><option value="custom">Custom HTTP client</option></select>
               <p id="connect-gmail-sdk-summary" class="small muted">Choose the official Go, Node.js or Python Gmail SDK example in client setup after saving this permission. Each sends the fixed public header <code>Authorization: Bearer serverware-gmail-placeholder-v1</code>; Serverware replaces it with the account credential. This dummy is not a secret or your application token. No response-field setup is needed.</p>

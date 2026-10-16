@@ -43,6 +43,24 @@ test('closed languages and unchanged Go v1 default', () => {
     assert.throws(() => helpers.gmailSdkPublicConfiguration({...input, language}));
 });
 
+test('restricted copied recipes carry only the validated age hint; private recipe schema stays unchanged', () => {
+  for (const language of ['go', 'node', 'python']) {
+    const plain = helpers.buildGmailSdkClientRecipe({...input, language});
+    assert.equal(helpers.buildGmailSdkClientRecipe({...input, language, agePolicy: {mode: 'unrestricted'}}), plain);
+    for (const days of [1, 30, 3650]) {
+      const options = {...input, language, agePolicy: {mode: 'recent_internal_date_v1', max_age_days: days}};
+      const recipe = helpers.buildGmailSdkClientRecipe(options);
+      assert(recipe.includes('export SERVERWARE_GMAIL_MAX_AGE_DAYS='));
+      assert.deepEqual(clone(helpers.gmailSdkPublicConfiguration(options)), clone(helpers.gmailSdkPublicConfiguration({...input, language})));
+      assert(!Object.hasOwn(helpers.gmailSdkClientConfiguration(options, TOKEN).environment, 'SERVERWARE_GMAIL_MAX_AGE_DAYS'));
+    }
+    for (const agePolicy of [null, {}, {mode: 'recent_internal_date_v1', max_age_days: 0},
+      {mode: 'recent_internal_date_v1', max_age_days: '30'}, {mode: 'recent_internal_date_v1', max_age_days: 3651},
+      {mode: 'unrestricted', max_age_days: 30}, {mode: 'recent_internal_date_v1', max_age_days: 30, extra: true}])
+      assert.throws(() => helpers.buildGmailSdkClientRecipe({...input, language, agePolicy}));
+  }
+});
+
 test('versioned interpreted profiles match actual checked-in entrypoints', () => {
   for (const [language, entrypoint, args, filename] of [
     ['node', 'node', ['client.mjs'], 'client.mjs'],
@@ -119,6 +137,11 @@ try {
       SERVERWARE_PROXY_URL: input.proxyUrl, SERVERWARE_APP_ID: input.applicationId,
       SERVERWARE_CA_FILE: language === 'go' ? './' + inner : join(project, inner),
       SERVERWARE_PROXY_CA_FILE: language === 'go' ? './' + outer : join(project, outer)});
+  });
+  for (const language of ['go', 'node', 'python']) test(language + ' restricted copied shell supplies explicit days in its clean child only', () => {
+    const value = execute(language, {agePolicy: {mode: 'recent_internal_date_v1', max_age_days: 30}});
+    assert.equal(value.environment.SERVERWARE_GMAIL_MAX_AGE_DAYS, '30');
+    assert.equal(value.tokenInArgv, false); assert.equal(value.tokenInParentArgv, false);
   });
   test('interpreted recipes refuse unresolved CA, directories, absent runtime and invalid token before launch', () => {
     function refused(fn) {

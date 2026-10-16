@@ -1829,7 +1829,7 @@ class ApiAdapter:
 
 
 class GmailReadV1Adapter(ApiAdapter):
-    """Explicit read-only bundle, without the legacy age/proof-cache semantics.
+    """Explicit unrestricted read-only bundle; recent age mode is Rust-only.
 
     Legacy query admission remains the default. An explicit orderedFormV1
     policy preserves form-query wire bytes and operation-specific repetitions;
@@ -1861,6 +1861,10 @@ class GmailReadV1Adapter(ApiAdapter):
         return pairs
 
     def validate_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        if route.adapter_config.get("agePolicy") != {"mode": "unrestricted"}:
+            # This prototype has no fresh metadata-evidence transport. Never
+            # accept a signed restriction that it cannot itself enforce.
+            return self._denied("gmail_read_age_evidence_unsupported")
         try:
             decision = self._validate_provider_request_profile(flow, route)
         except (TypeError, ValueError, UnicodeError):
@@ -1924,6 +1928,8 @@ class GmailReadV1Adapter(ApiAdapter):
         return self._response_contract(flow, route)
 
     def _response_contract(self, flow: Any, route: Any) -> PolicyDecision:
+        if route.adapter_config.get("agePolicy") != {"mode": "unrestricted"}:
+            return self._denied("gmail_read_age_evidence_unsupported", 502)
         if not flow.response:
             return self._denied("gmail_read_response_missing", 502)
         try:

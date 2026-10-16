@@ -52,9 +52,10 @@ delete, modification, attachment, history, profile or Calendar calls.
    deployment or Google account ready.
 
 This permission is GET-only for `https://gmail.googleapis.com/gmail/v1/users/me/messages`
-and individual message paths. The permission itself has **no age restriction**;
-the example's inbox filter and count limit do not narrow an application's saved
-authority. Serverware's existing Gmail response contract limits successful JSON
+and individual message paths. Age is unrestricted by default; an optional
+**Last N days** restriction is enforced by the proxy. The example's inbox filter
+and count limit do not narrow an application's saved authority.
+Serverware's existing Gmail response contract limits successful JSON
 to 1 MiB. See the [Gmail verification boundary](../../docs/operator-gmail-job-verification.md).
 
 ## Run
@@ -111,7 +112,8 @@ agree with its recipe. The file must be a regular JSON file of at most 64 KiB;
 symlinks, invalid access-rule IDs and expired application tokens are refused.
 
 For `--config` only, the CLI clears its own process environment before SDK
-initialization and installs just the validated connection values and a fixed
+initialization and installs just the validated connection values, an optional
+age-policy hint and a fixed
 locale. This prevents ambient Google client-certificate discovery and does not
 change your parent shell. Run the binary in a trusted environment: this is not
 isolation from settings already processed at runtime startup. The normal
@@ -119,6 +121,25 @@ explicit proxy and TLS checks still apply. No token is placed in arguments;
 the JSON and process memory/environment remain private. Expiry is checked at
 startup, not renewed. A previously saved application's token cannot be retrieved
 by opening Proxy setup.
+
+### Optional last-N-days policy
+
+A full download may contain `age_policy: {"mode":"recent_internal_date_v1",
+"max_age_days":7}` with an integer from 1 through 3650 and
+`query_mode: "orderedFormV1"`. Missing metadata, retained standalone recipes and
+`{"mode":"unrestricted"}` retain the original no-`q` requests.
+The copied Bash recipe or manual environment can supply
+`SERVERWARE_GMAIL_MAX_AGE_DAYS='7'`; this is only a client hint, not permission.
+Full downloads derive the hint from their top-level policy, not a nested recipe
+or ambient override.
+
+Restricted jobs compute `after:<epoch-seconds>` once using the ceiling of the
+client clock minus N days, and reuse the same explicit query on both pages.
+The five-message page size fits the restricted maximum of 32; metadata reads
+keep `internalDate` without a `fields` projection. The proxy checks actual
+`internalDate` evidence and can deny the whole response if evidence is missing
+or too old. The query does not prove age, and the bounded inbox sample does not
+prove that every matching message was read.
 
 For manual configuration, `.env.example` is a reference; the program does not automatically load it. Set
 these variables in the process environment using your private secret-injection

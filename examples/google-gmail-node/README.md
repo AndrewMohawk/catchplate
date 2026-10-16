@@ -34,8 +34,9 @@ attachment, history, profile or Calendar calls.
    **Proxy setup** and use its local path below. Supply the separate proxy CA only
    if the proxy's outer HTTPS certificate uses a private CA.
 
-The permission has no age restriction; this example's inbox/count limits do not
-narrow the saved application's authority. Current-source **Proxy setup** offers
+The permission defaults to unrestricted age; its optional **Last N days** setting
+is enforced by the proxy, not by this example's inbox/count limits.
+Current-source **Proxy setup** offers
 Go, Node.js and Python under **Gmail SDK language**; choose **Node.js** for this
 project's copied shell recipe. The Node client also accepts the private JSON
 download generated for any of those languages. Prepare dependencies first:
@@ -73,7 +74,7 @@ Use the complete download, not just its nested `client_recipe`. The client check
 its Gmail read permission, standard proxy login, unexpired token metadata and
 matching connection fields in both copies. It accepts the default Go recipe
 (v1) and Node/Python recipes (v2), but never runs JSON entrypoints, arguments or
-commands, and imports only the required connection settings. File settings
+commands, and imports only validated connection settings and the saved age policy. File settings
 override ambient connection values; an absent optional proxy CA clears any
 ambient `SERVERWARE_PROXY_CA_FILE`. Keep this token-bearing JSON out of source
 control and obtain a fresh download if its token has expired.
@@ -90,6 +91,24 @@ export SERVERWARE_CA_FILE='/absolute/path/to/serverware-ca.pem'
 # Set SERVERWARE_PROXY_TOKEN privately; optional SERVERWARE_PROXY_CA_FILE.
 node client.mjs
 ```
+
+## Optional last-N-days policy
+
+A full download may contain `age_policy: {"mode":"recent_internal_date_v1",
+"max_age_days":7}` (an integer from 1 through 3650). Absent metadata or
+`{"mode":"unrestricted"}` retains the original requests without `q`.
+Restricted runs compute an explicit `after:<epoch-seconds>` query once, using
+the ceiling of the client clock minus the selected number of days, and reuse it
+unchanged across both pages. The five-message page size is below the restricted
+permission's maximum of 32. Direct metadata reads do not project out `internalDate`.
+
+This query is a convenience, not proof of age: the proxy checks Gmail's
+`internalDate` and can deny the whole response when that evidence is missing or
+too old. The bounded inbox sample is not a completeness guarantee. For the copied
+Bash recipe or an environment-only run, `SERVERWARE_GMAIL_MAX_AGE_DAYS='7'`
+selects the same convenience query; it cannot grant or change permission.
+With `--config`, only the downloaded top-level policy supplies this hint, never
+an ambient variable or nested recipe override.
 
 Example output:
 

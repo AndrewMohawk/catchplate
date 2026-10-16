@@ -18,32 +18,23 @@ Do not recreate its state, regenerate its keys or run a historical rollout scrip
 
 ## Install a new instance
 
-**A supported turnkey fresh-install package is not available yet.** The ordinary
-host-trusted startup code can initialize a genuinely empty store, local keys,
-CA and deny-all policy, but the checked-in operator Compose files assume this
-homelab's existing artifacts, private files, network and authentication edge.
-The root Compose file is a separate developer stack, not the operator product's
-installation recipe. The operator `.env.example` contains supplemental
-notification options only; it is not a complete environment template.
+The [standalone installation guide](../docker/serverware-standalone/README.md)
+provides the new host-trusted app/proxy/Nginx package and one JSON configuration.
+**Its implementation and isolated acceptance are still in progress.** It does not
+depend on the homelab login or retained deployment paths. You supply a Linux
+Docker host, two HTTPS hostnames, a certificate covering both, and a dedicated
+empty state location. The console uses a separate administrator password.
 
-A new host-trusted installation needs these explicit inputs:
+The intended flow is **build once → initialize → start**, with separate status
+and stop commands. Later starts reuse the same images and retained private state;
+opening the app does not build anything. There are no seeded provider credentials,
+clients or permissions. Read the guide's current renewal/maintenance limitations
+before treating initial startup as a complete operational handoff.
 
-| Input | What must be supplied |
-| --- | --- |
-| Addresses and TLS | Console and HTTPS proxy hostnames, certificates and routing. The current operator profile expects an HTTPS proxy hostname on port 443; HTTP, localhost and literal IPs are not supported substitutes. |
-| Administrator access | An authenticated, operator-restricted edge that strips client-supplied admin headers and injects the private server credential only after authentication. The retained edge is specific to the homelab login. |
-| Runtime artifacts | A matching application source/image and normal Rust proxy artifact with its verified digest; not paths copied from someone else's deployment receipt. |
-| Private storage | Dedicated empty, owner-only data/custody directories and distinct private service tokens, with the correct process ownership. Never adopt an unmarked nonempty store or overwrite retained state. |
-| Network policy | An explicit ordered HTTPS destination list and separate console/proxy reachability. Allowing a destination grants no client permission. |
-| Provider use | Least-privilege provider credentials and any required OAuth application setup, consent or provider-side permissions, entered privately after startup. |
-
-The missing packaging is one self-contained Compose profile, complete nonsecret
-configuration template and no-clobber bootstrap command. It must prepare private
-inputs, start the app to generate its CA/policy/publication, then start the matching
-proxy and authenticated edge. Reuse built artifacts on subsequent starts; do not
-seed synthetic credentials or rebuild on every launch. This work does not require
-TEE custody, but authentication, secret isolation and retained-state checks are
-still essential. No executable fresh-install recipe is implied by this checklist.
+Do not use the root developer Compose stack or the old homelab operator Compose
+layers as a substitute installer. The latter's `.env.example` contains only
+supplemental notification options. Existing instances must retain their current
+keys, CA, data and deployment ownership; `init` is for a genuinely new instance.
 
 ## Activate a prepared configuration
 

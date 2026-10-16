@@ -1,0 +1,14 @@
+{
+  "schema": "serverware.standaloneInstall/v1",
+  "project_name": "serverware-standalone",
+  "state_dir": "/var/lib/serverware-standalone",
+  "console_origin": "https://serverware.example.com",
+  "proxy_origin": "https://proxy.example.com",
+  "allowed_upstreams": [
+    "https://api.github.com"
+  ],
+  "tls_certificate": "/etc/serverware/tls/fullchain.pem",
+  "tls_private_key": "/etc/serverware/tls/privkey.pem",
+  "admin_username": "admin",
+  "publish_address": "0.0.0.0:443"
+}

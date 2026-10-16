@@ -234,6 +234,90 @@ class CommonAppsTests(unittest.TestCase):
                 self.assertEqual(example.main(["--config", str(self.write(config))]), 2)
             self.assertIn("did not return success", err.getvalue())
 
+    def test_byte_body_helper_matches_file_wrapper_without_reencoding(self):
+        config = self.load()
+        config["methods"] = ["POST"]
+        raw = b'{ "text" : "Reviewed\\ntext", "flag": false }\n'
+        body_path = self.root / "body.json"
+        body_path.write_bytes(raw)
+        seen = []
+        def send(_adapter, prepared, **kwargs):
+            seen.append((prepared.method, prepared.url, dict(prepared.headers), prepared.body, kwargs))
+            return response(prepared, {"id": "synthetic"}, status=201)
+        with patch.object(HTTPAdapter, "send", send):
+            direct = example.execute_body(config, raw, True, ["page=1"])
+            wrapper = example.execute(config, body_path, True, ["page=1"])
+        self.assertEqual(direct, wrapper)
+        self.assertEqual(direct, {"status": 201, "response": {"id": "synthetic"}})
+        self.assertEqual(len(seen), 2)  # One request for each separate explicit call.
+        self.assertEqual(seen[0], seen[1])
+        self.assertEqual(seen[0][3], raw)
+        with patch.object(HTTPAdapter, "send", send):
+            config["methods"] = ["GET"]
+            self.assertEqual(example.execute_body(config), example.execute(config))
+
+    def test_byte_body_helper_rejects_invalid_body_and_intent_before_transport(self):
+        config = self.load()
+        config["methods"] = ["POST"]
+        invalid = ((None, True), ("{}", True), (bytearray(b"{}"), True), (b"", True),
+            (b" " * (example.MAX_BODY_BYTES + 1), True), (b"[]", True),
+            (b'{"a":1,"a":2}', True), (b'{"a":NaN}', True), (b"\xff", True),
+            (b"{}", False), (b"{}", "true"), (b"{}", 1), (b"{}", None))
+        with patch.object(example, "client_session") as session:
+            for body, intent in invalid:
+                with self.subTest(body=repr(body)[:40], intent=intent), \
+                        self.assertRaises(example.RequestExecutionError) as error:
+                    example.execute_body(config, body, intent)
+                self.assertFalse(error.exception.request_started)
+                self.assertFalse(error.exception.outcome_unknown)
+            config["methods"] = ["GET"]
+            for body, intent in ((b"{}", False), (None, True)):
+                with self.assertRaises(example.RequestExecutionError):
+                    example.execute_body(config, body, intent)
+            with self.assertRaises(example.RequestExecutionError):
+                example.execute_body(config, query=["unknown=value"])
+            config["methods"] = ["DELETE"]
+            with self.assertRaises(example.RequestExecutionError):
+                example.execute_body(config)
+            session.assert_not_called()
+        config["methods"] = ["POST"]
+        maximum = b"{}" + b" " * (example.MAX_BODY_BYTES - 2)
+        with patch.object(HTTPAdapter, "send", lambda _a, r, **_kw: response(r)):
+            self.assertEqual(example.execute_body(config, maximum, True)["status"], 200)
+
+    def test_byte_body_helper_sanitizes_failures_without_private_exception_chains(self):
+        config = self.load()
+        for method in ("GET", "POST"):
+            config["methods"] = [method]
+            with patch.object(HTTPAdapter, "send", side_effect=RuntimeError(config["_proxy_url"])) as send, \
+                    self.assertRaises(example.RequestExecutionError) as error:
+                example.execute_body(config, b"{}" if method == "POST" else None, method == "POST")
+            self.assertEqual(send.call_count, 1)
+            failure = error.exception
+            self.assertEqual(str(failure), example.FAILURE)
+            self.assertEqual(failure.args, (example.FAILURE,))
+            self.assertIsNone(failure.__context__)
+            self.assertIsNone(failure.__cause__)
+            self.assertTrue(failure.request_started)
+            self.assertEqual(failure.outcome_unknown, method == "POST")
+            self.assertNotIn(TOKEN, repr(failure.__dict__) + repr(failure))
+        with patch.object(example, "client_session", side_effect=RuntimeError(TOKEN)), \
+                self.assertRaises(example.RequestExecutionError) as error:
+            example.execute_body(config, b"{}", True)
+        self.assertFalse(error.exception.request_started)
+        self.assertFalse(error.exception.outcome_unknown)
+
+    def test_byte_body_helper_preserves_428_and_204_and_response_bound(self):
+        config = self.load()
+        pending = {"payload": {"approval_url": "/approvals/00000000-0000-4000-8000-000000000002"}}
+        with patch.object(HTTPAdapter, "send", lambda _a, r, **_kw: response(r, pending, 428)):
+            self.assertEqual(example.execute_body(config), {"status": 428, "response": pending})
+        with patch.object(HTTPAdapter, "send", lambda _a, r, **_kw: response(r, status=204, raw=b"")):
+            self.assertEqual(example.execute_body(config), {"status": 204, "response": None})
+        with patch.object(HTTPAdapter, "send", lambda _a, r, **_kw: response(r, raw=b" " * 1048577)), \
+                self.assertRaises(example.RequestExecutionError):
+            example.execute_body(config)
+
 
 if __name__ == "__main__":
     unittest.main()

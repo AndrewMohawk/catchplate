@@ -231,31 +231,67 @@ def request_url(config, additions=()):
     return config["upstream_url"] + ("?" + suffix if suffix else "")
 
 
+class RequestExecutionError(ValueError):
+    """Token-safe failure; request_started means invoked, not proven delivered."""
+    def __init__(self, *, request_started=False, outcome_unknown=False):
+        super().__init__(FAILURE)
+        self.request_started = request_started
+        self.outcome_unknown = outcome_unknown
+
+
+def execute_body(config, body=None, execute_write=False, query=()):
+    """Send bytes unchanged, without reading a body file, printing, or retrying.
+
+    Callers supply a validated configuration and explicit write intent. This is
+    not human approval: the proxy's permission and review policy still apply.
+    JSON/empty/428 results retain the same {status, response} shape as the CLI.
+    All helper failures are sanitized; never expose the private config itself.
+    """
+    request_started, method = False, None
+    try:
+        if config.get("methods") not in (["GET"], ["POST"]) or type(execute_write) is not bool:
+            raise ValueError("An explicit supported method and boolean intent are required")
+        method = config["methods"][0]
+        if method == "POST":
+            if execute_write is not True or type(body) is not bytes or not 0 < len(body) <= MAX_BODY_BYTES:
+                raise ValueError("A write requires explicit intent and a bounded byte body")
+            if type(strict_json(body.decode("utf-8"))) is not dict:
+                raise ValueError("The request body must be a JSON object")
+        elif body is not None or execute_write:
+            raise ValueError("This permission is read-only")
+        headers = {"Accept": "application/json", "Accept-Encoding": "identity",
+            "User-Agent": "serverware-common-apps-example/1.0", **config["request_headers"]}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        url = request_url(config, query)
+        with client_session(config) as session:
+            request_started = True
+            response = session.request(method, url, headers=headers, data=body,
+                timeout=(5, 30), allow_redirects=False, stream=True)
+            raw = response.content
+            if response.status_code == 204 and not raw:
+                return {"status": 204, "response": None}
+            if "application/json" not in response.headers.get("Content-Type", "").lower():
+                raise ValueError("Expected a bounded JSON response")
+            return {"status": response.status_code, "response": strict_json(raw.decode("utf-8"))}
+    except Exception:
+        # Raise outside the handler so no private transport exception survives
+        # as __context__ or __cause__ on the public failure object.
+        pass
+    raise RequestExecutionError(request_started=request_started,
+        outcome_unknown=request_started and method == "POST")
+
+
 def execute(config, body_path=None, execute_write=False, query=()):
-    method = config["methods"][0]
+    """CLI/file compatibility wrapper; never read a body without write intent."""
     body = None
-    if method == "POST":
-        if not execute_write or body_path is None:
+    if config["methods"] == ["POST"]:
+        if execute_write is not True or body_path is None:
             raise ValueError("A write requires --body PATH and --execute-write")
         body = read_file(body_path, MAX_BODY_BYTES)
-        if type(strict_json(body.decode("utf-8"))) is not dict:
-            raise ValueError("The request body must be a JSON object")
     elif body_path is not None or execute_write:
         raise ValueError("This permission is read-only")
-    headers = {"Accept": "application/json", "Accept-Encoding": "identity",
-        "User-Agent": "serverware-common-apps-example/1.0", **config["request_headers"]}
-    if body is not None:
-        headers["Content-Type"] = "application/json"
-    url = request_url(config, query)
-    with client_session(config) as session:
-        response = session.request(method, url, headers=headers, data=body,
-            timeout=(5, 30), allow_redirects=False, stream=True)
-        raw = response.content
-        if response.status_code == 204 and not raw:
-            return {"status": 204, "response": None}
-        if "application/json" not in response.headers.get("Content-Type", "").lower():
-            raise ValueError("Expected a bounded JSON response")
-        return {"status": response.status_code, "response": strict_json(raw.decode("utf-8"))}
+    return execute_body(config, body, execute_write, query)
 
 
 def main(argv=None):

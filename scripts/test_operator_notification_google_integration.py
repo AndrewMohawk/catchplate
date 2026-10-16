@@ -152,10 +152,10 @@ def all_filters():
         "operator_catalog.x_oauth.configuration_saved", "operator_catalog.application.renewal_enrolled",
         "operator_catalog.application.renewal_cancelled", "operator_catalog.application.token_renewed",
         "operator.host_approval.approved", "operator.host_approval.claimed", "operator.host_approval.denied",
-        "operator.host_approval.expired", "operator.host_approval.requested", "operator.host_approval.reviewed"}
+        "operator.host_approval.expired", "operator.host_approval.requested", "operator.host_approval.reviewed"} | set(events.ecr.SUMMARIES)
     advertised = list(events.AUDIT_EVENT_TYPES)
     # The advertised roster grew; one destination still selects at most 64.
-    assert len(advertised) == 77 and added_events <= set(advertised)
+    assert len(advertised) == 92 and added_events <= set(advertised)
     selected = [kind for kind in advertised if kind not in added_events]
     assert len(selected) == 64
     payload = {"operation_id": str(uuid.uuid4()), "slot": "audit_log.webhook", "expected_revision": 0,

@@ -353,7 +353,6 @@ def build(args):
     services = config["services"]
     helper = ["python", "-B", "-m", "scripts.test_operator_ecr_gate_connected"]
     services["network-files"]["command"] = helper + ["setup"]
-    services["network-files"]["volumes"].append(recipe.base.bind(args.job_root / "runtime/app-data", "/fixture-app-data", False))
     services["network"].update(user="0:0", init=False, cap_add=["NET_ADMIN", "SETUID", "SETGID"], command=helper + ["network"])
     services["network"]["healthcheck"]["test"][3] = "import os; os.setgroups([]); os.setgid(10001); os.setuid(10001); " + services["network"]["healthcheck"]["test"][3]
     services["provider"].update(image=recipe.base.APP_IMAGE, command=helper + ["provider"])
@@ -364,7 +363,11 @@ def build(args):
     for name in ("serverware", "decision-gate-rs"):
         services[name]["environment"]["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(ORIGINS)
         services[name]["environment"].pop("SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS", None)
-    services["serverware"]["environment"]["SERVERWARE_ECR_ARTIFACT_ROOT"] = "/data/ecr-artifacts"
+    # Ordinary activation requires /data to start empty and writes its own
+    # identity marker. Provision artifact custody in a separate private mount.
+    services["serverware"]["environment"]["SERVERWARE_ECR_ARTIFACT_ROOT"] = "/ecr-artifacts"
+    services["serverware"]["volumes"].append(recipe.base.bind(
+        args.job_root / "runtime/upstream-data/ecr-artifacts", "/ecr-artifacts", False))
     check = services["check"]
     check.update(image=recipe.base.APP_IMAGE, entrypoint=["python", "-B"])
     check["environment"]["PYTHONPATH"] = "/app:/sdk-packages"
@@ -486,7 +489,7 @@ def main():
     if args.mode == "setup":
         signal.alarm(20)
         network.setup()
-        Path("/fixture-app-data/ecr-artifacts").mkdir(mode=0o700)
+        Path("/upstream-data/ecr-artifacts").mkdir(mode=0o700)
     elif args.mode == "network":
         network.isolated.keep_namespace()
     elif args.mode == "edge":

@@ -43,6 +43,8 @@ const PRESETS = {
     'control_plane.approval.invalidated', 'control_plane.approval.requested',
     'operator.host_approval.approved', 'operator.host_approval.claimed', 'operator.host_approval.denied',
     'operator.host_approval.expired', 'operator.host_approval.requested', 'operator.host_approval.reviewed'],
+  ecr_publications: ['acknowledged', 'activated', 'approved', 'artifacts_retired', 'artifacts_retirement_requested', 'created', 'denied',
+    'expired', 'failed', 'possible_send', 'recovered', 'reserved', 'reviewed', 'staged', 'uncertain'].map(type => 'operator.ecr_publication.' + type),
 };
 const AUDIT = [...Object.values(PRESETS).flat(), 'credential.oauth_refresh_failed'].sort();
 const plain = value => JSON.parse(JSON.stringify(value));
@@ -81,6 +83,7 @@ const tests = [
   ['audit presets have a fixed supported roster and are not action-source presets', () => {
     assert.deepEqual(plain(api.presets).map(item => item.id), Object.keys(PRESETS));
     const eventSource = readFileSync(resolve(__dirname, '../serverware/operator_notification_events.py'), 'utf8');
+    const ecrSource = readFileSync(resolve(__dirname, '../serverware/operator_notification_ecr.py'), 'utf8');
     assert(Object.isFrozen(api.presets));
     for (const preset of api.presets) {
       assert(Object.isFrozen(preset)); assert(Object.isFrozen(preset.events));
@@ -88,8 +91,9 @@ const tests = [
       assert.deepEqual(plain(preset.events), [...new Set(preset.events)].sort());
       for (const type of preset.events) {
         // Catalog summary literals are prefixed by the actual event producer.
-        const literal = type.replace(/^operator_catalog\./, '');
-        assert(eventSource.includes('"' + literal + '"') || eventSource.includes("'" + literal + "'"), type);
+        const literal = type.replace(/^(operator_catalog\.|operator\.ecr_publication\.)/, '');
+        const producer = type.startsWith('operator.ecr_publication.') ? ecrSource : eventSource;
+        assert(producer.includes('"' + literal + '"') || producer.includes("'" + literal + "'"), type);
         assert(!type.startsWith('native_pilot.'));
       }
     }
@@ -160,7 +164,7 @@ const tests = [
     assert(value.slots.every(slot => slot.event_types.length === 0));
     assert.equal(networkCalls, 0);
   }],
-  ['77 advertised audit types include host approval history without widening the 64-filter destination limit', () => {
+  ['92 advertised audit types include ECR history without widening the 64-filter destination limit', () => {
     const value = status();
     const hostEvents = PRESETS.approval_history.filter(type => type.startsWith('operator.host_approval.'));
     assert.equal(hostEvents.length, 6);
@@ -168,11 +172,12 @@ const tests = [
       'operator_catalog.access_rule.npm_install_created', 'operator_catalog.credential.github_app_created',
       'operator_catalog.credential.github_app_key_replaced',
       'operator_catalog.x_oauth.configuration_saved', 'operator_catalog.application.renewal_cancelled',
-      'operator_catalog.application.renewal_enrolled', 'operator_catalog.application.token_renewed', ...hostEvents].sort();
-    assert.equal(types.length, 77);
+      'operator_catalog.application.renewal_enrolled', 'operator_catalog.application.token_renewed', ...hostEvents, ...PRESETS.ecr_publications].sort();
+    assert.equal(types.length, 92);
     assert.deepEqual(plain(api.selectPreset('audit_log', 'approval_history', types, [])), hostEvents);
     assert.equal(api.selectPreset('action_required', 'approval_history', types, []), null);
-    assert.equal(api.selectPreset('audit_log', 'approval_history', [...types, 'zz.extra'], []), null);
+    assert.deepEqual(plain(api.selectPreset('audit_log', 'ecr_publications', types, [])), PRESETS.ecr_publications);
+    assert.equal(api.selectPreset('action_required', 'ecr_publications', types, []), null);
     value.capabilities.audit_log.event_types = types;
     const before = JSON.stringify(value);
     assert.equal(api.project(value), value); assert.equal(JSON.stringify(value), before);
@@ -183,7 +188,11 @@ const tests = [
     value.slots[2].event_types = types.slice(0, 65); assert.throws(() => api.project(value));
     value.slots[2].event_types = types; assert.throws(() => api.project(value));
     value.slots[2].event_types = [];
-    value.capabilities.audit_log.event_types = [...types, 'zz.extra']; assert.throws(() => api.project(value));
+    const maximum = [...types, ...Array.from({length: 36}, (_, index) => 'zz.extra_' + String(index).padStart(2, '0'))];
+    value.capabilities.audit_log.event_types = maximum; assert.equal(api.project(value), value);
+    assert.deepEqual(plain(api.selectPreset('audit_log', 'ecr_publications', maximum, [])), PRESETS.ecr_publications);
+    value.capabilities.audit_log.event_types = [...maximum, 'zz.last']; assert.throws(() => api.project(value));
+    assert.equal(api.selectPreset('audit_log', 'ecr_publications', value.capabilities.audit_log.event_types, []), null);
     value.capabilities.audit_log.event_types = types;
     value.capabilities.action_required.event_types = types.slice(0, 65); assert.throws(() => api.project(value));
     assert.equal(networkCalls, 0);

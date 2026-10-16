@@ -1,8 +1,8 @@
 # Publish one reviewed image to ECR
 
 **Status: source implementation under integration, not deployed or verified
-against real AWS.** The matching cached Rust build and connected acceptance are
-still pending. The recorded live app remains `1eff1fd` with proxy `48953fea…`
+against real AWS.** The matching cached Rust build passes; connected proxy
+acceptance and deployment are still pending. The recorded live app remains `1eff1fd` with proxy `48953fea…`
 and a 16-origin limit; the new 32-origin source limit is not live yet. Check the
 [project tracker](project-completion.md) before relying on this capability.
 

@@ -11,6 +11,16 @@ it. Reviewed, approved, denied, expired and claimed events are separate audit
 filters. The two channels and their four destination settings remain independent.
 Provider keys, request bodies and notification URLs are not included in alerts.
 
+The ECR source implementation adds 15 audit event types and one action-required
+event for a staged image awaiting review. The current source advertises 92 audit
+types; each destination still selects at most 64. **Add ECR publication history**
+only changes the audit destination's draft selection: save it explicitly, and
+configure action-required delivery separately. A staged-image alert links to
+**Pending actions**; current permission, credential generation, reviewer and the
+original deadline are checked again before delivery. It never approves or
+publishes the image. ECR deployment and real receiver acceptance remain separate;
+check the [current deployment record](project-completion.md#current-live-deployment).
+
 The host-review source is deployed, but all four destinations remain
 unconfigured in the current deployment record: real receiver delivery is not
 verified. A host administrator can bypass this control. The native observation
@@ -107,7 +117,7 @@ malformed lifecycle records are skipped. These events never request approval,
 touch a security key, or enable action-required delivery. Existing saved filter
 selections and disabled destinations stay unchanged.
 
-The current source advertises 68 audit event types, including GitHub App
+An earlier checkpoint advertised 68 audit event types, including GitHub App
 creation, private-key replacement, npm installation permission and X application
 configuration. The App replacement event includes only the credential UUID,
 catalog revision, unchanged policy hash/sequence and consecutive old/new

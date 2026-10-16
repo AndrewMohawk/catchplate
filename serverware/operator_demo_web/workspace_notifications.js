@@ -3,6 +3,8 @@
 const notificationSlots = Object.freeze(['action_required.slack', 'action_required.webhook', 'audit_log.slack', 'audit_log.webhook']);
 const notificationStates = Object.freeze(['queued', 'sending', 'acknowledged', 'failed', 'outcome_unknown', 'suppressed', 'expired']);
 const notificationOperationKey = 'serverware.operator.notifications.operation.v1';
+// The advertised catalog can grow without increasing any destination's 64 filters.
+const notificationAuditCatalogMaximum = 128;
 const notificationUUID = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 const notificationInteger = (value, minimum = 0, maximum = Number.MAX_SAFE_INTEGER) => Number.isSafeInteger(value) && value >= minimum && value <= maximum;
 function notificationObject(value, keys) {
@@ -32,10 +34,13 @@ const notificationAuditPresets = Object.freeze([
     'control_plane.approval.invalidated', 'control_plane.approval.requested',
     'operator.host_approval.approved', 'operator.host_approval.claimed', 'operator.host_approval.denied',
     'operator.host_approval.expired', 'operator.host_approval.requested', 'operator.host_approval.reviewed']},
+  {id: 'ecr_publications', label: 'Add ECR publication history', events: [
+    'acknowledged', 'activated', 'approved', 'artifacts_retired', 'artifacts_retirement_requested', 'created', 'denied',
+    'expired', 'failed', 'possible_send', 'recovered', 'reserved', 'reviewed', 'staged', 'uncertain'].map(type => 'operator.ecr_publication.' + type)},
 ].map(preset => Object.freeze({...preset, events: Object.freeze(preset.events)})));
 function notificationPresetSelection(channel, presetId, advertised, selected) {
   const preset = notificationAuditPresets.find(item => item.id === presetId);
-  if (channel !== 'audit_log' || !preset || !notificationTypes(advertised, 77) || !notificationTypes(selected) ||
+  if (channel !== 'audit_log' || !preset || !notificationTypes(advertised, notificationAuditCatalogMaximum) || !notificationTypes(selected) ||
       selected.some(type => !advertised.includes(type))) return null;
   const available = preset.events.filter(type => advertised.includes(type));
   if (!available.length) return null;
@@ -170,7 +175,7 @@ function projectNotificationStatus(value) {
       !notificationNativeValid(caps.native_hardware) ||
       !['source_note', 'test_note'].every(key => typeof caps[key] === 'string' && caps[key].length <= 512) ||
       !['action_required', 'audit_log'].every(channel => notificationObject(caps[channel], ['source_available', 'event_types']) &&
-        typeof caps[channel].source_available === 'boolean' && notificationTypes(caps[channel].event_types, channel === 'audit_log' ? 77 : 64)) ||
+        typeof caps[channel].source_available === 'boolean' && notificationTypes(caps[channel].event_types, channel === 'audit_log' ? notificationAuditCatalogMaximum : 64)) ||
       !value.available && (caps.action_required.source_available || caps.native_hardware.source_available) ||
       caps.native_hardware.source_available && !caps.action_required.source_available || caps.audit_log.source_available !== value.available ||
       !value.slots.every(slot => slot.event_types.every(type => caps[slot.channel].event_types.includes(type)))) bad();

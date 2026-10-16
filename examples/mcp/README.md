@@ -154,6 +154,10 @@ examples/mcp/.venv/bin/python examples/mcp/test_server.py
 ```
 
 These checks use synthetic configurations/providers, not real service accounts.
-See the [completion record](../../docs/project-completion.md) for the actual
-connected/deployed evidence boundary. A hosted authenticated MCP endpoint is
-future work; this entrypoint is local stdio only.
+A separate frozen-source check passed the actual MCP → Requests → cached Rust
+proxy → synthetic-provider flow: one allowed request, one wrong-model denial,
+exactly one provider arrival and its audit entries. See the
+[completion record](../../docs/project-completion.md#local-mcp-interface--implemented)
+for the exact evidence and limits. Real-provider acceptance remains separate.
+A hosted authenticated MCP endpoint is future work; this entrypoint is local
+stdio only.

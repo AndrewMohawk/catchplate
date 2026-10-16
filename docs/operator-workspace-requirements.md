@@ -16,8 +16,9 @@ operations](common-apps.md), with Requests and official AI SDK examples. These
 are specific supported jobs, not blanket service access or universal SDK
 compatibility. Provider keys, real Google/X consent, real jobs and receiver
 delivery still need their own acceptance. Local stdio MCP is implemented using
-downloaded private client configurations; focused protocol/adapter checks passed
-and its connected synthetic smoke is next. Hosted MCP delivery is future work, with no endpoint deployed
+downloaded private client configurations; focused protocol/adapter checks and
+the actual MCP → proxy → synthetic-provider allow/deny smoke passed. Hosted MCP
+delivery is future work, with no endpoint deployed
 or expanded authentication surface. The [ordinary delivery queue](project-completion.md#remaining-ordinary-product-work--october-15)
 distinguishes missing implementation from private operator inputs and future
 hardware assurance. Historical examples and evidence remain below.

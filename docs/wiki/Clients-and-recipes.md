@@ -57,6 +57,28 @@ Replace the public placeholders with your deployment's values. Disable shell tra
 
 The `.env.example` files document inputs; the examples do not automatically load them. **Download private client config** is available only while the page holds the matching one-time token, so download it before dismissing the token or reloading. That JSON is not an executable. Keep it out of source control, chat and logs.
 
+## Connect an MCP-capable agent
+
+Use the [local MCP server and setup guide](https://github.com/AndrewMohawk/serverware/blob/main/examples/mcp/README.md)
+with downloaded private client configurations. It is a stdio server launched by
+your MCP client, not a new hosted URL or an administrator API. Give the agent a
+dedicated Serverware client and only the permissions it needs; provider secrets
+remain in Serverware.
+
+The three tools are `list_operations`, `read_operation` and `perform_action`.
+Discovery returns the configured operations and argument schemas without a
+provider call. Actions require an operator's startup `--allow-actions` opt-in
+for that configuration alias and literal `confirmed: true` on the call.
+This confirmation is not human approval: a permission requiring host review
+still stops with HTTP 428. Review it in Serverware, then explicitly request the
+identical retry. Never automatically replay an uncertain action.
+
+The adapter supports the common-app presets and selected GitHub, Gmail, Alchemy,
+X and npm metadata operations. It does not offer arbitrary HTTP requests,
+credential administration, AWS/ECR or npm publication. The setup guide lists
+exact support, optional Node dependencies and limits. Keep private configuration
+files out of model prompts and logs. Hosted MCP delivery remains future work.
+
 ## Optional renewal for a long-running workload
 
 Manual token rotation remains the default. The deployed ordinary instance offers **Clients → Managed workload renewal**, but no existing client is implicitly enrolled. Renewal requires an administrator's explicit Ed25519 public-key enrollment: a **1–90 day grant** and **1–24 hour tokens**, never beyond the grant's deadline. It changes neither permissions nor provider credentials.

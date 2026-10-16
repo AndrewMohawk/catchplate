@@ -222,7 +222,7 @@ test('publish reviews local file before one stock command and validates the retu
       stdout: JSON.stringify({ [config.packageName]: { ...receipt, integrity: 'wrong' } }) }; } }));
 });
 
-test('npm 11.20 publish requires one exact package key and preserves all archive identity checks', async () => {
+test('npm 11.21 publish requires one exact package key and preserves all archive identity checks', async () => {
   for (const packageName of ['metadata', '@example/metadata']) {
     const config = configuration({ ...env, SERVERWARE_NPM_PACKAGE: packageName }, 'publish');
     const inner = { ...receipt, name: packageName, id: packageName + '@' + config.version };
@@ -256,7 +256,7 @@ test('errors are neither printed nor retried, and an uncertain write has a fixed
 });
 
 test('version guards cover direct and npm-bundled libraries; malformed trust is refused', () => {
-  assert.deepEqual(VERSIONS, { npm: '11.20.0', pacote: '21.5.1', 'npm-registry-fetch': '19.1.1' });
+  assert.deepEqual(VERSIONS, { npm: '11.21.1', pacote: '21.5.1', 'npm-registry-fetch': '19.1.1' });
   let reads = 0;
   const read = file => { reads++; const name = file.split('/').at(-2); return JSON.stringify({ name, version: VERSIONS[name] }); };
   verifyVersions(read);

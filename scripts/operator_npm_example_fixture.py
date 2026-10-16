@@ -117,7 +117,7 @@ def tarball(spec):
 def validate_publish(raw, spec):
     """Only this explicit third publication may carry one fixed dependency."""
     if spec["case"] != "publish_dependency":
-        return publish.validate_publish(raw, spec, npm_version="11.20.0")
+        return publish.validate_publish(raw, spec, npm_version="11.21.1")
     require(spec == spec_for("publish_dependency") and type(raw) is bytes and 0 < len(raw) <= MAX_BODY)
     value = publish.strict_json(raw)
     name, version, payload = spec["package"], spec["version"], tarball(spec)
@@ -125,7 +125,7 @@ def validate_publish(raw, spec):
     integrity = "sha512-" + base64.b64encode(hashlib.sha512(payload).digest()).decode("ascii")
     shasum = hashlib.sha1(payload).hexdigest()
     manifest = {**package_manifest(spec), "_id": name + "@" + version,
-        "_nodeVersion": "25.5.0", "_npmVersion": "11.20.0",
+        "_nodeVersion": "25.5.0", "_npmVersion": "11.21.1",
         "dist": {"integrity": integrity, "shasum": shasum,
             "tarball": "http://registry.npmjs.org/" + name + "/-/" + attachment}}
     require(type(value) is dict and set(value) == {"_id", "name", "description", "dist-tags", "versions", "access", "_attachments"}
@@ -186,7 +186,7 @@ def install_headers(fields, spec, mode, package, version, length):
         and headers.get("npm-in-ci") in {None, "false"} and headers.get("npm-scope", "") == ""
         and headers.get("connection", "close") in {"close", "keep-alive"}
         and headers.get("content-length", "0") == str(length)
-        and re.fullmatch(r"npm/11\.20\.0 node/v25\.5\.0 linux x64(?: workspaces/false)?", headers.get("user-agent", "")))
+        and re.fullmatch(r"npm/11\.21\.1 node/v25\.5\.0 linux x64(?: workspaces/false)?", headers.get("user-agent", "")))
     if mode == "audit":
         require(length > 0 and headers.get("accept") == "*/*" and headers.get("content-type") == FULL
             and headers.get("content-encoding") == "gzip" and headers.get("content-length") == str(length))
@@ -194,7 +194,7 @@ def install_headers(fields, spec, mode, package, version, length):
         require(length == 0 and headers.get("pacote-version") == "21.5.1"
             and headers.get("cache-control") in {None, "no-cache"})
         if mode == "metadata":
-            # npm 11.20.0's Arborist #fetchManifest forces fullMetadata:true;
+            # npm 11.21.1's Arborist #fetchManifest forces fullMetadata:true;
             # this differs from the standalone pacote/publish corgi requests.
             require(headers.get("accept") == FULL and headers.get("pacote-req-type") == "packument"
                 and headers.get("pacote-pkg-id") == "registry:" + package and "pacote-integrity" not in headers)
@@ -231,14 +231,14 @@ def packument(package, stored):
 def validate_headers(fields, spec, method, body_length):
     if spec["operation"] == "publish":
         return publish.validate_headers(fields, method, spec["package"], body_length,
-            npm_version="11.20.0", pacote_version="21.5.1")
+            npm_version="11.21.1", pacote_version="21.5.1")
     require(method == "GET" and body_length == 0)
     # Keep the two existing closed header profiles separate. In particular,
     # standalone pacote must not acquire npm-command/auth-type CLI headers.
     return metadata.validate_headers(fields, {"package": spec["package"],
         "client": "npm" if spec["operation"] == "view" else "pacote",
         "accept": FULL if spec["operation"] == "view" else CORGI},
-        npm_version="11.20.0", pacote_version="21.5.1")
+        npm_version="11.21.1", pacote_version="21.5.1")
 
 
 def stored_observations(directory, rows):

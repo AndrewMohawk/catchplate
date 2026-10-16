@@ -4,7 +4,7 @@ import { isAbsolute, resolve } from 'node:path';
 
 export const REGISTRY = 'https://registry.npmjs.org/';
 export const PUBLIC_NPM_DUMMY = 'serverware-npm-placeholder-v1';
-export const VERSIONS = Object.freeze({ npm: '11.20.0', pacote: '21.5.1', 'npm-registry-fetch': '19.1.1' });
+export const VERSIONS = Object.freeze({ npm: '11.21.1', pacote: '21.5.1', 'npm-registry-fetch': '19.1.1' });
 export const OPERATIONS = new Set(['view', 'manifest', 'publish', 'install', 'ci']);
 export const isInstallation = operation => operation === 'install' || operation === 'ci';
 const NAME = /^(?:[a-z0-9][a-z0-9._-]*|@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*)$/;
@@ -233,7 +233,7 @@ export function metadataSummary(config, value) {
 
 export function publishSummary(config, result, bytes) {
   reviewedTarball(config, bytes);
-  // Pinned npm 11.20 reports one package-keyed receipt, including without workspaces.
+  // Pinned npm 11.21 reports one package-keyed receipt, including without workspaces.
   requireValue(result && typeof result === 'object' && !Array.isArray(result)
     && Object.keys(result).length === 1 && Object.hasOwn(result, config.packageName));
   const value = result[config.packageName];

@@ -38,8 +38,8 @@ function preflight() {
   const interfaces = os.networkInterfaces(); assert.deepEqual(Object.keys(interfaces).sort(), ['lo']);
   assert(interfaces.lo.length && interfaces.lo.every(item => item.internal && ['127.0.0.1', '::1'].includes(item.address)));
   assert.equal(fs.realpathSync(NPM), NPM);
-  for (const [file, name, version] of [['package.json', 'npm', '11.20.0'],
-    ['node_modules/@npmcli/arborist/package.json', '@npmcli/arborist', '9.9.2'],
+  for (const [file, name, version] of [['package.json', 'npm', '11.21.1'],
+    ['node_modules/@npmcli/arborist/package.json', '@npmcli/arborist', '9.9.3'],
     ['node_modules/pacote/package.json', 'pacote', '21.5.1'],
     ['node_modules/npm-registry-fetch/package.json', 'npm-registry-fetch', '19.1.1'],
     ['node_modules/make-fetch-happen/package.json', 'make-fetch-happen', '15.0.6']]) {

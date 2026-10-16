@@ -208,7 +208,7 @@ def install_requests(phase):
 def headers(spec, method, mode=None, package=None, version=None):
     if spec["case"] in INSTALL_PHASES:
         value = {"host": "registry.npmjs.org", "accept": "application/json" if mode == "metadata" else "*/*",
-            "user-agent": "npm/11.20.0 node/v25.5.0 linux x64 workspaces/false",
+            "user-agent": "npm/11.21.1 node/v25.5.0 linux x64 workspaces/false",
             "npm-command": spec["operation"], "npm-auth-type": "web"}
         if mode == "audit":
             value.update({"content-type": "application/json", "content-encoding": "gzip"})
@@ -222,7 +222,7 @@ def headers(spec, method, mode=None, package=None, version=None):
     result = {"host": "registry.npmjs.org", "accept": "*/*" if method == "PUT" else
         "application/json" if spec["operation"] == "view" else CORGI,
         "user-agent": "pacote/21.5.1 node/v25.5.0" if spec["operation"] == "manifest" else
-            "npm/11.20.0 node/v25.5.0 linux x64 workspaces/false"}
+            "npm/11.21.1 node/v25.5.0 linux x64 workspaces/false"}
     if spec["operation"] != "manifest":
         result.update({"npm-command": spec["operation"], "npm-auth-type": "web"})
     if method == "GET":
@@ -300,7 +300,7 @@ def observation(completed=PHASES):
             blob = archive(spec)
             manifest = {"name": spec["package"], "version": spec["version"], "_id": spec["package"] + "@" + spec["version"],
                 "description": "Synthetic publication fixture", "license": "MIT", "main": "index.js",
-                "_nodeVersion": "25.5.0", "_npmVersion": "11.20.0", "dist": {
+                "_nodeVersion": "25.5.0", "_npmVersion": "11.21.1", "dist": {
                     "integrity": record["tarballIntegrity"], "shasum": record["tarballShasum"],
                     "tarball": "http://registry.npmjs.org/" + spec["package"] + "/-/" + record["attachmentName"]}}
             if phase == "publish_dependency":
@@ -475,7 +475,7 @@ def success_result():
         "hiddenWireHeaderProof": False, "defaultRetryBehaviorVerified": False, "configuredRetries": 0, "commandRetries": 0,
         "clientCommands": 25, "successfulClientCommands": 9, "expectedFailedClientCommands": 16,
         "providerAttempts": 25, "metadataReleases": 13, "tarballReleases": 6, "auditReleases": 3, "unauthorizedPuts": 0,
-        "npmVersion": "11.20.0", "pacoteVersion": "21.5.1", "registryFetchVersion": "19.1.1",
+        "npmVersion": "11.21.1", "pacoteVersion": "21.5.1", "registryFetchVersion": "19.1.1",
         "dataPlaneBinaryDigest": sha(901), "nodeSha256": "3dc3f85ca5539ca81b7d106992ebcd82d09bce27326016873653a661ad6b2a7d",
         "nodeModulesSha256": "a" * 64, "sourceSha256": {"examples/npm-registry/" + name: format(3100 + index, "064x")
             for index, name in enumerate(("client.mjs", "core.mjs", "worker.mjs", "diagnostics.mjs", "package.json", "package-lock.json"))},

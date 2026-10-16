@@ -237,7 +237,7 @@ class DependencyInventoryTests(InertTests):
         with self.assertRaises(ValueError): recipe.dependency_inventory(link)
 
     def test_exact_manifest_pin_and_both_top_level_and_bundled_package_versions(self):
-        identities = (("npm", "npm", "11.20.0"), ("pacote", "pacote", "21.5.1"),
+        identities = (("npm", "npm", "11.21.1"), ("pacote", "pacote", "21.5.1"),
             ("npm-registry-fetch", "npm-registry-fetch", "19.1.1"),
             ("npm/node_modules/pacote", "pacote", "21.5.1"),
             ("npm/node_modules/npm-registry-fetch", "npm-registry-fetch", "19.1.1"))

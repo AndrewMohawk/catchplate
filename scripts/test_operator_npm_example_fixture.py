@@ -138,7 +138,7 @@ def publish_document(spec):
     name, version = spec["package"], spec["version"]
     manifest = {"name": name, "version": version, "_id": name + "@" + version,
         "description": "Synthetic publication fixture", "license": "MIT", "main": "index.js",
-        "_nodeVersion": "25.5.0", "_npmVersion": "11.20.0", "dist": {
+        "_nodeVersion": "25.5.0", "_npmVersion": "11.21.1", "dist": {
             "integrity": stored["tarballIntegrity"], "shasum": stored["tarballShasum"],
             "tarball": "http://registry.npmjs.org/" + name + "/-/" + stored["attachmentName"]}}
     if spec["case"] == "publish_dependency":
@@ -156,7 +156,7 @@ def fields(spec, method="GET", length=0):
     if spec["operation"] == "manifest":
         result.append(("user-agent", "pacote/21.5.1 node/v25.5.0"))
     else:
-        result.extend((("user-agent", "npm/11.20.0 node/v25.5.0 linux x64 workspaces/false"),
+        result.extend((("user-agent", "npm/11.21.1 node/v25.5.0 linux x64 workspaces/false"),
             ("npm-command", spec["operation"]), ("npm-auth-type", "web")))
     if method == "PUT":
         result.append(("content-type", FULL))
@@ -183,7 +183,7 @@ def install_fields(case, request, length=0):
         ("accept", FULL if mode == "metadata" else "*/*"), ("connection", "close"),
         ("content-length", str(length)), ("npm-auth-type", "web"),
         ("npm-command", SPECS[case]["operation"]),
-        ("user-agent", "npm/11.20.0 node/v25.5.0 linux x64 workspaces/false")]
+        ("user-agent", "npm/11.21.1 node/v25.5.0 linux x64 workspaces/false")]
     if mode == "audit":
         result.extend((("content-type", FULL), ("content-encoding", "gzip")))
     else:

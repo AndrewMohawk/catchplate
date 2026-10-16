@@ -6,12 +6,13 @@ a reviewed consumer project into a new retained directory. The
 client never receives the real npm provider token. This is example source, not a
 claim that this project has contacted the public npm registry successfully.
 
-The current dependency pins are Node **25.5.0**, npm **11.20.0**, pacote
+The current dependency pins are Node **25.5.0**, npm **11.21.1**, pacote
 **21.5.1**, and npm-registry-fetch **19.1.1**. The project requires those
 versions and POSIX process groups (Linux/macOS). Earlier isolated proxy
-acceptance used npm 11.8.0/pacote 21.0.4. The current pinned graph separately
+acceptance used npm 11.8.0/pacote 21.0.4. The npm 11.20.0 graph separately
 passed all 25 isolated proxy phases on October 13 after a narrow publish-receipt
-compatibility fix; see the current verification record below. Other
+compatibility fix. The 11.21.1 update has component and lockfile-audit checks,
+not a new connected proxy run; see the verification record below. Other
 versions/platforms are unverified.
 Run as a normal OS account with a resolvable home directory (as on a GitHub-hosted
 runner), not an arbitrary numeric container UID with no passwd entry.
@@ -266,23 +267,37 @@ node --input-type=module -e "import { verifyVersions } from './client.mjs'; veri
 
 This checks installed package metadata, not a registry request.
 
-## Dependency repair and remaining upstream advisories
+## Dependency repair and advisory status
 
-The October 12 dependency repair uses the official
-[npm 11.20.0 release](https://github.com/npm/cli/releases/tag/v11.20.0) and
+The October 16 dependency repair uses the official
+[npm 11.21.1 release](https://github.com/npm/cli/releases/tag/v11.21.1), published
+October 15, and retains the
 [pacote 21.5.1 release](https://github.com/npm/pacote/releases/tag/v21.5.1).
 Both declare Node `^20.17.0 || >=22.9.0`, compatible with the retained Node
 25.5.0 pin. npm's bundled pacote and npm-registry-fetch are checked separately
 against the same exact versions as the standalone packages. No bundled code,
 dependency override, TLS policy or retry policy is patched.
 
-The regenerated lock still reports five vulnerable packages, all inside npm's
-upstream bundle: `brace-expansion`, `http-cache-semantics`, `ip-address`,
-`postcss-selector-parser`, and `undici` (three high, two moderate in the retained
-October 12 npm audit). This is a partial dependency repair, not an advisory-free
-or exploitability verdict. Do not hand-edit bundled dependencies or treat the
-older proxy receipt as verification of this updated graph; the October 13
-acceptance below is a separate run with the updated dependencies.
+The regenerated lock changes only npm and its bundled entries; standalone
+dependencies are unchanged. The previously flagged bundled packages are now
+`brace-expansion` 5.0.12, `http-cache-semantics` 4.3.0, `ip-address` 10.7.2,
+`postcss-selector-parser` 7.1.6 and `undici` 6.29.0. The fresh npm 11.21.1
+`audit --package-lock-only` check on October 16 reported **zero known
+vulnerabilities**. This is the registry advisory result for this lock, not a
+guarantee of safety or a claim that every advisory's exploitability was verified.
+In particular, the upstream cache-semantics report is
+[disputed by its maintainer](https://github.com/kornelski/http-cache-semantics/issues/56);
+its new version being outside the reported affected range is not an independent
+security finding.
+
+Installation used scripts disabled and engine-strict mode in a fresh directory
+under Node 25.5.0. Installed direct and npm-bundled version guards passed.
+All 35 existing Node component tests passed; their process and transport
+boundaries are mocked, not a fresh stock-client proxy acceptance run.
+The 58 inert Python fixture/checker/recipe tests also passed after correcting
+three stale exact-version header checks found by the first component attempt.
+Do not hand-edit bundled dependencies or treat the older proxy receipt as
+verification of 11.21.1; the October 13 acceptance below used 11.20.0.
 
 During the October 12 update, 29 Node component groups and 99 Python fixture/checker/recipe
 groups passed in a read-only, network-disabled container. The actual stock CLI
@@ -295,7 +310,7 @@ CLI attempt ran as an unsupported numeric UID without a passwd entry and
 failed before any registry arrival; using the image's existing normal account
 resolved that harness error without changing application configuration.
 
-## Current isolated proxy verification
+## Latest isolated proxy verification (npm 11.20.0)
 
 On October 13, 2026, source `e7d7e05b` passed the actual 25-phase example flow
 with npm 11.20.0, pacote 21.5.1 and npm-registry-fetch 19.1.1 through the real
@@ -319,8 +334,8 @@ build/source join, not the older verification record.
 See [the current acceptance record](../../docs/operator-npm-example-acceptance.md)
 for exact source and evidence identities. This proves the bounded example with
 a synthetic provider, not real npm entitlement, public routing, GitHub Actions
-execution, native approval, or deployment of this source. Upstream dependency
-advisories above remain; the project still never publishes by default.
+execution, native approval, or deployment of this source. It predates the
+11.21.1 dependency update; the project still never publishes by default.
 
 ## Historical isolated proxy verification
 

@@ -150,6 +150,10 @@ def _outbound_payload(claim) -> dict:
         if payload.get("review_path") != "/approvals/" + identifier + "#pending-actions":
             raise ValueError("notification host approval projection unavailable")
         review_url = origin.rstrip("/") + payload["review_path"]
+    elif store.is_ecr_action(claim):
+        if payload.get("review_path") != "/#pending-actions":
+            raise ValueError("notification ECR approval projection unavailable")
+        review_url = origin.rstrip("/") + payload["review_path"]
     else:
         if payload.get("review_path") != "/#audit":
             raise ValueError("notification projection unavailable")
@@ -227,7 +231,7 @@ def run_once() -> bool:
         return True
     if (claim.channel == "action_required" and store.ACTION_SOURCE_AVAILABLE is not True
             and claim.payload.get("test") is not True and not store.is_native_action(claim)
-            and not store.is_host_action(claim)):
+            and not store.is_host_action(claim) and not store.is_ecr_action(claim)):
         # current() normally retains a suppressed receipt first. Even a future
         # store regression cannot turn this disconnected source into delivery.
         raise RuntimeError("notification action source unavailable")
@@ -300,16 +304,19 @@ def status() -> dict:
     available = value.get("available") is True
     native = _pilot_status(available)
     host_available = available and store.host_source_available()
+    ecr_available = available and store.ecr_source_available()
     value["capabilities"] = {
         "audit_log": {"source_available": available,
             "event_types": list(events.AUDIT_EVENT_TYPES)},
         "action_required": {"source_available": available and (
-            store.ACTION_SOURCE_AVAILABLE is True or native["source_available"] or host_available),
+            store.ACTION_SOURCE_AVAILABLE is True or native["source_available"] or host_available or ecr_available),
             "event_types": list(events.ACTION_EVENT_TYPES)},
         "native_hardware": native,
         "source_note": "Native source availability describes the last observer read, not live hardware readiness. "
             "Native actions require a fresh exact owner observation. Host-trusted approval alerts separately require "
-            "the enabled host runtime and a current pending request owned by the configured reviewer; the server administrator is trusted.",
+            "the enabled host runtime and a current pending request owned by the configured reviewer. "
+            "ECR whole-image alerts require the current ordinary publication owner and an unexpired staged image awaiting review; "
+            "the server administrator is trusted.",
         "test_note": "A synthetic delivery test does not establish hardware readiness or approval.",
     }
     if not available:

@@ -8,11 +8,28 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
 import operator_rollout_snapshot as observer
+
+
+def initialize_ecr(connection):
+    """Run only the actual owner DDL on disposable SQLite; no app initialization."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from serverware import operator_ecr_publications as owner, operator_publication
+    previous_factory = connection.row_factory
+    connection.row_factory = sqlite3.Row
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        with patch.object(owner, "_profile", return_value=(None, None)), \
+                patch.object(operator_publication, "assert_held"):
+            owner.initialize(connection)
+        connection.commit()
+    finally:
+        connection.row_factory = previous_factory
 
 
 def populate(connection, *, without_rowid=True):
@@ -212,6 +229,156 @@ class FileTests(unittest.TestCase):
         link.mkdir()
         with self.assertRaises(observer.SnapshotError):
             observer.compare_files(before, self.receipt(), identities=True)
+
+
+class EcrInitializationTests(unittest.TestCase):
+    """Exact first-init delta only; old comparisons remain strict by default."""
+
+    pair = DatabaseTests.pair
+    setUp = FileTests.setUp
+    put = FileTests.put
+    receipt = FileTests.receipt
+
+    def test_actual_final_owner_schema_and_initial_state_are_exactly_pinned(self):
+        before, after = self.pair()
+        initialize_ecr(after)
+        result = observer.compare_databases(before, after, ecr_initialization=True)
+        self.assertFalse(result['database_schema_equal'])
+        self.assertTrue(result['preexisting_schema_preserved'])
+        self.assertEqual(result['ecr_initialization']['schema_sha256'], observer.ECR_SCHEMA_SHA256)
+        self.assertEqual(result['ecr_initialization']['audit_append_count'], 0)
+        self.assertEqual(result['all_non_audit_tables']['operator_ecr_owner']['count'], 1)
+        for table in ('operator_ecr_publications', 'operator_ecr_child_ids'):
+            self.assertEqual(result['all_non_audit_tables'][table]['count'], 0)
+        columns = [row[1] for row in after.execute('PRAGMA table_info(operator_ecr_publications)')]
+        self.assertIn('artifact_retirement_status', columns)
+        self.assertIn('artifacts_retired_at_epoch_ms', columns)
+
+    def test_schema_exception_is_opt_in_first_only_and_closed_to_all_other_objects(self):
+        for case in ('no-opt-in', 'already-present', 'alter', 'index', 'other-table', 'ecr-view', 'quota-first'):
+            before, after = self.pair()
+            initialize_ecr(after)
+            if case == 'already-present':
+                initialize_ecr(before)
+            elif case == 'alter':
+                after.execute('ALTER TABLE operator_ecr_publications ADD COLUMN surprise TEXT')
+            elif case == 'index':
+                after.execute('DROP INDEX operator_ecr_publications_page')
+            elif case == 'other-table':
+                after.execute('CREATE TABLE unrelated_addition(id TEXT)')
+            elif case == 'ecr-view':
+                after.execute('CREATE VIEW operator_ecr_surprise AS SELECT 1')
+            after.commit()
+            options = {'ecr_initialization': case != 'no-opt-in'}
+            if case == 'quota-first':
+                options['x_quota_transition'] = 'first'
+            with self.subTest(case=case), self.assertRaises(observer.SnapshotError):
+                observer.compare_databases(before, after, **options)
+
+    def test_owner_shape_empty_jobs_and_exact_audit_delta_are_required(self):
+        changes = ["DELETE FROM operator_ecr_owner",
+            "UPDATE operator_ecr_owner SET owner_process='not-a-uuid'",
+            "UPDATE operator_ecr_owner SET boot_id='00000000-0000-1000-8000-000000000001'",
+            "INSERT INTO operator_ecr_child_ids VALUES('child','parent','binding')",
+            "INSERT INTO operator_ecr_publications(id,status,binding_json,manifest_digest,artifact_sha256,"
+                "boot_id,created_at_epoch_ms,expires_at_epoch_ms,deadline_monotonic_ns) "
+                "VALUES('parent','staging','{}','manifest','artifact','boot',1,2,3)",
+            "INSERT INTO audit_events VALUES('new','unexpected append')",
+            "UPDATE credentials SET value=X'09'", "UPDATE audit_events SET value='changed'"]
+        for statement in changes:
+            before, after = self.pair()
+            initialize_ecr(after)
+            after.execute(statement)
+            after.commit()
+            with self.subTest(statement=statement), self.assertRaises(observer.SnapshotError):
+                observer.compare_databases(before, after, ecr_initialization=True)
+        before, after = self.pair()
+        initialize_ecr(after)
+        after.execute("UPDATE serverware_store_migrations SET applied_at='2026-01-02T00:00:00+00:00'")
+        after.commit()
+        self.assertTrue(observer.compare_databases(before, after,
+            ecr_initialization=True)['migration_timestamps']['timestamp_only_change'])
+
+    def test_retained_quota_and_new_ecr_keep_both_closed_contracts(self):
+        import test_operator_rollout_x_quota as quota_fixture
+        before, after = quota_fixture.DatabaseTests.pair(self, retained=True)
+        initialize_ecr(after)
+        result = observer.compare_databases(before, after,
+            x_quota_transition='retained', ecr_initialization=True)
+        self.assertEqual(result['x_quota_initialization']['added_schema_objects'], [])
+        self.assertEqual(result['x_quota_initialization']['audit_append_count'], 0)
+        self.assertEqual(result['ecr_initialization']['audit_append_count'], 0)
+        before, after = quota_fixture.DatabaseTests.pair(self, retained=True)
+        initialize_ecr(after)
+        after.execute('UPDATE operator_x_quota_state SET wall_highwater_ms=wall_highwater_ms+1')
+        after.commit()
+        with self.assertRaises(observer.SnapshotError) as raised:
+            observer.compare_databases(before, after, x_quota_transition='retained', ecr_initialization=True)
+        self.assertEqual(raised.exception.code, 'authority_table_changed')
+
+    def test_new_empty_directory_requires_exact_path_owner_mode_device_and_non_alias(self):
+        before = self.receipt()
+        (self.persistent / observer.ECR_DIRECTORY).mkdir(mode=0o700)
+        after = self.receipt()
+        self.assertEqual(observer.compare_files(before, after, identities=True, ecr_initialization=True), [])
+        with self.assertRaises(observer.SnapshotError):
+            observer.compare_files(before, after, identities=True)
+        with self.assertRaises(observer.SnapshotError):
+            observer.compare_files(after, after, identities=True, ecr_initialization=True)
+        for field, value in (('mode', 0o750), ('uid', after['persistent'][observer.ECR_DIRECTORY]['uid'] + 1),
+                ('gid', after['persistent'][observer.ECR_DIRECTORY]['gid'] + 1),
+                ('dev', after['persistent'][observer.ECR_DIRECTORY]['dev'] + 1), ('kind', 'file')):
+            changed = deepcopy(after)
+            changed['persistent'][observer.ECR_DIRECTORY][field] = value
+            with self.subTest(field=field), self.assertRaises(observer.SnapshotError):
+                observer.compare_files(before, changed, identities=True, ecr_initialization=True)
+        alias = deepcopy(after)
+        alias['persistent'][observer.ECR_DIRECTORY]['ino'] = before['persistent']['app-data']['ino']
+        with self.assertRaises(observer.SnapshotError):
+            observer.compare_files(before, alias, identities=True, ecr_initialization=True)
+        for filename in (observer.ECR_DIRECTORY + '/unexpected', 'app-data/ecr-artifacts-other'):
+            changed = deepcopy(after)
+            changed['persistent'][filename] = deepcopy(after['persistent']['app-data/master.key'])
+            with self.subTest(filename=filename), self.assertRaises(observer.SnapshotError):
+                observer.compare_files(before, changed, identities=True, ecr_initialization=True)
+        changed = deepcopy(after)
+        changed['persistent']['app-data/master.key']['sha256'] = '0' * 64
+        with self.assertRaises(observer.SnapshotError):
+            observer.compare_files(before, changed, identities=True, ecr_initialization=True)
+
+    def test_private_copy_comparison_joins_directory_and_actual_sqlite_initialization(self):
+        before = self.receipt()
+        before_root, before_custody = self.root / 'before', self.root / 'before-custody'
+        after_root, after_custody = self.root / 'after', self.root / 'after-custody'
+        shutil.copytree(self.persistent, before_root)
+        shutil.copytree(self.custody, before_custody)
+        with sqlite3.connect(self.database) as connection:
+            initialize_ecr(connection)
+        (self.persistent / observer.ECR_DIRECTORY).mkdir(mode=0o700)
+        after = self.receipt()
+        shutil.copytree(self.persistent, after_root)
+        shutil.copytree(self.custody, after_custody)
+        result = observer.compare(before_root, after_root, before_custody, after_custody,
+            before, after, ecr_initialization=True)
+        self.assertEqual(result['schema'], 'serverware.operatorRolloutComparison/v5')
+        self.assertEqual(result['ecr_artifact_directory_added'], observer.ECR_DIRECTORY)
+        self.assertTrue(result['non_sqlite_files_and_custody_preserved'])
+        self.assertEqual(result['prior_audit_count'], result['current_audit_count'])
+        self.assertFalse(result['live_sqlite_opened'])
+        self.assertEqual(self.receipt(), after)
+
+    def test_cli_flag_is_explicit_and_cannot_apply_to_inventory(self):
+        arguments = ['operator_rollout_snapshot.py', 'compare', '--private-copies-acknowledged', '--ecr-initialization']
+        for name in ('before-root', 'after-root', 'before-custody', 'after-custody', 'before-inventory', 'after-inventory'):
+            arguments.extend(['--' + name, str(self.root / name)])
+        with patch.object(observer.sys, 'argv', arguments), patch.object(observer.signal, 'alarm'), \
+                patch.object(observer.os, 'umask'), patch.object(observer, 'load_receipt', return_value={}), \
+                patch.object(observer, 'compare', return_value={'ok': True}) as comparison, redirect_stdout(io.StringIO()):
+            observer.main()
+        self.assertIs(comparison.call_args.kwargs['ecr_initialization'], True)
+        with patch.object(observer.sys, 'argv', ['operator_rollout_snapshot.py', 'inventory', '--ecr-initialization']), \
+                redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            observer.main()
 
 
 class ManagedTransitionTests(unittest.TestCase):

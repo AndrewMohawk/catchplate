@@ -14,10 +14,14 @@ expiry, with no automatic retry after an uncertain write.
 
 The matching cached Rust build and connected acceptance remain pending. Live
 remains `1eff1fd` / `48953fea…` with 16 origins; the source-only 32-origin cap is
-not deployed. Four retained artifact slots are a temporary operational limit,
-and explicit terminal cleanup plus ECR action/audit notification projection are
-still missing. The parent-record bound is 1,024; locally delivered MCP tools
-exclude ECR. See the new guide and example for the current ordinary contract.
+not deployed. The four retained artifact slots can now be reclaimed by explicit
+eligible-terminal retirement, never for uncertain/possible-send records; AWS
+images and owner/audit history remain untouched. The 1,024-parent lifetime stop
+is removed in favor of retained indexed history with ten-record pages. ECR action
+and audit events use the existing separately configured notification slots; no
+automatic enablement, replay or live receiver proof follows. Focused component
+checks passed; locally delivered MCP tools still exclude ECR. See the new guide
+and example for the current ordinary contract.
 
 ## Historical foundation and future native design
 

@@ -24,8 +24,8 @@ from serverware import ecr_publication_plan as planner
 from serverware import ecr_sdk_protocol as protocol
 
 SCHEMA = "serverware.ecrPublication/v1"
-MAX_PUBLICATIONS = 1024
 MAX_ACTIVE_PUBLICATIONS = 4
+MAX_PAGE_SIZE = 10
 MAX_LIFETIME_SECONDS = 1800
 MAX_ATTEMPTS = 4096
 _SHA = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -33,6 +33,7 @@ _PROCESS = str(uuid.uuid4())
 _PID = os.getpid()
 _TERMINAL = {"published", "denied", "expired", "failed", "uncertain"}
 _PENDING = {"preparing", "reserved", "possible_send"}
+_NONTERMINAL_SQL = "status IN ('staging','awaiting_review','approved','active','suspended')"
 _HANDLES: dict[str, _Held] = {}
 
 
@@ -110,7 +111,7 @@ ready = readiness
 def _audit(db, conn, event, row, actor=None, **extra):
     binding = json.loads(row["binding_json"])
     db.append_audit_event(conn, event_type="operator.ecr_publication." + event,
-        actor_type="admin" if event in {"reviewed", "approved", "denied"} else "proxy",
+        actor_type="admin" if event in {"reviewed", "approved", "denied", "artifacts_retirement_requested", "artifacts_retired"} else "proxy",
         actor_id=actor or binding["principal_id"], event={"assurance": "host-trusted",
             "publication_id": row["id"], "principal_id": binding["principal_id"],
             "route_id": binding["route_id"], "credential_id": binding["credential_id"],
@@ -147,14 +148,25 @@ def initialize(conn):
         child_response_sha256 TEXT, terminal_reason TEXT)""")
     conn.execute("""CREATE TABLE IF NOT EXISTS operator_ecr_child_ids (
         id TEXT PRIMARY KEY, publication_id TEXT NOT NULL, request_binding_sha256 TEXT NOT NULL)""")
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(operator_ecr_publications)")}
+    for name, definition in (("artifact_retirement_status", "TEXT NOT NULL DEFAULT 'available' CHECK(artifact_retirement_status IN ('available','pending','retired'))"),
+            ("artifacts_retired_at_epoch_ms", "INTEGER")):
+        if name not in columns:
+            conn.execute("ALTER TABLE operator_ecr_publications ADD COLUMN " + name + " " + definition)
+    conn.execute("CREATE INDEX IF NOT EXISTS operator_ecr_publications_active ON operator_ecr_publications "
+        "(created_at_epoch_ms,id) WHERE " + _NONTERMINAL_SQL)
+    conn.execute("CREATE INDEX IF NOT EXISTS operator_ecr_publications_page ON operator_ecr_publications "
+        "(created_at_epoch_ms DESC,id DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS operator_ecr_publications_client_page ON operator_ecr_publications "
+        "(json_extract(binding_json,'$.principal_id'),created_at_epoch_ms DESC,id DESC)")
     previous = conn.execute("SELECT * FROM operator_ecr_owner WHERE singleton=1").fetchone()
     boot, clock = _boot(), _clock()
     if previous is not None and previous["owner_process"] == _PROCESS:
         _need(previous["boot_id"] == boot)
         return
-    rows = conn.execute("SELECT * FROM operator_ecr_publications WHERE status NOT IN "
-        "('published','denied','expired','failed','uncertain') LIMIT ?", (MAX_PUBLICATIONS + 1,)).fetchall()
-    _need(len(rows) <= MAX_PUBLICATIONS)
+    rows = conn.execute("SELECT * FROM operator_ecr_publications WHERE " + _NONTERMINAL_SQL + " LIMIT ?",
+        (MAX_ACTIVE_PUBLICATIONS + 1,)).fetchall()
+    _need(len(rows) <= MAX_ACTIVE_PUBLICATIONS)
     for original in rows:
         row = dict(original)
         if row["child_status"] in _PENDING:
@@ -202,20 +214,45 @@ def _find(conn, identifier):
     return dict(value)
 
 
-def _binding(conn, application_id, access_rule_id, policy_hash, now):
+def _catalog_record(conn, table, identifier):
+    _need(table in {"operator_catalog_applications", "operator_catalog_rules", "operator_catalog_credentials"})
+    row = conn.execute("SELECT * FROM " + table + " WHERE id=?", (identifier,)).fetchone()
+    _need(row is not None)
+    data = json.loads(row["data_json"])
+    columns = {key: row[key] for key in row.keys() if key != "data_json"}
+    _need(type(data) is dict and not set(data) & set(columns))
+    return {**columns, **data}
+
+
+def _aws_public_current(conn, identifier):
+    """Read-only public binding observation; never a signing/secret authority."""
+    from serverware import operator_catalog_aws as aws
+    current = conn.execute("SELECT id,name,kind,metadata,lifecycle_status,credential_version "
+        "FROM credentials WHERE id=?", (identifier,)).fetchone()
+    _need(current is not None and current["kind"] == aws.KIND and current["lifecycle_status"] == "active")
+    record = _catalog_record(conn, "operator_catalog_credentials", identifier)
+    _need(record["name"] == current["name"] and record["status"] == "active")
+    metadata = json.loads(current["metadata"])
+    aws.validate_credential(record, metadata)
+    floor = conn.execute("SELECT last_version FROM credential_generations WHERE credential_id=?", (identifier,)).fetchone()
+    _need(type(current["credential_version"]) is int and 1 <= current["credential_version"] <= 9_007_199_254_740_991
+        and floor is not None and type(floor["last_version"]) is int and floor["last_version"] == current["credential_version"])
+    return current, metadata
+
+
+def _binding(conn, application_id, access_rule_id, policy_hash, now, *, readonly=False):
     from serverware import db, operator_catalog_schema as catalog, policy_bundle
     current = conn.execute("SELECT policy_hash FROM operator_demo_policy WHERE singleton=1").fetchone()
     snapshot = policy_bundle.get_policy_snapshot()
     _need(current is not None and snapshot is not None and current["policy_hash"] == policy_hash == snapshot.hash)
-    records = catalog.read_catalog(conn)
-    applications = [item for item in records["applications"] if item["id"] == application_id]
-    rules = [item for item in records["access_rules"] if item["id"] == access_rule_id]
-    _need(len(applications) == len(rules) == 1)
-    application, rule = applications[0], rules[0]
+    _need(catalog.active(conn))
+    application = _catalog_record(conn, "operator_catalog_applications", application_id)
+    rule = _catalog_record(conn, "operator_catalog_rules", access_rule_id)
     _need(application["status"] == rule["status"] == "active" and rule["application_id"] == application_id
         and rule.get("operation_bundle") == "aws_ecr_publish_v1" and rule.get("approval_mode") == "host_review_v1"
         and application["token_expires_at_epoch_ms"] > now.unix_seconds * 1000)
-    credential = db._operator_aws_current(conn, rule["credential_id"])
+    credential = (_aws_public_current(conn, rule["credential_id"]) if readonly
+        else db._operator_aws_current(conn, rule["credential_id"]))
     _need(credential is not None)
     core, metadata = credential
     expiry = metadata.get("expires_at")
@@ -283,8 +320,12 @@ def _public(row, now=None):
             "response_sha256": row["child_response_sha256"]} if row["child_id"] else None,
         progress={key: checkpoint[key] for key in ("calls", "ready_digests", "upload", "part_bytes")}
             if checkpoint else None, terminal_reason=row["terminal_reason"])
+    result.update(artifact_retirement_status=row["artifact_retirement_status"],
+        artifacts_retired=row["artifact_retirement_status"] == "retired",
+        artifacts_retired_at_epoch_ms=row["artifacts_retired_at_epoch_ms"])
     # Never expose token verifiers, private staging paths or AWS tuple fields.
-    if now and row["status"] not in _TERMINAL and now.unix_seconds * 1000 >= row["expires_at_epoch_ms"]:
+    if now and row["status"] not in _TERMINAL and (now.unix_seconds * 1000 >= row["expires_at_epoch_ms"]
+            or now.monotonic_ns >= row["deadline_monotonic_ns"] or row["boot_id"] != _boot()):
         result["status"] = "uncertain" if row["child_status"] == "possible_send" and row["child_action"] != "BatchCheckLayerAvailability" else "expired"
     return result
 
@@ -302,19 +343,17 @@ def create(application_id, access_rule_id, expected_policy_hash, manifest_digest
         # A wall-expired parent must release its process-owned memfds before a
         # replacement can occupy an active slot; ignoring expired rows in a
         # COUNT alone would permit retained memory to grow across generations.
-        expired = conn.execute("SELECT * FROM operator_ecr_publications WHERE status NOT IN "
-            "('published','denied','expired','failed','uncertain') AND "
+        expired = conn.execute("SELECT * FROM operator_ecr_publications WHERE " + _NONTERMINAL_SQL + " AND "
             "(expires_at_epoch_ms<=? OR deadline_monotonic_ns<=? OR boot_id<>?) LIMIT ?",
-            (now.unix_seconds * 1000, now.monotonic_ns, _boot(), MAX_PUBLICATIONS + 1)).fetchall()
-        _need(len(expired) <= MAX_PUBLICATIONS)
+            (now.unix_seconds * 1000, now.monotonic_ns, _boot(), MAX_ACTIVE_PUBLICATIONS + 1)).fetchall()
+        _need(len(expired) <= MAX_ACTIVE_PUBLICATIONS)
         for original in expired:
             previous = dict(original)
             state = "uncertain" if previous["child_status"] == "possible_send" and previous["child_action"] != "BatchCheckLayerAvailability" else "expired"
             _terminal(conn, db, previous, state, "deadline_elapsed")
-        _need(conn.execute("SELECT COUNT(*) FROM operator_ecr_publications").fetchone()[0] < MAX_PUBLICATIONS)
-        _need(conn.execute("SELECT COUNT(*) FROM operator_ecr_publications WHERE status NOT IN "
-            "('published','denied','expired','failed','uncertain') AND expires_at_epoch_ms>?",
-            (now.unix_seconds * 1000,)).fetchone()[0] < MAX_ACTIVE_PUBLICATIONS)
+        active = conn.execute("SELECT id FROM operator_ecr_publications WHERE " + _NONTERMINAL_SQL + " LIMIT ?",
+            (MAX_ACTIVE_PUBLICATIONS + 1,)).fetchall()
+        _need(len(active) < MAX_ACTIVE_PUBLICATIONS)
         # Whole seconds are the reducer clock unit: round client expiry down,
         # never extend an expiring token by rounding it up.
         end = min(now.unix_seconds + ttl_seconds, binding["token_expires_at_epoch_ms"] // 1000)
@@ -342,6 +381,56 @@ def require_client(principal_id, identifier, *, staging=False):
         return _public(row)
 
 
+def fail_staging(identifier, principal_id):
+    """Close a parent whose artifact-directory creation failed; never retry it."""
+    with _transaction() as (conn, db, reviewer, now):
+        row = _find(conn, identifier)
+        _need(json.loads(row["binding_json"])["principal_id"] == principal_id and row["child_id"] is None)
+        if row["status"] == "failed" and row["terminal_reason"] == "artifact_staging_failed":
+            return _public(row)
+        _need(row["status"] == "staging")
+        _terminal(conn, db, row, "failed", "artifact_staging_failed")
+        return _public(_find(conn, identifier))
+
+
+def notification_pending(conn, identifier, *, reviewer_id=None, now_epoch_ms):
+    """Fresh read-only projection for notification delivery, never an approval.
+
+    The caller owns one zero-write, query-only SQLite snapshot. Current public
+    catalog/generation and both original deadlines are rejoined without the EX
+    lock, a secret opener, a review receipt or any write-capable DB helper.
+    """
+    try:
+        _, config = _profile()
+        reviewer = config.ADMIN_USER_ID
+        _need(reviewer_id is None or reviewer_id == reviewer)
+        _need(os.getpid() == _PID and type(conn) is sqlite3.Connection and conn.in_transaction
+            and conn.total_changes == 0 and conn.execute("PRAGMA query_only").fetchone()[0] == 1
+            and conn.execute("PRAGMA read_uncommitted").fetchone()[0] == 0)
+        _need([row[2] for row in conn.execute("PRAGMA database_list") if row[1] == "main"] == [str(config.DB_PATH)])
+        _need(type(now_epoch_ms) is int and now_epoch_ms >= 0)
+        process = conn.execute("SELECT * FROM operator_ecr_owner WHERE singleton=1").fetchone()
+        now, boot = _clock(), _boot()
+        _need(process is not None and process["schema_version"] == 1
+            and process["owner_process"] == _PROCESS and process["boot_id"] == boot)
+        row = _find(conn, identifier)
+        _need(row["status"] == "awaiting_review" and row["boot_id"] == boot
+            and row["artifact_retirement_status"] == "available" and row["artifact_json"] is not None
+            and row["created_at_epoch_ms"] <= now_epoch_ms < row["expires_at_epoch_ms"]
+            and row["created_at_epoch_ms"] <= now.unix_seconds * 1000 < row["expires_at_epoch_ms"]
+            and now.monotonic_ns < row["deadline_monotonic_ns"])
+        previous = json.loads(row["binding_json"])
+        current = _binding(conn, previous["application_id"], previous["access_rule_id"], previous["policy_hash"], now, readonly=True)
+        _need(previous == current)
+        return {"publication_id": identifier, **{key: previous[key] for key in
+            ("principal_id", "route_id", "credential_id", "credential_generation", "policy_hash")},
+            "manifest_digest": row["manifest_digest"], "artifact_sha256": row["artifact_sha256"],
+            "created_at_epoch_ms": row["created_at_epoch_ms"], "expires_at_epoch_ms": row["expires_at_epoch_ms"],
+            "reviewer_id": reviewer}
+    except Exception:
+        return None
+
+
 def status(identifier, actor):
     with _transaction() as (conn, db, reviewer, now):
         row = _find(conn, identifier)
@@ -350,11 +439,75 @@ def status(identifier, actor):
 
 
 def list_publications(actor):
+    return list_publications_page(actor)["publications"]
+
+
+def list_publications_page(actor, *, before=None, limit=MAX_PAGE_SIZE):
+    """Bounded descending keyset page; a cursor must belong to the same viewer."""
+    _need(type(actor) is str and 0 < len(actor) <= 256 and type(limit) is int and 1 <= limit <= MAX_PAGE_SIZE)
     with _transaction() as (conn, db, reviewer, now):
-        rows = conn.execute("SELECT * FROM operator_ecr_publications ORDER BY created_at_epoch_ms DESC,id DESC LIMIT ?",
-            (MAX_PUBLICATIONS,)).fetchall()
-        return [_public(dict(row), now) for row in rows
-            if actor == reviewer or json.loads(row["binding_json"])["principal_id"] == actor][:100]
+        clauses, parameters = [], []
+        if actor != reviewer:
+            clauses.append("json_extract(binding_json,'$.principal_id')=?")
+            parameters.append(actor)
+        if before is not None:
+            cursor = _find(conn, before)
+            _need(actor == reviewer or json.loads(cursor["binding_json"])["principal_id"] == actor)
+            clauses.append("(created_at_epoch_ms,id)<(?,?)")
+            parameters.extend((cursor["created_at_epoch_ms"], cursor["id"]))
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        rows = conn.execute("SELECT * FROM operator_ecr_publications" + where
+            + " ORDER BY created_at_epoch_ms DESC,id DESC LIMIT ?", (*parameters, limit + 1)).fetchall()
+        return {"publications": [_public(dict(row), now) for row in rows[:limit]],
+            "next_cursor": rows[limit - 1]["id"] if len(rows) > limit else None}
+
+
+def retire_artifacts(identifier, actor):
+    """Explicit admin-only, resumable retirement of terminal staged content.
+
+    Provider outcome, checkpoints and audit history are never deleted or reset.
+    Filesystem cleanup runs outside SQLite ownership only after a durable intent.
+    A pending intent may be retried explicitly; no startup/background GC runs.
+    """
+    from serverware import operator_ecr_artifacts
+    with _transaction() as (conn, db, reviewer, now):
+        _need(actor == reviewer)
+        row = _find(conn, identifier)
+        if row["status"] not in _TERMINAL:
+            if (row["boot_id"] != _boot() or now.unix_seconds * 1000 >= row["expires_at_epoch_ms"]
+                    or now.monotonic_ns >= row["deadline_monotonic_ns"]):
+                state = "uncertain" if row["child_status"] == "possible_send" and row["child_action"] != "BatchCheckLayerAvailability" else "expired"
+                _terminal(conn, db, row, state, "deadline_elapsed")
+                conn.commit()  # Expiry evidence survives a subsequent cleanup refusal.
+                conn.execute("BEGIN IMMEDIATE")
+                row = _find(conn, identifier)
+        _need(row["status"] in {"published", "denied", "expired", "failed"}
+            and row["child_status"] != "possible_send")
+        if row["artifact_retirement_status"] == "retired":
+            return _public(row)
+        _need(row["artifact_retirement_status"] in {"available", "pending"})
+        if row["artifact_retirement_status"] == "available":
+            conn.execute("UPDATE operator_ecr_publications SET artifact_retirement_status='pending',revision=revision+1 WHERE id=?",
+                (identifier,))
+            _audit(db, conn, "artifacts_retirement_requested", row, actor)
+        manifest_digest = row["manifest_digest"]
+        _drop(identifier)
+    result = operator_ecr_artifacts.configured_store().retire(identifier, expected_manifest_digest=manifest_digest)
+    _need(type(result) is dict and result.get("stage_id") == identifier and result.get("retired") is True
+        and all(type(result.get(name)) is int and result[name] >= 0 for name in ("removed_files", "removed_bytes")))
+    with _transaction() as (conn, db, reviewer, now):
+        _need(actor == reviewer)
+        row = _find(conn, identifier)
+        _need(row["status"] in {"published", "denied", "expired", "failed"}
+            and row["child_status"] != "possible_send" and row["manifest_digest"] == manifest_digest)
+        if row["artifact_retirement_status"] == "retired":
+            return _public(row)
+        _need(row["artifact_retirement_status"] == "pending")
+        conn.execute("UPDATE operator_ecr_publications SET artifact_retirement_status='retired',"
+            "artifacts_retired_at_epoch_ms=?,revision=revision+1 WHERE id=?", (now.unix_seconds * 1000, identifier))
+        _audit(db, conn, "artifacts_retired", row, actor,
+            removed_files_this_attempt=result["removed_files"], removed_bytes_this_attempt=result["removed_bytes"])
+        return _public(_find(conn, identifier))
 
 
 def finalize_stage(identifier, sealed_image):

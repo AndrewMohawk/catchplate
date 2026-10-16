@@ -319,6 +319,167 @@ class ArtifactStoreTests(unittest.TestCase):
             captured[0].image
         self.refuse(lambda: self.store.recapture(stage))
 
+    def test_explicit_retirement_recovers_one_slot_preserves_other_stages(self):
+        stage, manifest, blobs = self.uploaded()
+        self.store.finalize(stage).close()
+        retained = [self.store.begin() for _ in range(3)]
+        self.refuse(lambda: self.store.begin())
+        paths = list((self.root / stage).rglob("*"))
+        expected_files = sum(path.is_file() for path in paths)
+        expected_bytes = sum(path.stat().st_size for path in paths if path.is_file())
+        receipt = self.store.retire(stage, expected_manifest_digest=digest(manifest))
+        self.assertEqual(receipt, {"stage_id": stage, "retired": True,
+            "removed_files": expected_files, "removed_bytes": expected_bytes})
+        self.assertFalse((self.root / stage).exists())
+        for other in retained:
+            self.assertEqual(set(path.name for path in (self.root / other).iterdir()), {"blobs"})
+        self.assertTrue((self.root / self.store.begin()).is_dir())
+        self.assertEqual(self.store.retire(stage, expected_manifest_digest=digest(manifest)),
+            {"stage_id": stage, "retired": True, "removed_files": 0, "removed_bytes": 0})
+        self.refuse(lambda: self.store.recapture(stage))
+
+    def test_retirement_empty_and_incomplete_stages(self):
+        manifest, blobs = fixture()
+        empty = self.store.begin()
+        self.assertEqual(self.store.retire(empty, expected_manifest_digest=digest(manifest))["removed_files"], 0)
+        partial = self.store.begin()
+        self.store.write_manifest(partial, manifest)
+        name, raw = next(iter(blobs.items()))
+        self.store.append_part(partial, name, 0, raw[:3])
+        result = self.store.retire(partial, expected_manifest_digest=digest(manifest))
+        self.assertEqual(result["removed_files"], 2)
+        self.assertEqual(result["removed_bytes"], len(manifest) + 3)
+        failed_manifest = self.store.begin()
+        path = self.root / failed_manifest / "manifest.pending"
+        path.write_bytes(manifest[:10])
+        path.chmod(0o600)
+        self.assertEqual(self.store.retire(failed_manifest,
+            expected_manifest_digest=digest(manifest))["removed_bytes"], 10)
+
+    def test_retirement_expected_digest_and_identifier_preflight_no_deletion(self):
+        stage, manifest, _ = self.uploaded()
+        original = (self.root / stage / "manifest.json").read_bytes()
+        self.refuse(lambda: self.store.retire(stage, expected_manifest_digest=digest(b"other image")))
+        for bad in (None, "", "../" + stage, stage.upper(), str(self.root), "/"):
+            self.refuse(lambda bad=bad: self.store.retire(bad, expected_manifest_digest=digest(manifest)))
+        for bad in (None, "", "sha256:ABC", "../manifest.json"):
+            self.refuse(lambda bad=bad: self.store.retire(stage, expected_manifest_digest=bad))
+        self.assertEqual((self.root / stage / "manifest.json").read_bytes(), original)
+        with self.store.finalize(stage):
+            pass
+
+    def test_retirement_unknown_directory_symlink_or_file_refuses_before_any_unlink(self):
+        for kind in ("extra-file", "extra-directory", "symlink", "unreferenced-digest"):
+            with self.subTest(kind=kind):
+                stage, manifest, blobs = self.uploaded()
+                if kind == "extra-directory":
+                    (self.root / stage / "nested").mkdir(mode=0o700)
+                elif kind == "extra-file":
+                    (self.root / stage / "keep.txt").write_bytes(b"keep")
+                elif kind == "unreferenced-digest":
+                    extra = self.root / stage / "blobs" / digest(b"not referenced")[7:]
+                    extra.write_bytes(b"not referenced")
+                    extra.chmod(0o600)
+                else:
+                    name = next(iter(blobs))
+                    path = self.root / stage / "blobs" / name[7:]
+                    path.rename(self.base / "unrelated-file")
+                    path.symlink_to(self.base / "unrelated-file")
+                with patch.object(store.os, "unlink", side_effect=AssertionError("must not delete")):
+                    error = self.refuse(lambda: self.store.retire(stage, expected_manifest_digest=digest(manifest)))
+                self.assertFalse(error.completion_uncertain)
+                self.assertTrue((self.root / stage / "manifest.json").exists())
+
+    def test_retirement_external_hardlink_refused_but_own_alias_pair_removed_once(self):
+        stage, manifest, blobs = self.uploaded()
+        name, raw = next(iter(blobs.items()))
+        path = self.root / stage / "blobs" / name[7:]
+        external = self.base / "external-link"
+        os.link(path, external)
+        self.refuse(lambda: self.store.retire(stage, expected_manifest_digest=digest(manifest)))
+        self.assertEqual(external.read_bytes(), raw)
+        external.unlink()
+        os.link(path, path.with_name(name[7:] + ".pending"))
+        metadata = self.root / stage / "manifest.json"
+        os.link(metadata, metadata.with_name("manifest.pending"))
+        result = self.store.retire(stage, expected_manifest_digest=digest(manifest))
+        self.assertEqual(result["removed_files"], len(blobs) + 3)
+        self.assertEqual(result["removed_bytes"], sum(map(len, blobs.values())) + len(manifest))
+
+    def test_retirement_distinct_pending_alias_and_missing_manifest_refused(self):
+        stage, manifest, blobs = self.uploaded()
+        name, raw = next(iter(blobs.items()))
+        pending = self.root / stage / "blobs" / (name[7:] + ".pending")
+        pending.write_bytes(raw)
+        pending.chmod(0o600)
+        self.refuse(lambda: self.store.retire(stage, expected_manifest_digest=digest(manifest)))
+        pending.unlink()
+        (self.root / stage / "manifest.json").unlink()
+        self.refuse(lambda: self.store.retire(stage, expected_manifest_digest=digest(manifest)))
+        self.assertTrue((self.root / stage / "blobs" / name[7:]).exists())
+
+    def test_retirement_partial_failure_needs_explicit_retry_manifest_last(self):
+        stage, manifest, blobs = self.uploaded()
+        self.store.finalize(stage).close()
+        real_unlink = os.unlink
+        calls = 0
+
+        def fail_second(name, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("private deletion diagnostic")
+            return real_unlink(name, **kwargs)
+
+        with patch.object(store.os, "unlink", side_effect=fail_second):
+            error = self.refuse(lambda: self.store.retire(stage, expected_manifest_digest=digest(manifest)))
+        self.assertTrue(error.completion_uncertain)
+        self.assertEqual((self.root / stage / "manifest.json").read_bytes(), manifest)
+        self.assertEqual(len(list((self.root / stage / "blobs").iterdir())), len(blobs) - 1)
+        # Merely reopening the store does not continue deletion.
+        restarted = store.ArtifactStore(self.root)
+        self.assertTrue((self.root / stage / "stage.json").exists())
+        self.assertTrue(restarted.retire(stage, expected_manifest_digest=digest(manifest))["retired"])
+        self.assertFalse((self.root / stage).exists())
+
+    def test_retirement_missing_final_directory_recovers_lost_completion_ack(self):
+        stage, manifest, _ = self.uploaded()
+        real_sync = os.fsync
+
+        def fail_final_sync(fd):
+            if not (self.root / stage).exists():
+                raise OSError("private final root sync diagnostic")
+            return real_sync(fd)
+
+        with patch.object(store.os, "fsync", side_effect=fail_final_sync):
+            error = self.refuse(lambda: self.store.retire(stage, expected_manifest_digest=digest(manifest)))
+        self.assertTrue(error.completion_uncertain)
+        self.assertFalse((self.root / stage).exists())
+        self.assertEqual(self.store.retire(stage, expected_manifest_digest=digest(manifest)),
+            {"stage_id": stage, "retired": True, "removed_files": 0, "removed_bytes": 0})
+
+    def test_retirement_stage_lock_and_private_directory_refuse_mutation(self):
+        stage, manifest, _ = self.uploaded()
+        descriptor = os.open(self.root / stage, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.refuse(lambda: store.ArtifactStore(self.root).retire(stage,
+                expected_manifest_digest=digest(manifest)))
+            self.assertTrue((self.root / stage / "manifest.json").exists())
+        finally:
+            os.close(descriptor)
+        (self.root / stage).chmod(0o755)
+        self.refuse(lambda: self.store.retire(stage, expected_manifest_digest=digest(manifest)))
+        (self.root / stage).chmod(0o700)
+
+    def test_retirement_stage_alias_never_removes_target(self):
+        stage, manifest, _ = self.uploaded()
+        alias = str(uuid.uuid4())
+        (self.root / alias).symlink_to(self.root / stage, target_is_directory=True)
+        self.refuse(lambda: self.store.retire(alias, expected_manifest_digest=digest(manifest)))
+        self.assertTrue((self.root / stage / "manifest.json").exists())
+        self.assertTrue((self.root / alias).is_symlink())
+
 
 if __name__ == "__main__":
     unittest.main()

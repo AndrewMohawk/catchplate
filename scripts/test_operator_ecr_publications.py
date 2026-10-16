@@ -25,6 +25,7 @@ from serverware import ecr_image_artifact as artifact
 from serverware import ecr_image_custody as custody
 from serverware import ecr_publication_plan as planner
 from serverware import operator_ecr_publications as owner
+from serverware import operator_ecr_artifacts as artifacts
 from serverware import operator_publication
 
 
@@ -63,10 +64,10 @@ class OwnerTests(unittest.TestCase):
             ("principal_id", "route_id", "credential_id", "credential_generation", "policy_hash")}
         self.wire["request_binding_sha256"] = "sha256:" + "4" * 64
         self.database = SimpleNamespace(metadata_connection=self.connection, append_audit_event=self.audit)
-        self.patches = [patch.object(owner, "_profile", return_value=(self.database, SimpleNamespace(ADMIN_USER_ID="admin"))),
+        self.patches = [patch.object(owner, "_profile", return_value=(self.database, SimpleNamespace(ADMIN_USER_ID="admin", DB_PATH=self.path))),
             patch.object(owner, "_clock", side_effect=lambda: self.clock),
             patch.object(owner, "_boot", side_effect=lambda: self.boot),
-            patch.object(owner, "_binding", side_effect=lambda *args: deepcopy(self.binding)),
+            patch.object(owner, "_binding", side_effect=lambda *args, **kwargs: deepcopy(self.binding)),
             patch.object(operator_publication, "exclusive", side_effect=lambda **kwargs: nullcontext()),
             patch.object(operator_publication, "assert_held", return_value=None)]
         for item in self.patches:
@@ -253,6 +254,7 @@ class OwnerTests(unittest.TestCase):
         self.assertEqual(owner.status(item["id"], "admin")["status"], "expired")
         item = self.active()
         self.clock = planner.Clock(self.clock.unix_seconds, self.clock.monotonic_ns + 1800_000_000_000)
+        self.assertEqual(owner.status(item["id"], "admin")["status"], "expired")
         with self.assertRaises(owner.PublicationExpired):
             self.request(item["id"], "InitiateLayerUpload")
         self.assertEqual(owner.status(item["id"], "admin")["status"], "expired")
@@ -387,6 +389,242 @@ class OwnerTests(unittest.TestCase):
             owner.finish(reserved.child_id, publication_id=wrong, status=200,
                 body=encoded({"uploadId": str(uuid.uuid4()), "partSize": 1024}), **self.wire)
         self.assertEqual(owner.status(item["id"], "admin")["child"]["status"], "possible_send")
+
+    def denied(self):
+        item = self.staged()
+        review = owner.review(item["id"], "admin")
+        return owner.decide(item["id"], "admin", {"decision": "deny", "note": "fixture denial",
+            **{key: review[key] for key in ("review_receipt_id", "review_digest")}})
+
+    def retired_store(self, identifier):
+        root = Path(self.temp.name) / ("artifacts-" + identifier)
+        root.mkdir(mode=0o700)
+        store = artifacts.ArtifactStore(root, max_stages=1)
+        store.begin(identifier)
+        store.write_manifest(identifier, self.raw)
+        for key, raw in self.blobs.items():
+            store.append_part(identifier, key, 0, raw)
+        with store.finalize(identifier):
+            pass
+        return store, root
+
+    def test_explicit_retirement_reclaims_stage_and_preserves_terminal_evidence(self):
+        before = self.denied()
+        store, root = self.retired_store(before["id"])
+        with patch.object(artifacts, "configured_store", return_value=store):
+            retired = owner.retire_artifacts(before["id"], "admin")
+            repeated = owner.retire_artifacts(before["id"], "admin")
+        self.assertTrue(retired["artifacts_retired"])
+        self.assertEqual(retired["artifact_retirement_status"], "retired")
+        self.assertEqual(retired, repeated)
+        self.assertEqual({key: retired[key] for key in ("status", "artifact", "progress", "child", "terminal_reason", "decision_note")},
+            {key: before[key] for key in ("status", "artifact", "progress", "child", "terminal_reason", "decision_note")})
+        self.assertFalse((root / before["id"]).exists())
+        replacement = store.begin()
+        self.assertTrue((root / replacement).is_dir())
+        with self.connection() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM operator_ecr_publications").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM audit WHERE event_type LIKE '%artifacts_retir%'").fetchone()[0], 2)
+
+    def test_partial_retirement_requires_explicit_retry_and_never_repeats_authority(self):
+        item = self.denied()
+        store, root = self.retired_store(item["id"])
+        calls = []
+        def incomplete(identifier, **kwargs):
+            calls.append(identifier)
+            self.assertEqual(owner.status(identifier, "admin")["artifact_retirement_status"], "pending")
+            result = store.retire(identifier, **kwargs)
+            if len(calls) == 1:
+                raise RuntimeError("synthetic response loss after cleanup")
+            return result
+        with patch.object(artifacts, "configured_store", return_value=SimpleNamespace(retire=incomplete)):
+            with self.assertRaises(RuntimeError):
+                owner.retire_artifacts(item["id"], "admin")
+            pending = owner.status(item["id"], "admin")
+            self.assertEqual(pending["artifact_retirement_status"], "pending")
+            self.assertFalse(pending["artifacts_retired"])
+            self.restart()
+            self.assertEqual(owner.status(item["id"], "admin")["artifact_retirement_status"], "pending")
+            self.assertEqual(len(calls), 1)  # Startup does not retry cleanup.
+            self.assertEqual(owner.retire_artifacts(item["id"], "admin")["artifact_retirement_status"], "retired")
+        self.assertEqual(len(calls), 2)
+        self.assertFalse((root / item["id"]).exists())
+        with self.connection() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM audit WHERE event_type LIKE '%artifacts_retir%'").fetchone()[0], 2)
+
+    def test_retirement_refuses_nonadmin_active_uncertain_and_possible_send(self):
+        active = self.active()
+        denied = self.denied()
+        with patch.object(artifacts, "configured_store") as configured:
+            for identifier, actor in ((denied["id"], self.binding["principal_id"]), (active["id"], "admin")):
+                with self.assertRaises(owner.PublicationConflict):
+                    owner.retire_artifacts(identifier, actor)
+            pending = self.request(active["id"], "InitiateLayerUpload")
+            with owner.signing_transaction(pending.child_id, publication_id=active["id"], **self.wire):
+                pass
+            owner.fail(pending.child_id, publication_id=active["id"], **self.wire)
+            with self.assertRaises(owner.PublicationConflict):
+                owner.retire_artifacts(active["id"], "admin")
+            # A read failure has no known write effect, but its possible-send
+            # marker is deliberately still ineligible for artifact removal.
+            read = self.active()
+            request = self.request(read["id"], "BatchCheckLayerAvailability", layerDigests=list(self.blobs))
+            result = self.send(request, {}, status=500)
+            self.assertEqual(result["status"], "failed")
+            with self.assertRaises(owner.PublicationConflict):
+                owner.retire_artifacts(read["id"], "admin")
+            configured.assert_not_called()
+
+    def test_expired_projection_becomes_durable_before_retirement(self):
+        item = self.active()
+        self.clock = planner.Clock(self.clock.unix_seconds + 1801, self.clock.monotonic_ns + 1801_000_000_000)
+        self.assertEqual(owner.status(item["id"], "admin")["status"], "expired")
+        def retire(identifier, **kwargs):
+            with self.connection() as conn:
+                self.assertEqual(conn.execute("SELECT status FROM operator_ecr_publications WHERE id=?", (identifier,)).fetchone()[0], "expired")
+            return {"stage_id": identifier, "retired": True, "removed_files": 0, "removed_bytes": 0}
+        with patch.object(artifacts, "configured_store", return_value=SimpleNamespace(retire=retire)):
+            result = owner.retire_artifacts(item["id"], "admin")
+        self.assertEqual(result["status"], "expired")
+        self.assertTrue(result["artifacts_retired"])
+
+    def test_retirement_audit_failure_prevents_cleanup_and_completion_can_retry(self):
+        item = self.denied()
+        store, root = self.retired_store(item["id"])
+        with self.connection() as conn:
+            conn.execute("CREATE TRIGGER audit_failure BEFORE INSERT ON audit BEGIN SELECT RAISE(ABORT,'fixture'); END")
+        with patch.object(artifacts, "configured_store", return_value=store) as configured:
+            with self.assertRaises(sqlite3.IntegrityError):
+                owner.retire_artifacts(item["id"], "admin")
+            configured.assert_not_called()
+        self.assertTrue((root / item["id"]).exists())
+        self.assertEqual(owner.status(item["id"], "admin")["artifact_retirement_status"], "available")
+        with self.connection() as conn:
+            conn.execute("DROP TRIGGER audit_failure")
+            conn.execute("CREATE TRIGGER audit_failure BEFORE INSERT ON audit WHEN NEW.event_type='operator.ecr_publication.artifacts_retired' "
+                "BEGIN SELECT RAISE(ABORT,'fixture'); END")
+        with patch.object(artifacts, "configured_store", return_value=store):
+            with self.assertRaises(sqlite3.IntegrityError):
+                owner.retire_artifacts(item["id"], "admin")
+            self.assertFalse((root / item["id"]).exists())
+            self.assertEqual(owner.status(item["id"], "admin")["artifact_retirement_status"], "pending")
+            with self.connection() as conn:
+                conn.execute("DROP TRIGGER audit_failure")
+            self.assertTrue(owner.retire_artifacts(item["id"], "admin")["artifacts_retired"])
+
+    def test_indexed_keyset_pages_preserve_tied_timestamps_and_actor_isolation(self):
+        identifiers = [self.denied()["id"] for _ in range(23)]
+        expected = sorted(identifiers, reverse=True)
+        actual, cursor = [], None
+        while True:
+            page = owner.list_publications_page("admin", before=cursor)
+            self.assertLessEqual(len(page["publications"]), 10)
+            actual.extend(row["id"] for row in page["publications"])
+            cursor = page["next_cursor"]
+            if cursor is None:
+                break
+            self.assertEqual(cursor, page["publications"][-1]["id"])
+        self.assertEqual(actual, expected)
+        self.assertEqual(owner.list_publications_page("other-client")["publications"], [])
+        with self.assertRaises(owner.PublicationConflict):
+            owner.list_publications_page("other-client", before=identifiers[0])
+        for limit in (0, 11, True):
+            with self.assertRaises(owner.PublicationConflict):
+                owner.list_publications_page("admin", limit=limit)
+        with self.connection() as conn:
+            detail = " ".join(row[3] for row in conn.execute("EXPLAIN QUERY PLAN SELECT * FROM operator_ecr_publications "
+                "WHERE (created_at_epoch_ms,id)<(?,?) ORDER BY created_at_epoch_ms DESC,id DESC LIMIT 11",
+                (self.clock.unix_seconds * 1000, identifiers[0])))
+        self.assertIn("operator_ecr_publications_page", detail)
+
+    def test_retained_history_is_not_a_lifetime_creation_limit(self):
+        original = self.denied()
+        with self.connection() as conn:
+            row = dict(conn.execute("SELECT * FROM operator_ecr_publications WHERE id=?", (original["id"],)).fetchone())
+            columns = list(row)
+            for _ in range(1024):
+                row["id"] = str(uuid.uuid4())
+                conn.execute("INSERT INTO operator_ecr_publications(" + ",".join(columns) + ") VALUES(" + ",".join("?" for _ in columns) + ")",
+                    [row[column] for column in columns])
+        item = self.create()
+        self.assertEqual(item["status"], "staging")
+        self.assertEqual(len(owner.list_publications_page("admin")["publications"]), 10)
+        self.restart()
+        self.assertEqual(owner.status(item["id"], "admin")["status"], "staging")
+
+    def test_artifact_begin_failure_terminalizes_only_the_matching_staging_parent(self):
+        item = self.create()
+        with self.assertRaises(owner.PublicationConflict):
+            owner.fail_staging(item["id"], "wrong-client")
+        failed = owner.fail_staging(item["id"], self.binding["principal_id"])
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["terminal_reason"], "artifact_staging_failed")
+        self.assertEqual(owner.fail_staging(item["id"], self.binding["principal_id"]), failed)
+        active = self.active()
+        with self.assertRaises(owner.PublicationConflict):
+            owner.fail_staging(active["id"], self.binding["principal_id"])
+
+    def test_notification_pending_is_read_only_current_and_review_scoped(self):
+        item = self.staged()
+        def projection(*, reviewer=None, now=None, query_only=True):
+            with self.connection() as conn:
+                if query_only:
+                    conn.execute("PRAGMA query_only=ON")
+                conn.execute("BEGIN")
+                before = conn.total_changes
+                result = owner.notification_pending(conn, item["id"], reviewer_id=reviewer,
+                    now_epoch_ms=self.clock.unix_seconds * 1000 if now is None else now)
+                self.assertEqual(conn.total_changes, before)
+                return result
+        result = projection()
+        self.assertEqual(result["publication_id"], item["id"])
+        self.assertEqual(result["reviewer_id"], "admin")
+        self.assertNotIn("token_sha256", encoded(result).decode())
+        self.assertIsNone(projection(reviewer="different-admin"))
+        self.assertIsNone(projection(query_only=False))
+        self.assertIsNone(projection(now=item["expires_at_epoch_ms"]))
+        self.binding["token_version"] += 1
+        self.assertIsNone(projection())
+        self.binding["token_version"] -= 1
+        receipt = owner.review(item["id"], "admin")
+        owner.decide(item["id"], "admin", {"decision": "deny", "note": None,
+            **{key: receipt[key] for key in ("review_receipt_id", "review_digest")}})
+        self.assertIsNone(projection())
+
+    def test_readonly_aws_public_binding_checks_generation_and_never_reads_secrets(self):
+        from serverware import operator_catalog_aws as aws
+        identifier, subject = self.binding["credential_id"], str(uuid.uuid4())
+        metadata = {"provider_id": "operator-demo", "provider_subject": subject, "secret_class": aws.SECRET_CLASS,
+            "connection_type": aws.CONNECTION, "credential_kind": "long_term", "expires_at": None}
+        record = {"name": "Synthetic AWS public metadata", "auth_type": aws.KIND, "header_name": None,
+            "connection_type": aws.CONNECTION, "provider_subject": subject, "credential_kind": "long_term",
+            "expires_at": None, "status": "active", "version": 1}
+        with self.connection() as conn:
+            # Deliberately no ciphertext/secret columns exist in this fixture:
+            # the notification-only helper can succeed using public data alone.
+            conn.execute("CREATE TABLE credentials (id TEXT PRIMARY KEY,name TEXT,kind TEXT,metadata TEXT,lifecycle_status TEXT,credential_version INTEGER)")
+            conn.execute("CREATE TABLE operator_catalog_credentials (id TEXT PRIMARY KEY,ordinal INTEGER,data_json TEXT)")
+            conn.execute("CREATE TABLE credential_generations (credential_id TEXT PRIMARY KEY,last_version INTEGER)")
+            conn.execute("INSERT INTO credentials VALUES(?,?,?,?,?,?)", (identifier, record["name"], aws.KIND, encoded(metadata).decode(), "active", 1))
+            conn.execute("INSERT INTO operator_catalog_credentials VALUES(?,?,?)", (identifier, 1, encoded(record).decode()))
+            conn.execute("INSERT INTO credential_generations VALUES(?,?)", (identifier, 1))
+        def observe():
+            with self.connection() as conn:
+                conn.execute("PRAGMA query_only=ON")
+                conn.execute("BEGIN")
+                result = owner._aws_public_current(conn, identifier)
+                self.assertEqual(conn.total_changes, 0)
+                return result
+        self.assertEqual(observe()[1], metadata)
+        with self.connection() as conn:
+            conn.execute("UPDATE credential_generations SET last_version=2")
+        with self.assertRaises(owner.PublicationConflict):
+            observe()
+        with self.connection() as conn:
+            conn.execute("UPDATE credential_generations SET last_version=1")
+            conn.execute("UPDATE credentials SET lifecycle_status='revoked'")
+        with self.assertRaises(owner.PublicationConflict):
+            observe()
 
 
 if __name__ == "__main__":

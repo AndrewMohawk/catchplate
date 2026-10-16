@@ -261,10 +261,14 @@ only Serverware login/scope/trust settings, never AWS keys.
 The matching new proxy build and connected acceptance are pending; the recorded
 live instance remains storage-only for AWS. Review is host-trusted, not TEE or
 YubiKey enforcement. The original 30-minute deadline is clipped to client/AWS
-expiry; never automatically replay an uncertain upload. Four retained artifact
-slots are not automatically reclaimed, and explicit terminal cleanup and ECR
-Slack/webhook event projection remain unfinished. The local MCP delivery excludes
-ECR. Read the [current ECR guide](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-ecr-publication.md)
+expiry; never automatically replay an uncertain upload. Explicit **Retire staged
+files** reclaims a retained slot for eligible terminal publications, preserving
+AWS images and audit/history; uncertain or possible-send outcomes cannot be
+retired. The four stage slots remain bounded, while retained history now has
+ten-record pages rather than a 1,024-publication lifetime stop. ECR review alerts
+and audit events use the existing independently configured Slack/webhook slots;
+no slot is enabled automatically and live delivery remains unverified. The local
+MCP delivery excludes ECR. Read the [current ECR guide](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-ecr-publication.md)
 for commands, retained limits and the exact source-versus-live boundary.
 
 ## Agents, scheduled scripts and existing applications

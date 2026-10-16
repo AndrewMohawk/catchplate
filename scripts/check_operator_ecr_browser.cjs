@@ -7,6 +7,7 @@ const {join} = require('node:path');
 const {ROOT, NOW, IDS, SCOPE, hash, copy, catalog, application, rule, publication} = require('./test_operator_ecr_ui.cjs');
 const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
 const ORIGIN = 'https://ecr-ui.example.test', PREFIX = '/api/operator-demo/ecr-publications';
+const PUBLISHED = '66666666-6666-4666-8666-666666666666', UNCERTAIN = '77777777-7777-4777-8777-777777777777';
 async function main() {
   assert.equal(process.argv.length, 2, 'intercepted smoke accepts no target');
   const directory = mkdtempSync('/tmp/serverware-ecr-ui-'), raw = catalog(), requests = [], errors = [];
@@ -21,7 +22,7 @@ async function main() {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
     const reply = (value, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(value)});
     try {
-      assert.equal(url.origin, ORIGIN); assert(requests.length < 50); requests.push({path, method: request.method()});
+      assert.equal(url.origin, ORIGIN); assert(requests.length < 50); requests.push({path, query: url.search, method: request.method()});
       if (request.method() === 'GET' && path === '/') return route.fulfill({status: 200, contentType: 'text/html', body: html});
       if (request.method() === 'GET' && path === '/favicon.ico') return route.fulfill({status: 204, body: ''});
       if (request.method() === 'GET' && path === '/api/operator-demo/catalog') {
@@ -34,7 +35,11 @@ async function main() {
       if (request.method() === 'GET' && path === '/api/approvals/capabilities') return reply({schema: 'serverware.approvalCapabilities/v1', can_list: true,
         can_open_native_review: false, can_decide: false, reason: 'protected_review_unavailable'});
       if (request.method() === 'GET' && path === '/api/approvals') return reply([]);
-      if (path === PREFIX && request.method() === 'GET') return reply({publications: [...records.values()]});
+      if (path === PREFIX && request.method() === 'GET') {
+        if (!url.search) return reply({publications: [records.get(IDS[3])], next_cursor: IDS[3]});
+        assert.equal(url.search, '?before=' + IDS[3]);
+        return reply({publications: [records.get(IDS[4]), records.get(PUBLISHED), records.get(UNCERTAIN)], next_cursor: null});
+      }
       if (path.startsWith(PREFIX + '/')) {
         const [id, action] = path.slice(PREFIX.length + 1).split('/'); assert(records.has(id)); const item = records.get(id);
         if (!action) {assert.equal(request.method(), 'GET'); return reply(item);}
@@ -42,6 +47,12 @@ async function main() {
         if (action === 'review') {
           assert.deepEqual(body, {}); return reply({publication: item, assurance: 'host-trusted', review_receipt_id: id,
             review_digest: hash(14), review_expires_at_epoch_ms: NOW + 60000});
+        }
+        if (action === 'retire') {
+          assert.equal(id, PUBLISHED); assert.deepEqual(body, {}); assert.equal(item.status, 'published'); item.revision++;
+          if (item.artifact_retirement_status === 'available') {item.artifact_retirement_status = 'pending'; return reply({});}
+          assert.equal(item.artifact_retirement_status, 'pending'); item.artifact_retirement_status = 'retired';
+          item.artifacts_retired = true; item.artifacts_retired_at_epoch_ms = NOW + 1; return reply(item);
         }
         assert.equal(action, 'decision'); assert.deepEqual(body, {decision: 'approve', review_receipt_id: id, review_digest: hash(14), note: null});
         item.status = 'approved'; item.revision++; item.reviewer_id = 'operator:synthetic';
@@ -62,6 +73,8 @@ async function main() {
         item = {...rule(), name: body.name}; raw.access_rules.push(item); key = 'access_rule';
         raw.policy = {policy_hash: hash(2), loaded_policy_hash: hash(2), sequence: 2, activation: 'active'};
         for (const id of [IDS[3], IDS[4]]) records.set(id, publication({id, policy_hash: hash(2)}));
+        records.set(PUBLISHED, publication({id: PUBLISHED, status: 'published', policy_hash: hash(2)}));
+        records.set(UNCERTAIN, publication({id: UNCERTAIN, status: 'uncertain', policy_hash: hash(2)}));
       }
       raw.revision++; return reply({[key]: item, revision: raw.revision, policy: raw.policy, ...extra});
     } catch (error) {errors.push(error.message); await route.abort();}
@@ -88,6 +101,8 @@ async function main() {
     assert(!Object.hasOwn(config, 'publication_id')); assert(!JSON.stringify(config).includes('secret_access_key'));
     await page.locator('nav a[href="#pending-actions"]').click();
     await page.locator('[data-ecr-select="' + IDS[3] + '"]').click();
+    assert.equal(await page.locator('[data-ecr-select="' + IDS[4] + '"]').count(), 0);
+    assert.equal(requests.filter(item => item.path === PREFIX && item.query).length, 0, 'older pages are never fetched automatically');
     await page.getByRole('button', {name: 'Review this image', exact: true}).click();
     await page.getByRole('button', {name: 'Approve this image', exact: true}).waitFor();
     const selected = page.locator('#ecr-publications-selected');
@@ -101,11 +116,37 @@ async function main() {
     await page.screenshot({path: join(directory, 'ecr-review-mobile.png'), fullPage: true});
     await page.getByRole('button', {name: 'Approve this image', exact: true}).click();
     await selected.getByText(/Approval did not publish it/).waitFor();
+    await page.locator('#ecr-publications-load-more').click();
+    await page.locator('[data-ecr-select="' + IDS[4] + '"]').waitFor();
+    assert.equal(requests.filter(item => item.path === PREFIX && item.query).length, 1);
+    assert(!await page.locator('#ecr-publications-load-more').isVisible());
     await page.locator('[data-ecr-select="' + IDS[4] + '"]').click();
     await page.getByRole('button', {name: 'Review this image', exact: true}).click();
     await page.getByRole('button', {name: 'Approve this image', exact: true}).click();
     await page.getByRole('button', {name: 'Check decision status (read only)', exact: true}).click();
     await selected.getByText(/Approval did not publish it/).waitFor();
+    await page.locator('[data-ecr-select="' + UNCERTAIN + '"]').click();
+    await selected.getByText(/Do not automatically retry or resume/).waitFor();
+    assert.equal(await page.getByRole('button', {name: 'Retire staged files', exact: true}).count(), 0);
+    await page.locator('[data-ecr-select="' + PUBLISHED + '"]').click();
+    await page.getByRole('button', {name: 'Retire staged files', exact: true}).click();
+    assert.equal(requests.filter(item => item.path.endsWith('/retire')).length, 0, 'opening confirmation does not retire anything');
+    await page.getByRole('button', {name: 'Confirm retire staged files', exact: true}).waitFor();
+    await page.setViewportSize({width: 1280, height: 960});
+    await page.screenshot({path: join(directory, 'ecr-retirement-desktop.png'), fullPage: true});
+    await page.setViewportSize({width: 390, height: 844});
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    await page.screenshot({path: join(directory, 'ecr-retirement-mobile.png'), fullPage: true});
+    await page.getByRole('button', {name: 'Confirm retire staged files', exact: true}).click();
+    await page.getByRole('button', {name: 'Check retirement status (read only)', exact: true}).waitFor();
+    assert.equal(await page.getByRole('button', {name: 'Retry retiring staged files', exact: true}).count(), 0);
+    await page.getByRole('button', {name: 'Check retirement status (read only)', exact: true}).click();
+    await page.getByRole('button', {name: 'Retry retiring staged files', exact: true}).click();
+    assert.equal(requests.filter(item => item.path.endsWith('/retire')).length, 1, 'read recovery and confirmation never automatically resubmit');
+    await page.getByRole('button', {name: 'Confirm retire staged files', exact: true}).click();
+    await selected.getByText(/Local staged files have been retired/).waitFor();
+    assert((await selected.innerText()).includes('AWS image and the publication’s audit history are unchanged'));
+    assert.equal(await page.getByRole('button', {name: 'Retire staged files', exact: true}).count(), 0);
     await page.locator('nav a[href="#proxy"]').click();
     assert.equal(await page.locator('#ecr-client-publication').inputValue(), '');
     assert(!(await page.locator('#ecr-client-publication-command').textContent()).includes('--execute-write'));
@@ -113,9 +154,10 @@ async function main() {
     await page.waitForFunction(() => document.getElementById('ecr-client-publication-command').textContent.includes('--execute-write'));
     assert((await page.locator('#ecr-client-publication-command').innerText()).includes('--publication ' + IDS[3]));
     assert.equal(requests.filter(item => item.path.endsWith('/decision')).length, 2);
-    assert.equal(requests.filter(item => item.method === 'POST').length, 6);
+    assert.equal(requests.filter(item => item.path.endsWith('/retire')).length, 2);
+    assert.equal(requests.filter(item => item.method === 'POST').length, 8);
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ok: true, scope: 'intercepted ECR credential→client→scope→config→compound review→explicit publication selection',
+    console.log(JSON.stringify({ok: true, scope: 'intercepted ECR setup, compound review, explicit paging, local retirement recovery and publication selection',
       requests, errors, providerRequests: 0, liveRequests: 0, screenshots: directory}));
   } catch (error) {
     await page.screenshot({path: join(directory, 'failure.png'), fullPage: true});

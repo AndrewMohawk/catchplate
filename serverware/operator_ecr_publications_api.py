@@ -30,7 +30,7 @@ _UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
 _SHA = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _CLIENT_MUTATION = re.compile(re.escape(CLIENT) + "/" + _UUID
     + r"/(?:manifest|submit|activate|blobs/[0-9a-f]{64}/parts/(?:0|[1-9][0-9]{0,9}))\Z")
-_ADMIN_MUTATION = re.compile(re.escape(ADMIN) + "/" + _UUID + r"/(?:review|decision)\Z")
+_ADMIN_MUTATION = re.compile(re.escape(ADMIN) + "/" + _UUID + r"/(?:review|decision|retire)\Z")
 _SLOTS = asyncio.BoundedSemaphore(2)
 _CREATE_FIELDS = {"application_id", "access_rule_id", "expected_policy_hash", "manifest_digest", "artifact_sha256"}
 
@@ -46,8 +46,8 @@ def _identifier(value):
     return value
 
 
-def _exact(request, path, *, bodyless=False):
-    if (request.scope.get("raw_path") != path.encode("ascii") or request.scope.get("query_string")
+def _exact(request, path, *, bodyless=False, query=b""):
+    if (request.scope.get("raw_path") != path.encode("ascii") or request.scope.get("query_string", b"") != query
             or bodyless and (request.headers.getlist("content-length") not in ([], ["0"])
                 or request.headers.getlist("transfer-encoding"))):
         admission._reject(400, "ECR publication transport refused")
@@ -145,7 +145,13 @@ def _create(identity, value):
         raise owner.PublicationConflict()
     stage = artifacts.configured_store()
     result = owner.create(**value, principal_id=identity[0])
-    stage.begin(result["id"])
+    try:
+        stage.begin(result["id"])
+    except Exception:
+        # A refused disk slot must not leave a phantom active publication until
+        # expiry. There has been no provider dispatch or signing reservation.
+        owner.fail_staging(result["id"], identity[0])
+        raise
     return result
 
 
@@ -174,11 +180,11 @@ def _client_operation(identity, identifier, action, raw=None, digest=None, offse
     raise ValueError()
 
 
-async def _result(function, *args, status_code=200):
+async def _result(function, *args, status_code=200, maximum=65536):
     from serverware import app
     try:
         result = await app._run_bounded_blocking(_SLOTS, function, *args)
-        if len(json.dumps(result, ensure_ascii=True, allow_nan=False).encode("ascii")) > 65536:
+        if len(json.dumps(result, ensure_ascii=True, allow_nan=False).encode("ascii")) > maximum:
             raise ValueError()
         return JSONResponse(result, status_code=status_code, headers=admission._HEADERS)
     except owner.PublicationNotFound:
@@ -231,7 +237,11 @@ async def client_action(identifier: str, action: str, request: Request):
 
 
 def _administrator(request, identity, *, mutation):
-    admission._admit(request, mutation=mutation)
+    # This surface owns its exact query grammar (the history cursor only).
+    # Mutations retain the catalog's no-query and same-origin admission.
+    admission._profile()
+    if mutation:
+        admission._admit(request, mutation=True)
     if (identity.user_id != config.ADMIN_USER_ID or not identity.has_any_role({"admin"})
             or mutation and identity.auth_method != "admin-token-header"):
         admission._reject(403, "configured operator administrator required")
@@ -240,8 +250,17 @@ def _administrator(request, identity, *, mutation):
 @router.get(ADMIN)
 async def publications(request: Request, identity: auth.AdminIdentity = Depends(admission._admin_identity)):
     _administrator(request, identity, mutation=False)
-    _exact(request, ADMIN, bodyless=True)
-    return await _result(lambda: {"publications": owner.list_publications(identity.user_id)})
+    query = request.scope.get("query_string", b"")
+    before = None
+    if query:
+        if re.fullmatch(("before=" + _UUID).encode("ascii"), query) is None:
+            admission._reject(400, "ECR publication cursor refused")
+        before = query[len(b"before="):].decode("ascii")
+    _exact(request, ADMIN, bodyless=True, query=query)
+    # A complete verified artifact can approach the single-record response
+    # bound. Page history rather than serializing every retained image at once.
+    return await _result(lambda: owner.list_publications_page(identity.user_id, before=before),
+        maximum=1048576)
 
 
 @router.get(ADMIN + "/{identifier}")
@@ -257,12 +276,13 @@ async def decision(identifier: str, action: str, request: Request,
         identity: auth.AdminIdentity = Depends(admission._admin_identity)):
     _administrator(request, identity, mutation=True)
     _identifier(identifier)
-    if action not in {"review", "decision"}:
+    if action not in {"review", "decision", "retire"}:
         admission._reject(404, "ECR publication operation not found")
     _exact(request, ADMIN + "/" + identifier + "/" + action)
     value = await _body(request, 2048)
-    if action == "review":
+    if action in {"review", "retire"}:
         if value != {}:
-            admission._reject(422, "ECR publication review requires an empty object")
-        return await _result(owner.review, identifier, identity.user_id)
+            admission._reject(422, "ECR publication operation requires an empty object")
+        operation = owner.review if action == "review" else owner.retire_artifacts
+        return await _result(operation, identifier, identity.user_id)
     return await _result(owner.decide, identifier, identity.user_id, value)

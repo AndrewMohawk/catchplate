@@ -49,6 +49,7 @@ const publication = (patch = {}) => ({schema: 'serverware.ecrPublication/v1', id
   application_id: IDS[1], access_rule_id: IDS[2], principal_id: application().principal_id, route_id: rule().route_id, credential_id: IDS[0],
   credential_generation: 1, policy_hash: hash(1), scope: SCOPE, manifest_digest: hash(10), artifact_sha256: hash(13), artifact: artifact(),
   created_at_epoch_ms: NOW, expires_at_epoch_ms: NOW + 3600000, revision: 1, child: null, progress: null,
+  artifacts_retired: false, artifact_retirement_status: 'available', artifacts_retired_at_epoch_ms: null,
   reviewer_id: null, decision_note: null, terminal_reason: null, ...patch});
 function load() {
   const files = JSON.parse(execFileSync('python3', ['-B', '-c', 'import json; from serverware.operator_demo_portal import SCRIPT_FILES; print(json.dumps(SCRIPT_FILES))'],
@@ -87,12 +88,32 @@ function main() {
     assert.throws(() => api.projectEcrPublication(publication(patch)));
   const badImage = artifact(); badImage.blobs[0].size++; assert.throws(() => api.projectEcrArtifact(badImage, hash(10)));
   assert.throws(() => api.projectEcrPublications({publications: [source, source]}));
+  assert.equal(api.projectEcrPublications({publications: [source]}).next_cursor, null);
+  assert.equal(api.projectEcrPublications({publications: [source], next_cursor: source.id}).next_cursor, source.id);
+  for (const value of [{publications: [], next_cursor: IDS[3]}, {publications: [source], next_cursor: IDS[4]},
+    {publications: [source], next_cursor: 'invalid'}, {publications: Array.from({length: 11}, (_, n) => publication({id: n.toString(16).padStart(8, '0') + '-4444-4444-8444-444444444444'}))}])
+    assert.throws(() => api.projectEcrPublications(value));
+  for (const status of ['published', 'denied', 'expired', 'failed']) {
+    assert(api.ecrPublicationRetirable(api.projectEcrPublication(publication({status}))));
+    assert(api.ecrPublicationRetirable(api.projectEcrPublication(publication({status, artifact_retirement_status: 'pending'}))));
+    assert.equal(api.ecrPublicationRetirable(api.projectEcrPublication(publication({status, child: {id: IDS[4], action: 'PutImage', status: 'possible_send', request_sha256: hash(15)}}))), false);
+  }
+  for (const status of ['staging', 'awaiting_review', 'approved', 'active', 'suspended', 'uncertain'])
+    assert.equal(api.ecrPublicationRetirable(api.projectEcrPublication(publication({status}))), false);
+  const retired = api.projectEcrPublication(publication({status: 'published', artifacts_retired: true, artifact_retirement_status: 'retired', artifacts_retired_at_epoch_ms: NOW + 1}));
+  assert.equal(api.ecrPublicationRetirable(retired), false);
+  const legacy = publication({status: 'published'});
+  for (const key of ['artifacts_retired', 'artifact_retirement_status', 'artifacts_retired_at_epoch_ms']) delete legacy[key];
+  assert.equal(api.ecrPublicationRetirable(api.projectEcrPublication(legacy)), false);
+  for (const patch of [{artifacts_retired: true}, {artifact_retirement_status: 'unknown'}, {artifact_retirement_status: 'pending'},
+    {status: 'published', artifact_retirement_status: 'retired', artifacts_retired: true}, {artifacts_retired_at_epoch_ms: NOW}])
+    assert.throws(() => api.projectEcrPublication(publication(patch)));
   const receipt = {publication: source, assurance: 'host-trusted', review_receipt_id: IDS[4], review_digest: hash(14), review_expires_at_epoch_ms: NOW + 60000};
   assert(api.projectEcrReview(receipt, publicValue));
   for (const patch of [{scope: {...SCOPE, image_tag: 'different'}}, {policy_hash: hash(99)}, {credential_generation: 2}, {id: IDS[4]}])
     assert.throws(() => api.projectEcrReview({...receipt, publication: publication(patch)}, publicValue));
   assert.throws(() => api.projectEcrReview({...receipt, review_expires_at_epoch_ms: NOW}, publicValue));
-  console.log(JSON.stringify({ok: true, groups: 8, scope: 'pure ECR capability, typed scope, config and compound-review contracts', network: false}));
+  console.log(JSON.stringify({ok: true, groups: 10, scope: 'pure ECR capability, typed scope, config, compound review, paging and local retirement contracts', network: false}));
 }
 if (require.main === module) main();
 module.exports = {ROOT, NOW, IDS, SCOPE, CAPABILITY, hash, copy, credential, application, rule, catalog, artifact, publication, load};

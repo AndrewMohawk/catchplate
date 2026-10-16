@@ -16,6 +16,8 @@ import re
 import sqlite3
 import uuid
 
+from serverware import operator_notification_ecr as ecr
+
 SCHEMA = "serverware.operatorNotification/v1"
 MAX_BATCH = 64
 MAX_EVENT_BYTES = 16_384
@@ -104,6 +106,7 @@ _CATALOG = {
 }
 _SUMMARIES.update({"operator_catalog." + key: value for key, value in _CATALOG.items()})
 _SUMMARIES.update(_HOST_SUMMARIES)
+_SUMMARIES.update(ecr.SUMMARIES)
 _GITHUB_APP_CREATED = "operator_catalog.credential.github_app_created"
 _GITHUB_APP_KEY_REPLACED = "operator_catalog.credential.github_app_key_replaced"
 _GITHUB_APP_EVENTS = {_GITHUB_APP_CREATED, _GITHUB_APP_KEY_REPLACED}
@@ -140,7 +143,7 @@ _SETUP_IDS = {"operator_catalog." + kind + "." + action: (prefix, ":" + action)
     for kind, prefix in (("upstream_setup", "operator-upstream-setup:"),
                          ("google_setup", "operator-google-setup:"))
     for action in ("prepared", "cancelled", "activated")}
-ACTION_EVENT_TYPES = tuple(sorted(("approval.requested", "control_plane.approval.requested", HOST_REQUESTED, *NATIVE_EVENT_TYPES)))
+ACTION_EVENT_TYPES = tuple(sorted(("approval.requested", "control_plane.approval.requested", HOST_REQUESTED, ecr.STAGED, *NATIVE_EVENT_TYPES)))
 AUDIT_EVENT_TYPES = tuple(sorted((*_SUMMARIES, *NATIVE_EVENT_TYPES)))
 _LEGACY = {"approval_request_id", "route_id", "method", "url_commitment", "expires_at"}
 _JIT = _LEGACY | {"principal_id", "credential_id", "credential_version", "policy_hash",
@@ -777,7 +780,9 @@ def _approval(conn, row, event, now):
 
 
 def _audit_projection(row, event):
-    if row["event_type"] in _HOST_SUMMARIES:
+    if row["event_type"] in ecr.SUMMARIES:
+        details = ecr.details(row, event)
+    elif row["event_type"] in _HOST_SUMMARIES:
         details = _host_details(row, event)
     elif row["event_type"] in _GITHUB_APP_EVENTS | {_X_CONFIGURATION_SAVED}:
         details = _provider_configuration_details(row, event)
@@ -810,11 +815,13 @@ def _project(conn, row, now):
     except (ValueError, TypeError, OverflowError):
         return None
     try:
-        if row["event_type"] == HOST_REQUESTED:
+        if row["event_type"] == ecr.STAGED:
+            action = ecr.action(conn, row, event, now)
+        elif row["event_type"] == HOST_REQUESTED:
             action = _host_projection(row, event) if _host_pending(conn, row, event, now) else None
         else:
             action = _approval(conn, row, event, now)
-    except (ValueError, TypeError, OverflowError, sqlite3.Error):
+    except (ValueError, TypeError, OverflowError, KeyError, AttributeError, sqlite3.Error):
         action = None  # No source owner/schema means no action claim.
     return SourceEvent(row["event_id"], row["event_hash"], row["created_at"], row["event_type"], audit, action)
 

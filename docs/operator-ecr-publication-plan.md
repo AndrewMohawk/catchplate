@@ -8,9 +8,13 @@ verified artifact staging, host-trusted whole-image review, explicit UUID
 activation and the five stock Boto3 calls. Its matching Rust build and connected
 acceptance remain pending; it is not deployed or real-AWS verified. Generic AWS
 credential release remains closed: the dedicated signer leases encrypted headers
-for one exact request, not the AWS tuple. Four retained artifact slots and 1,024
-parent records currently bound storage; terminal cleanup and explicit ECR
-notification projection remain required work.
+for one exact request, not the AWS tuple. Explicit eligible-terminal retirement
+now reclaims the four retained artifact slots without deleting AWS images or
+owner/audit history; uncertain or possible-send records cannot be retired.
+The 1,024-parent lifetime stop is removed and indexed history pages contain at
+most ten records. ECR audit events and current staged-review alerts now feed the
+existing separate notification slots without automatic enablement or replay.
+These changes have focused component checks, not live-provider/deployment proof.
 
 ## Historical planner and future native assurance
 

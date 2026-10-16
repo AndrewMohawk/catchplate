@@ -3,9 +3,10 @@
 The publication owner, not this module, authorizes a current client and performs
 its status/CAS checks before each call. Paths are server configuration plus an
 opaque canonical UUID; uploaded bytes never choose paths. Each stage is new and
-retained, including failures. There is deliberately no automatic deletion or
-reuse. Four retained stages bound blob storage to four GiB, plus bounded image
-manifests/metadata. The caller owns HTTP deadlines and bounded request reads.
+retained, including failures, until explicit owner-authorized retirement. There
+is deliberately no automatic deletion or reuse. Four retained stages bound blob
+storage to four GiB, plus bounded image manifests/metadata. The caller owns HTTP
+deadlines and bounded request reads.
 
 This emits the existing ecrArtifactStage/v1 format, but a marker is not proof of
 content. Finalization and every later capture verify the actual durable streams
@@ -276,6 +277,126 @@ def _marker(image):
         "manifestDigest": image.manifest.digest, "unsigned": True}
 
 
+_RETIREMENT_METADATA = {
+    "manifest.json": artifact.MAX_MANIFEST_BYTES, "manifest.pending": artifact.MAX_MANIFEST_BYTES,
+    "artifact.json": artifact.MAX_MANIFEST_BYTES, "artifact.pending": artifact.MAX_MANIFEST_BYTES,
+    "stage.json": 4096, "stage.pending": 4096,
+}
+
+
+def _retirement_file(access, directory, name, limit):
+    """Hold an exact private file; permit only a subsequently proven local alias."""
+    fd = os.open(name, _READ, dir_fd=directory)
+    access.stack.callback(os.close, fd)
+    info = os.fstat(fd)
+    _require(info.st_nlink in (1, 2) and 0 <= info.st_size <= limit
+        and (name.endswith(".pending") or info.st_size > 0))
+    identity = _file_identity(info, links=info.st_nlink)
+    _require(_file_identity(os.stat(name, dir_fd=directory,
+        follow_symlinks=False), links=info.st_nlink) == identity)
+    return {"directory": directory, "name": name, "fd": fd, "identity": identity,
+        "links": info.st_nlink, "inode": identity[:2]}
+
+
+def _retirement_read(access, entry):
+    result = bytearray()
+    while len(result) < entry["identity"][5]:
+        access.check()
+        _require(_file_identity(os.fstat(entry["fd"]), links=entry["links"]) == entry["identity"])
+        raw = os.pread(entry["fd"], min(_CHUNK, entry["identity"][5] - len(result)), len(result))
+        _require(type(raw) is bytes and bool(raw))
+        result.extend(raw)
+    _require(_file_identity(os.stat(entry["name"], dir_fd=entry["directory"],
+        follow_symlinks=False), links=entry["links"]) == entry["identity"])
+    return bytes(result)
+
+
+def _retirement_roster(access, expected_manifest_digest):
+    """Validate the entire bounded remaining tree before the first deletion."""
+    metadata = {}
+    has_blobs = False
+    with os.scandir(access.stage) as entries:
+        for entry in entries:
+            _require(entry.name == "blobs" or entry.name in _RETIREMENT_METADATA)
+            if entry.name == "blobs":
+                has_blobs = True
+            else:
+                metadata[entry.name] = _retirement_file(access, access.stage, entry.name,
+                    _RETIREMENT_METADATA[entry.name])
+    description = None
+    if "manifest.json" in metadata:
+        raw = _retirement_read(access, metadata["manifest.json"])
+        _require(_hash(raw) == expected_manifest_digest)
+        description = artifact.parse_manifest(raw)
+    else:
+        # Initial upload may have failed before publishing a manifest. During
+        # partial retirement the manifest is always removed last. In either
+        # case no other metadata or nonempty blob directory can be legitimate.
+        _require(set(metadata) <= {"manifest.pending"})
+    blobs, blob_entries = None, []
+    if has_blobs:
+        blobs = access.directory(access.stage, "blobs", private=True)
+        roster = {} if description is None else {name: blob.size for blob in description.blobs
+            for name in (blob.digest[7:], blob.digest[7:] + ".pending")}
+        with os.scandir(blobs) as entries:
+            for entry in entries:
+                _require(entry.name in roster)
+                held = _retirement_file(access, blobs, entry.name, roster[entry.name])
+                _require(entry.name.endswith(".pending") or held["identity"][5] == roster[entry.name])
+                blob_entries.append(held)
+    all_entries = [*blob_entries, *metadata.values()]
+    by_name = {(entry["directory"], entry["name"]): entry for entry in all_entries}
+    for entry in all_entries:
+        if not entry["name"].endswith(".pending"):
+            pending = by_name.get((entry["directory"], entry["name"].removesuffix(".json") + ".pending"))
+            _require(pending is None or pending["inode"] == entry["inode"])
+    aliases = {}
+    for entry in all_entries:
+        aliases.setdefault(entry["inode"], []).append(entry)
+    for group in aliases.values():
+        _require(len(group) in (1, 2) and all(entry["links"] == len(group) for entry in group))
+        if len(group) == 2:
+            # An interrupted no-replace link can leave exactly its two local
+            # aliases. No external hardlink or arbitrary same-inode names pass.
+            first, second = group
+            _require(first["directory"] == second["directory"])
+            names = {first["name"], second["name"]}
+            finals = [name for name in names if not name.endswith(".pending")]
+            _require(len(finals) == 1
+                and names == {finals[0], finals[0].removesuffix(".json") + ".pending"})
+    access.check()
+    return blobs, sorted(blob_entries, key=lambda item: item["name"]), metadata, aliases
+
+
+def _retirement_unlink(access, entry, remaining):
+    access.check()
+    count = remaining[entry["inode"]]
+    held = _file_identity(os.fstat(entry["fd"]), links=count)
+    # Only ctime can legitimately change as our previous alias is unlinked.
+    _require(held[:7] == entry["identity"][:7]
+        and _file_identity(os.stat(entry["name"], dir_fd=entry["directory"],
+            follow_symlinks=False), links=count) == held)
+    os.unlink(entry["name"], dir_fd=entry["directory"])
+    _require(_file_identity(os.fstat(entry["fd"]), links=count - 1)[:7] == held[:7])
+    _absent(entry["directory"], entry["name"])
+    remaining[entry["inode"]] -= 1
+    return entry["identity"][5] if count == 1 else 0
+
+
+def _retirement_rmdir(access, parent, name, descriptor):
+    access.check()
+    _roster(descriptor, set())
+    identity = _directory_identity(os.fstat(descriptor), private=True)
+    _require(_directory_identity(os.stat(name, dir_fd=parent,
+        follow_symlinks=False), private=True) == identity)
+    os.rmdir(name, dir_fd=parent)
+    _require(os.fstat(descriptor).st_nlink == 0)
+    _absent(parent, name)
+    access.directories = [row for row in access.directories if row[0] != descriptor]
+    access.check()
+    os.fsync(parent)
+
+
 class ArtifactStore:
     """Dedicated existing private root; no path comes from an HTTP caller.
 
@@ -496,6 +617,60 @@ class ArtifactStore:
         finally:
             if sealed is not None:
                 sealed.close()
+
+    @_safe
+    def retire(self, stage_id, *, expected_manifest_digest):
+        """Explicitly remove only this terminal publication's local stage.
+
+        The owner MUST durably admit retirement first, keep its publication and
+        audit records, close any sealed handle, and exclude uncertain or
+        possible-send work. This helper has no publication authority or provider
+        access. It never runs automatically and never recursively traverses.
+
+        A partial filesystem failure retains remaining files and reports
+        completion_uncertain. An explicitly requested retry can finish the
+        same admitted retirement, including an already absent stage. Counts
+        cover only this call; removed_bytes counts last inode links, not aliases.
+        """
+        self._check()
+        _identifier(stage_id)
+        _digest(expected_manifest_digest)
+        changed = False
+        try:
+            with self._lock, _Access(self) as access:
+                fcntl.flock(access.root, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                try:
+                    access.stage = access.directory(access.root, stage_id, private=True)
+                except FileNotFoundError:
+                    access.check()
+                    os.fsync(access.root)
+                    return {"stage_id": stage_id, "retired": True, "removed_files": 0, "removed_bytes": 0}
+                fcntl.flock(access.stage, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                blobs, blob_entries, metadata, aliases = _retirement_roster(access, expected_manifest_digest)
+                remaining = {inode: len(entries) for inode, entries in aliases.items()}
+                removed_files = removed_bytes = 0
+                for entry in blob_entries:
+                    changed = True
+                    removed_bytes += _retirement_unlink(access, entry, remaining)
+                    removed_files += 1
+                if blobs is not None:
+                    changed = True
+                    os.fsync(blobs)
+                    _retirement_rmdir(access, access.stage, "blobs", blobs)
+                # Manifest last keeps retries bound to the declared blob roster.
+                for name in ("stage.pending", "stage.json", "artifact.pending", "artifact.json",
+                        "manifest.pending", "manifest.json"):
+                    if name in metadata:
+                        changed = True
+                        removed_bytes += _retirement_unlink(access, metadata[name], remaining)
+                        removed_files += 1
+                os.fsync(access.stage)
+                changed = True
+                _retirement_rmdir(access, access.root, stage_id, access.stage)
+                return {"stage_id": stage_id, "retired": True,
+                    "removed_files": removed_files, "removed_bytes": removed_bytes}
+        except Exception:
+            raise ArtifactStoreError(completion_uncertain=changed) from None
 
 
 @_safe

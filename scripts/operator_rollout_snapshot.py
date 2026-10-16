@@ -14,6 +14,10 @@ already-created empty X custody directory. It does not initialize that directory
 Within retained managed-X-unconfigured files, --x-quota-transition separately
 checks the exact additive quota initialization or its unchanged empty state.
 It performs no initialization and preserves all preexisting comparison rules.
+--ecr-initialization separately admits only the exact first ECR schema, one
+process-owner row, empty publication/child tables and a new empty private
+app-data/ecr-artifacts directory. It requires no audit append and preserves the
+existing migration-timestamp-only exception; it never starts or stages a job.
 Inventory requires an explicit private-copy or stopped-files acknowledgement.
 The latter records the caller's prerequisite, not proof from this tool: root
 must separately verify that the relevant services are stopped before capturing
@@ -53,6 +57,14 @@ DB_MAIN = "app-data/serverware.sqlite3"
 DB_FILES = frozenset(DB_MAIN + suffix for suffix in ("", "-wal", "-shm", "-journal"))
 DERIVED = frozenset("app-data/decision-gate-ca-" + kind + ".pem" for kind in ("cert", "key"))
 NOTIFICATIONS = frozenset("operator_notification_" + suffix for suffix in ("meta", "config", "operations", "deliveries", "attempts"))
+ECR_DIRECTORY = "app-data/ecr-artifacts"
+ECR_TABLES = frozenset("operator_ecr_" + name for name in ("owner", "publications", "child_ids"))
+ECR_OBJECTS = ECR_TABLES | {"operator_ecr_publications_" + name for name in ("active", "page", "client_page")} | {
+    "sqlite_autoindex_operator_ecr_publications_1", "sqlite_autoindex_operator_ecr_publications_2",
+    "sqlite_autoindex_operator_ecr_child_ids_1"}
+# Actual SQLite SQL, including retirement columns, partial/pagination indexes and
+# automatic indexes. The focused test independently rejoins the owner initializer.
+ECR_SCHEMA_SHA256 = "822e4c88b66dca18493a015cfcb42453c37ec66de334d7c54d6f95d4b11b8932"
 MAX_OBJECTS, MAX_MEMBERS, MAX_ROWS = 4096, 2048, 65536
 MAX_FILE, MAX_DB, MAX_TOTAL = 32 * 1024**2, 256 * 1024**2, 1024**3
 
@@ -211,9 +223,26 @@ def content(info):
     return {key: value for key, value in info.items() if key not in {"dev", "ino"}}
 
 
-def compare_files(before, after, *, identities, managed_transition=None, managed_x_unconfigured=False):
+def _ecr_directory_addition(before, after):
+    names = lambda snapshot: {name for name in snapshot["persistent"]
+        if name == ECR_DIRECTORY or name.startswith(ECR_DIRECTORY + "/")}
+    require(not names(before) and names(after) == {ECR_DIRECTORY}, "ecr_artifact_directory_not_fresh_empty")
+    directory, database = after["persistent"][ECR_DIRECTORY], after["persistent"][DB_MAIN]
+    require(directory.get("kind") == "directory" and directory.get("mode") == 0o700
+        and all(directory.get(key) == database[key] for key in ("dev", "uid", "gid")), "ecr_artifact_directory_identity")
+    identity = directory.get("dev"), directory.get("ino")
+    require(all(identity != (info["dev"], info["ino"])
+        for area in ("persistent", "custody", "provider_custody", "x_custody") if area in before
+        for info in before[area].values() if info["kind"] == "directory"), "ecr_artifact_directory_alias")
+    return {ECR_DIRECTORY}
+
+
+def compare_files(before, after, *, identities, managed_transition=None, managed_x_unconfigured=False,
+        ecr_initialization=False):
     require(managed_transition in {None, "first", "retained"}, "managed_options")
     require(not managed_x_unconfigured or managed_transition is not None, "managed_x_options")
+    require(type(ecr_initialization) is bool and (not ecr_initialization
+        or managed_transition != "first"), "ecr_initialization_options")
     require(before["schema"] == after["schema"] == (MANAGED_X_SCHEMA if managed_x_unconfigured
         else MANAGED_SCHEMA if managed_transition else SCHEMA))
     added = set()
@@ -228,6 +257,8 @@ def compare_files(before, after, *, identities, managed_transition=None, managed
         require(gate_members(before) == (initial if managed_transition == "first" else retained)
             and gate_members(after) == retained, "gate_transition")
         added = retained - initial if managed_transition == "first" else set()
+    if ecr_initialization:
+        added |= _ecr_directory_addition(before, after)
     require(((set(before["persistent"]) - DB_FILES) | added) == set(after["persistent"]) - DB_FILES, "file_inventory_changed")
     require(set(before["custody"]) == set(after["custody"]), "custody_inventory_changed")
     recreated = []
@@ -280,7 +311,34 @@ def row_digest(columns, values):
     return digest([columns, sorted((canonical(row), count) for row, count in Counter(values).items())])
 
 
-def compare_databases(before, after, *, x_quota_transition=None):
+def _ecr_schema_addition(before, after):
+    require(not any(value.lower().startswith("operator_ecr_") for row in before for value in row[1:3]),
+        "ecr_schema_not_fresh")
+    added = [row for row in after if row[1] in ECR_OBJECTS]
+    require(len(added) == len(ECR_OBJECTS) and {row[1] for row in added} == ECR_OBJECTS
+        and digest(added) == ECR_SCHEMA_SHA256, "ecr_initialization_schema")
+    require(not any(row[1] not in ECR_OBJECTS and any(value.lower().startswith("operator_ecr_")
+        for value in row[1:3]) for row in after), "ecr_initialization_schema")
+    return [row for row in after if row[1] not in ECR_OBJECTS]
+
+
+def _ecr_initial_state(after, prior_audit_count, current_audit_count):
+    owners = after.execute("SELECT singleton,schema_version,owner_process,boot_id FROM operator_ecr_owner LIMIT 2").fetchall()
+    uuid4 = r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+    require(len(owners) == 1 and all(type(value) is int and value == 1 for value in owners[0][:2])
+        and all(type(value) is str and re.fullmatch(uuid4, value) for value in owners[0][2:]), "ecr_initialization_owner")
+    for table in sorted(ECR_TABLES - {"operator_ecr_owner"}):
+        require(after.execute('SELECT 1 FROM "' + table + '" LIMIT 1').fetchone() is None,
+            "ecr_initialization_not_empty", table)
+    require(prior_audit_count == current_audit_count, "ecr_initialization_audit_delta")
+    return {"schema_sha256": ECR_SCHEMA_SHA256, "added_schema_objects": sorted(ECR_OBJECTS),
+        "owner_row_count": 1, "owner_row_sha256": digest(owners[0]),
+        "empty_usage_tables": sorted(ECR_TABLES - {"operator_ecr_owner"}), "audit_append_count": 0}
+
+
+def compare_databases(before, after, *, x_quota_transition=None, ecr_initialization=False):
+    require(type(ecr_initialization) is bool and (not ecr_initialization
+        or x_quota_transition in {None, "retained"}), "ecr_initialization_options")
     schemas = []
     for connection in (before, after):
         connection.create_function("regexp", 2, lambda pattern, value: None if value is None else
@@ -292,12 +350,13 @@ def compare_databases(before, after, *, x_quota_transition=None):
         require(0 < len(schema) <= MAX_OBJECTS, "schema_bound")
         schemas.append(schema)
     require(x_quota_transition in {None, "first", "retained"}, "x_quota_options")
-    added_tables = frozenset()
+    compared_schemas = [schemas[0], _ecr_schema_addition(*schemas) if ecr_initialization else schemas[1]]
+    added_tables = ECR_TABLES if ecr_initialization else frozenset()
     if x_quota_transition:
         import operator_rollout_x_quota as quota
-        added_tables = quota.schema_transition(*schemas, x_quota_transition, require)
+        added_tables |= quota.schema_transition(*compared_schemas, x_quota_transition, require)
     else:
-        require(schemas[0] == schemas[1], "database_schema_changed")
+        require(compared_schemas[0] == compared_schemas[1], "database_schema_changed")
     tables = sorted(row[1] for row in schemas[0] if row[0] == "table")
     require({"audit_events", "metadata_audit_outbox"} <= set(tables), "required_tables_missing")
     present = NOTIFICATIONS & set(tables)
@@ -329,16 +388,20 @@ def compare_databases(before, after, *, x_quota_transition=None):
     if x_quota_transition:
         quota_result = quota.initialization(before, after, x_quota_transition,
             len(old_audit), len(new_audit), require)
-        for table in sorted(added_tables):
-            columns_added, values_added = rows(after, table)
-            authority[table] = {"count": len(values_added), "sha256": row_digest(columns_added, values_added)}
+    ecr_result = _ecr_initial_state(after, len(old_audit), len(new_audit)) if ecr_initialization else None
+    for table in sorted(added_tables):
+        columns_added, values_added = rows(after, table)
+        authority[table] = {"count": len(values_added), "sha256": row_digest(columns_added, values_added)}
     return {"schema_object_count": len(schemas[1]), "complete_schema_sha256": digest(schemas[1]),
         "all_non_audit_tables": authority, "notification_tables": sorted(present), "migration_timestamps": migrations,
         "prior_audit_count": len(old_audit), "current_audit_count": len(new_audit),
         "prior_audit_prefix_sha256": digest([columns, old_audit]), "database_schema_equal": schemas[0] == schemas[1],
         **({"x_quota_initialization": quota_result, "prior_complete_schema_sha256": digest(schemas[0]),
             "prior_schema_object_count": len(schemas[0]), "preexisting_schema_preserved": True}
-            if quota_result is not None else {})}
+            if quota_result is not None else {}),
+        **({"ecr_initialization": ecr_result, "prior_complete_schema_sha256": digest(schemas[0]),
+            "prior_schema_object_count": len(schemas[0]), "preexisting_schema_preserved": True}
+            if ecr_result is not None else {})}
 
 
 def managed_database_identity(connection, snapshot, *, managed_x_unconfigured=False):
@@ -457,7 +520,9 @@ def load_receipt(filename, *, managed_unconfigured=False, managed_x_unconfigured
 def compare(before_root, after_root, before_custody, after_custody, before_inventory, after_inventory,
         *, managed_transition=None, before_provider_custody=None, after_provider_custody=None,
         managed_x_unconfigured=False, before_x_custody=None, after_x_custody=None,
-        x_quota_transition=None):
+        x_quota_transition=None, ecr_initialization=False):
+    require(type(ecr_initialization) is bool and (not ecr_initialization
+        or managed_transition != "first" and x_quota_transition in {None, "retained"}), "ecr_initialization_options")
     require(x_quota_transition in {None, "first", "retained"}
         and (x_quota_transition is None or (managed_x_unconfigured and managed_transition == "retained")),
         "x_quota_options")
@@ -484,9 +549,9 @@ def compare(before_root, after_root, before_custody, after_custody, before_inven
         require(all({name: content(info) for name, info in copied[area].items()}
             == {name: content(info) for name, info in recorded[area].items()} for area in areas), "copy_not_bound_to_inventory")
     compare_files(before, after, identities=False, managed_transition=managed_transition,
-        managed_x_unconfigured=managed_x_unconfigured)
+        managed_x_unconfigured=managed_x_unconfigured, ecr_initialization=ecr_initialization)
     recreated = compare_files(before_inventory, after_inventory, identities=True, managed_transition=managed_transition,
-        managed_x_unconfigured=managed_x_unconfigured)
+        managed_x_unconfigured=managed_x_unconfigured, ecr_initialization=ecr_initialization)
     with tempfile.TemporaryDirectory(prefix="operator-rollout-sqlite-") as temporary, ExitStack() as stack:
         scratch = Path(temporary)
         connections = []
@@ -496,7 +561,8 @@ def compare(before_root, after_root, before_custody, after_custody, before_inven
             connection = private_database(root, snapshot, directory)
             stack.callback(connection.close)
             connections.append(connection)
-        database = compare_databases(*connections, x_quota_transition=x_quota_transition)
+        database = compare_databases(*connections, x_quota_transition=x_quota_transition,
+            ecr_initialization=ecr_initialization)
         managed = None
         if managed_transition:
             managed = managed_database_identity(connections[0], before, managed_x_unconfigured=managed_x_unconfigured)
@@ -518,6 +584,8 @@ def compare(before_root, after_root, before_custody, after_custody, before_inven
             x_custody_empty=True, x_custody_live_identity_preserved=True)
     if x_quota_transition:
         result["schema"] = "serverware.operatorRolloutComparison/v4"
+    if ecr_initialization:
+        result.update(schema="serverware.operatorRolloutComparison/v5", ecr_artifact_directory_added=ECR_DIRECTORY)
     return result
 
 
@@ -551,6 +619,8 @@ def main():
     comparison.add_argument("--x-quota-transition", choices=("first", "retained"),
         help="Exact quota initialization only with retained managed-X-unconfigured files. "
             "Existing migration timestamp exception still needs the caller's separately bounded check.")
+    comparison.add_argument("--ecr-initialization", action="store_true",
+        help="Exact first ECR schema and empty private artifact directory only; no audit append or staged publication.")
     args = parser.parse_args()
     signal.alarm(120)
     os.umask(0o077)
@@ -570,7 +640,7 @@ def main():
             managed_transition=args.managed_transition, before_provider_custody=args.before_provider_custody,
             after_provider_custody=args.after_provider_custody, managed_x_unconfigured=args.managed_x_unconfigured,
             before_x_custody=args.before_x_custody, after_x_custody=args.after_x_custody,
-            x_quota_transition=args.x_quota_transition)
+            x_quota_transition=args.x_quota_transition, ecr_initialization=args.ecr_initialization)
     print(json.dumps(result, sort_keys=True))
 
 

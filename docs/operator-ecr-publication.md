@@ -97,21 +97,51 @@ write may already have affected AWS: preserve the publication and inspect its
 status, audit and provider state. Do not replay an uncertain activation/upload,
 treat a duplicate-image error as success or delete evidence to try again.
 
-Current temporary limits include four active publications and **four retained
-artifact stages**, counting successful, denied, expired, failed and partial
-stages—not four reusable slots. Each stage permits up to 1 GiB unique blob
-content; manifest/config limits are 4 MiB, individual layers 512 MiB and layer
-references 128. The parent journal is separately bounded at **1,024 records**.
-There is no automatic deletion or safe operator cleanup workflow yet. Explicit
-terminal artifact cleanup remains required ordinary-product work; exhausting
-the retained stage slots blocks new staging. Do not remove files or journal
-rows manually to bypass this limit.
+Limits include four active publications and **four retained artifact stages**.
+Each stage permits up to 1 GiB unique blob content; manifest/config limits are
+4 MiB, individual layers 512 MiB and layer references 128. A retained stage uses
+its slot until explicitly retired, even after publication or failure. The former
+1,024-parent lifetime stop is removed; publication history remains retained,
+with indexed pages of at most ten records and explicit **Load more publications
+(read only)** controls. Loading history never selects a publication or starts a
+write automatically.
 
-`operator.ecr_publication.*` events are not yet explicitly connected to the
-action-required/audit notification lanes. Existing notification features are
-unchanged; do not expect ECR Slack/webhook alerts. Notification projection and
-terminal cleanup remain unfinished alongside integration/connected acceptance.
-The locally delivered MCP tools also exclude ECR publication.
+### Retire local staging files
+
+In the selected publication's terminal detail, choose **Retire staged files**,
+then **Confirm retire staged files**, or choose **Keep staged files**. Only the
+authenticated administrator can retire a `published`, `denied`, `expired` or
+`failed` publication with no `possible_send` child. `uncertain` publications are
+always refused and continue occupying their retained slot.
+
+Retirement durably records intent before deleting only that publication's local
+staging files. It frees a slot without changing the AWS image, publication
+outcome, artifact commitment, acknowledged checkpoint or audit history. It does
+not delete or reset the parent record. Keep your original local image/backup if
+you need the bytes later; retirement removes Serverware's stored copy.
+
+If the response is lost, use **Check retirement status (read only)**. Only a
+server-reported pending cleanup permits **Retry retiring staged files**, followed
+by another explicit confirmation. That resumes local deletion, never upload or
+publication. A completed retirement is idempotent. There is no automatic garbage
+collection, historical-row deletion or manual-filesystem workaround.
+
+### Separate action and audit notifications
+
+The source now projects 15 closed `operator.ecr_publication.*` audit event kinds,
+including retirement, into the existing independently configured Slack/webhook
+slots. Only `staged` produces an action-required alert. The pending owner,
+reviewer, source bindings and original deadline are rechecked before delivery;
+an obsolete review alert is suppressed without erasing its historical audit.
+The authenticated console link is a locator, not a decision capability.
+
+Configure each action/audit slot and its event filters explicitly; this adds no
+automatic enablement or historical replay. Uncertain publication retains its
+do-not-retry warning; uncertain notification delivery is not automatically resent.
+Retirement messages describe local cleanup, never AWS deletion, and removal
+counts cover that cleanup attempt only. Focused component checks passed, not
+live Slack/webhook or AWS delivery. Connected acceptance and deployment remain
+pending. The locally delivered MCP tools still exclude ECR publication.
 
 ## Evidence boundary and implementation
 

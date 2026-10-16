@@ -32,7 +32,7 @@ MAX_QUEUE = 256
 MAX_HISTORY = 10000
 MAX_CONFIGURATIONS = 1024
 # Legacy approval/JIT producers are not admitted operator-development sources.
-# Native observations and host-trusted requests have separate typed boundaries;
+# Native, host-trusted approval and ECR review sources have typed boundaries;
 # never turn this into a blanket action-source or operator-editable bypass.
 ACTION_SOURCE_AVAILABLE = False
 _PREFIX = "operator_notification_"
@@ -266,7 +266,7 @@ def _delivery(row):
     if row is None:
         return None
     from serverware.operator_notification_transport import DELIVERY_CODES
-    allowed_codes = DELIVERY_CODES | {"configuration_changed", "action_no_longer_current", "action_expired", "action_source_unavailable", "native_source_unavailable", "host_source_unavailable"}
+    allowed_codes = DELIVERY_CODES | {"configuration_changed", "action_no_longer_current", "action_expired", "action_source_unavailable", "native_source_unavailable", "host_source_unavailable", "ecr_source_unavailable"}
     _require(row["status"] in STATES and (row["last_code"] is None or row["last_code"] in allowed_codes)
         and _identifier(row["delivery_id"]) == row["delivery_id"] and type(row["attempts"]) is int and 0 <= row["attempts"] <= 3
         and (row["http_status"] is None or type(row["http_status"]) is int and 200 <= row["http_status"] <= 599))
@@ -535,9 +535,22 @@ def _host_owned(payload):
         and payload["details"]["host_approval"]["reviewer_id"] == config.ADMIN_USER_ID)
 
 
-def _action_admitted(payload, *, host_available=False):
+def ecr_source_available() -> bool:
+    """Observe the ordinary ECR owner outside notification transactions."""
+    from serverware import operator_ecr_publications as owner
+    return owner.readiness()
+
+
+def _ecr_owned(payload):
+    from serverware import config
+    return (events.ecr.action_payload(payload)
+        and payload["details"]["ecr_publication"]["reviewer_id"] == config.ADMIN_USER_ID)
+
+
+def _action_admitted(payload, *, host_available=False, ecr_available=False):
     return (payload.get("test") is True or events.native_action_payload(payload)
         or host_available and _host_owned(payload)
+        or ecr_available and _ecr_owned(payload)
         or ACTION_SOURCE_AVAILABLE is True)
 
 
@@ -546,6 +559,7 @@ def consume_events(now_epoch_ms):
     now = _time(now_epoch_ms)
     path = _admit()
     host_available = host_source_available()
+    ecr_available = ecr_source_available()
     with _read() as conn:
         meta, _ = _key(conn, path)
         if not meta:
@@ -566,12 +580,12 @@ def consume_events(now_epoch_ms):
                 selection = source.filter_event_type or source.event_type
                 if notice is not None and selection in configuration["event_types"]:
                     additions.append((slot, configuration["revision"], source.event_id, notice))
-        active = sum(not slot.startswith("action_required.") or _action_admitted(notice, host_available=host_available)
+        active = sum(not slot.startswith("action_required.") or _action_admitted(notice, host_available=host_available, ecr_available=ecr_available)
             for slot, _, _, notice in additions)
         _capacity(conn, active, len(additions))
         for slot, revision, source_event_id, notice in additions:
             identifier = _enqueue(conn, slot, revision, source_event_id, notice, now)
-            if slot.startswith("action_required.") and not _action_admitted(notice, host_available=host_available):
+            if slot.startswith("action_required.") and not _action_admitted(notice, host_available=host_available, ecr_available=ecr_available):
                 conn.execute("UPDATE operator_notification_deliveries SET status='suppressed',last_code='action_source_unavailable' WHERE delivery_id=?", (identifier,))
         conn.execute("UPDATE operator_notification_meta SET cursor_json=? WHERE singleton=1", (_cursor_json(cursor),))
         return {"consumed": cursor.rowid - _cursor(old_cursor).rowid, "queued": active, "suppressed": len(additions) - active}
@@ -598,6 +612,7 @@ def claim_next(now_epoch_ms):
     now = _time(now_epoch_ms)
     path = _admit()
     host_available = host_source_available()
+    ecr_available = ecr_source_available()
     with _write() as conn:
         meta, key = _key(conn, path)
         if not meta:
@@ -609,7 +624,7 @@ def claim_next(now_epoch_ms):
         for row in pending:
             payload = json.loads(row["payload_json"])
             _require(type(payload) is dict)
-            if row["slot"].startswith("action_required.") and not _action_admitted(payload, host_available=host_available):
+            if row["slot"].startswith("action_required.") and not _action_admitted(payload, host_available=host_available, ecr_available=ecr_available):
                 _terminal(conn, row, "suppressed", "action_source_unavailable", now)
                 continue
             configuration = _config(conn, row["slot"])
@@ -654,6 +669,13 @@ def is_host_action(claim) -> bool:
         and events.host_action_payload(claim.payload))
 
 
+def is_ecr_action(claim) -> bool:
+    """Recognize a whole-image review notice, never a publication grant."""
+    return (type(claim) is DeliveryClaim and claim.channel == "action_required"
+        and claim.slot in {"action_required.slack", "action_required.webhook"}
+        and events.ecr.action_payload(claim.payload))
+
+
 @_safe_errors
 def suppress_native_claim(claim, now_epoch_ms):
     """Retain a fixed refusal after the worker's outside-lock relay recheck."""
@@ -674,6 +696,7 @@ def current(claim, now_epoch_ms):
     path = _admit()
     reason = None
     host_available = host_source_available() if is_host_action(claim) else False
+    ecr_available = ecr_source_available() if is_ecr_action(claim) else False
     with _read() as conn:
         meta, _ = _key(conn, path)
         _require(meta is not None)
@@ -706,6 +729,16 @@ def current(claim, now_epoch_ms):
                 elif not events.host_action_matches_source(conn, claim.payload,
                         reviewer_id=config.ADMIN_USER_ID, now_epoch_ms=current_ms):
                     reason = "action_no_longer_current"
+            elif is_ecr_action(claim):
+                from serverware import config
+                current_ms = max(now, _now())
+                if current_ms >= events._epoch(claim.payload["expires_at"]):
+                    reason = "action_expired"
+                elif not ecr_available or not _ecr_owned(claim.payload):
+                    reason = "ecr_source_unavailable"
+                elif not events.ecr.matches_source(conn, claim.payload,
+                        reviewer_id=config.ADMIN_USER_ID, now_epoch_ms=current_ms):
+                    reason = "action_no_longer_current"
             elif not ACTION_SOURCE_AVAILABLE:
                 reason = "action_source_unavailable"
             elif not events.action_is_current(conn, claim.payload, now_epoch_ms=now):
@@ -719,7 +752,7 @@ def current(claim, now_epoch_ms):
         final_expiry = events.native_expiry_unix_nanos(claim.payload)
         if time.time_ns() >= final_expiry:
             reason = "action_expired"
-    if reason is None and is_host_action(claim) and _now() >= events._epoch(claim.payload["expires_at"]):
+    if reason is None and (is_host_action(claim) or is_ecr_action(claim)) and _now() >= events._epoch(claim.payload["expires_at"]):
         reason = "action_expired"
     if reason:
         with _write() as conn:

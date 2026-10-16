@@ -172,9 +172,46 @@ async def lifecycle(f, client):
     f.dto(await f.call(client, "GET", admin, headers=f.headers(admin=True)))
     listing = await f.call(client, "GET", api.ADMIN, headers=f.headers(admin=True))
     assert [entry["id"] for entry in listing["publications"]] == [identifier]
+    assert listing["next_cursor"] is None
+    previous = await f.call(client, "GET", api.ADMIN + "?before=" + identifier, headers=f.headers(admin=True))
+    assert previous == {"publications": [], "next_cursor": None}
+    await f.call(client, "POST", admin + "/retire", {}, headers=f.headers(admin=True), expected=409)
+    # Large full-image history is allowed only on the bounded administrator page.
+    with patch.object(api.owner, "list_publications_page", return_value={"publications": [
+            {**active, "decision_note": "synthetic" * 10000}], "next_cursor": None}):
+        large = await f.call(client, "GET", api.ADMIN, headers=f.headers(admin=True))
+        assert len(encoded(large)) > 65536
     await f.call(client, "POST", path + "/manifest", f.manifest, binary=True, expected=409)
     with closing(f.db.connect()) as conn:
         assert conn.execute("SELECT COUNT(*) FROM operator_ecr_child_ids").fetchone()[0] == 0
+    assert f.db.verify_audit_chain()["ok"]
+
+    # An explicit terminal retirement removes only local staging, retaining the
+    # publication and its decisions/audit; the active publication is untouched.
+    terminal = f.dto(await f.call(client, "POST", api.CLIENT, f.create_body, expected=201))
+    terminal_id = terminal["id"]
+    terminal_path = api.CLIENT + "/" + terminal_id
+    await f.call(client, "POST", terminal_path + "/manifest", f.manifest, binary=True)
+    for digest, raw in f.blobs.items():
+        await f.call(client, "POST", terminal_path + "/blobs/" + digest[7:] + "/parts/0", raw, binary=True)
+    await f.call(client, "POST", terminal_path + "/submit", {})
+    terminal_admin = api.ADMIN + "/" + terminal_id
+    review = await f.call(client, "POST", terminal_admin + "/review", {}, headers=f.headers(admin=True))
+    denied = await f.call(client, "POST", terminal_admin + "/decision", {
+        **{key: review[key] for key in ("review_receipt_id", "review_digest")},
+        "decision": "deny", "note": None}, headers=f.headers(admin=True))
+    assert denied["status"] == "denied"
+    retired = f.dto(await f.call(client, "POST", terminal_admin + "/retire", {}, headers=f.headers(admin=True)))
+    assert retired["status"] == "denied" and retired["artifacts_retired"] is True
+    assert retired["artifact_retirement_status"] == "retired"
+    assert retired == await f.call(client, "POST", terminal_admin + "/retire", {}, headers=f.headers(admin=True))
+    assert (await f.call(client, "GET", path))["status"] == "active"
+    with patch.object(api.artifacts.ArtifactStore, "begin", side_effect=api.artifacts.ArtifactStoreError()):
+        await f.call(client, "POST", api.CLIENT, f.create_body, expected=409)
+    history = await f.call(client, "GET", api.ADMIN, headers=f.headers(admin=True))
+    refused = [row for row in history["publications"] if row["id"] not in {identifier, terminal_id}]
+    assert len(refused) == 1 and refused[0]["status"] == "failed"
+    assert refused[0]["terminal_reason"] == "artifact_staging_failed"
     assert f.db.verify_audit_chain()["ok"]
 
 
@@ -187,7 +224,8 @@ async def admission_controls(f, client):
     paths = [api.CLIENT, api.CLIENT + "/" + identifier + "/manifest",
         api.CLIENT + "/" + identifier + "/submit", api.CLIENT + "/" + identifier + "/activate",
         api.CLIENT + "/" + identifier + "/blobs/" + "a" * 64 + "/parts/0",
-        api.ADMIN + "/" + identifier + "/review", api.ADMIN + "/" + identifier + "/decision"]
+        api.ADMIN + "/" + identifier + "/review", api.ADMIN + "/" + identifier + "/decision",
+        api.ADMIN + "/" + identifier + "/retire"]
     for path in paths:
         assert api.owns_post(path) and operator_demo.request_allowed("POST", path)
         assert not operator_demo.request_allowed("PUT", path)
@@ -238,6 +276,10 @@ async def admission_controls(f, client):
         f.create_body, expected=400)
     await f.call(client, "POST", api.CLIENT, {**f.create_body, "application_id": f.other["id"]}, expected=409)
     await f.call(client, "POST", api.ADMIN + "/" + identifier + "/review", {}, headers={}, expected=401)
+    await f.call(client, "POST", api.ADMIN + "/" + identifier + "/retire", {}, headers={}, expected=401)
+    for query in ("?before=bad", "?before=" + identifier + "&before=" + identifier,
+            "?before=" + identifier + "&extra=1", "?before=" + identifier.replace("-", "%2d"), "?limit=100"):
+        await f.call(client, "GET", api.ADMIN + query, headers=f.headers(admin=True), expected=400)
     await f.call(client, "POST", api.ADMIN + "/" + identifier + "/review", {},
         headers={"x-serverware-admin-token": ADMIN_TOKEN, "origin": "https://other.test"}, expected=403)
     request = Request({"type": "http", "method": "POST", "path": api.ADMIN,

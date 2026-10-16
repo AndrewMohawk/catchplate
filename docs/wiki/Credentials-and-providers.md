@@ -104,6 +104,11 @@ are pending; it is not deployed or real-AWS verified. See the
 [ECR recipe](https://github.com/AndrewMohawk/serverware/wiki/Clients-and-recipes#aws-ecr-publication--source-integration-not-deployed)
 and [current guide](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-ecr-publication.md).
 
+Source also supports explicit terminal staging retirement and separate ECR
+action/audit notification projections. Retirement preserves AWS images and
+publication/audit history; it never clears an uncertain or possible-send outcome.
+These are focused-component results, not deployed cleanup or receiver delivery.
+
 Do not put AWS credentials into a generic custom-header rule as a workaround.
 The dedicated source path signs exact requests without exporting the AWS tuple
 to clients. AWS removal is local storage removal, not AWS-side revocation.

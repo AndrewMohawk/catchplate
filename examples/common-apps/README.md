@@ -128,3 +128,27 @@ socket operations prohibited. They validate configuration, scope queries, explic
 write intent, request/auth shape, limits and approval handling. They do not contact
 providers or establish live provider acceptance. AI SDK checks live at
 `scripts/test_common_apps_ai_sdk.py` in the repository root.
+
+## GitHub Actions: one manual read
+
+[`github-actions.yml`](github-actions.yml) is an inactive sample, not a workflow
+installed by this example. Keep this directory in your trusted repository and
+copy the reviewed file to `.github/workflows/serverware-read.yml`. Dispatch it
+manually on the default branch. It uses the Ubuntu 24.04 runner's Python 3.12,
+the pinned checkout action already used by the other examples, and these secrets:
+
+- `SERVERWARE_CLIENT_CONFIG_JSON`: the complete private client JSON downloaded
+  for a **GET-only** common-app permission, with an unexpired application login.
+- `SERVERWARE_CA_PEM`: the public Serverware CA certificate contents.
+- `SERVERWARE_PROXY_CA_PEM`: optional public CA for a privately signed HTTPS
+  proxy; leave this secret unset for an ordinarily trusted proxy endpoint.
+
+No provider API key is placed in CI. Dependency installation happens before
+application secrets enter the job. Private files have fixed names inside a
+private temporary directory, and both an exit trap and an `always()` step clean
+them up. The workflow refuses POST permissions, never passes `--execute-write`,
+does not retry, and withholds the provider response from workflow logs and
+artifacts. This is suitable for an automatic read permission; it neither approves
+nor polls human-review requests. A failure requires investigation and a new
+explicit dispatch, not an automatic replay. The sample has not been run against
+a live provider or activated in this repository.

@@ -91,6 +91,13 @@ class CommonAppsCheck(OperatorCatalogCheck):
         observed = self.observations()
         self.last = {"case": case, "curlExit": code, "connectStatus": int(match[1]) if match else None,
             "httpStatus": int(match[2]) if match else None, "providerArrivals": observed["total"], "stderrPresent": bool(error)}
+        try:
+            document = json.loads(wire.partition(b"\r\n\r\n")[2])
+            error_code = document.get("error") or document.get("payload", {}).get("error")
+            if isinstance(error_code, str) and re.fullmatch(r"[a-z_]{1,80}", error_code):
+                self.last["errorCode"] = error_code
+        except (ValueError, AttributeError):
+            pass
         require(code == 0 and not error and match is not None and observed["total"] == count,
             "proxy transport or arrival count differs")
         if allowed:

@@ -1,0 +1,109 @@
+# INACTIVE SAMPLE: deliberately copy into .github/workflows/ after review.
+# Keep examples/common-apps/request.py and requirements.txt in the checkout.
+# No provider API key belongs in GitHub Actions. Only the final step gets the
+# existing Serverware application login and public CA material.
+name: Read a common API through Serverware
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: serverware-common-app-read
+  cancel-in-progress: false
+jobs:
+  read:
+    if: github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+        working-directory: examples/common-apps
+    steps:
+      - name: Check out the trusted dispatched commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install pinned public dependencies without application secrets
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          umask 077
+          python3.12 -c 'import sys; assert sys.version_info[:2] == (3, 12)'
+          python3.12 -m venv "$RUNNER_TEMP/serverware-common-apps-venv"
+          timeout --signal=TERM --kill-after=5s 90s \
+            "$RUNNER_TEMP/serverware-common-apps-venv/bin/python" -m pip install \
+            --disable-pip-version-check --no-cache-dir --only-binary=:all: \
+            --retries 1 --timeout 20 -r requirements.txt
+      - name: Make one explicitly permitted read
+        timeout-minutes: 2
+        env:
+          SERVERWARE_CLIENT_CONFIG_JSON: ${{ secrets.SERVERWARE_CLIENT_CONFIG_JSON }}
+          SERVERWARE_CA_PEM: ${{ secrets.SERVERWARE_CA_PEM }}
+          SERVERWARE_PROXY_CA_PEM: ${{ secrets.SERVERWARE_PROXY_CA_PEM }}
+        run: |
+          set -euo pipefail
+          umask 077
+          private_dir=$(mktemp -d -- "$RUNNER_TEMP/serverware-common-read.XXXXXXXX")
+          export SERVERWARE_COMMON_PRIVATE_DIR="$private_dir"
+          printf 'SERVERWARE_COMMON_PRIVATE_DIR=%s\n' "$private_dir" >> "$GITHUB_ENV"
+          cleanup() {
+            rm -f -- "$private_dir/client.private.json" "$private_dir/serverware-ca.pem" \
+              "$private_dir/proxy-ca.pem" "$private_dir/response.private.json"
+            rmdir -- "$private_dir"
+          }
+          trap cleanup EXIT
+          "$RUNNER_TEMP/serverware-common-apps-venv/bin/python" - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import request as example
+
+          def private_file(directory, name, raw):
+              with os.fdopen(os.open(directory / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as stream:
+                  stream.write(raw)
+
+          try:
+              directory = Path(os.environ['SERVERWARE_COMMON_PRIVATE_DIR'])
+              raw = os.environ['SERVERWARE_CLIENT_CONFIG_JSON'].encode('utf-8')
+              if not 0 < len(raw) <= example.MAX_CONFIG_BYTES:
+                  raise ValueError('Configuration size refused')
+              config = example.strict_json(raw.decode('utf-8'))
+              if type(config) is not dict or config.get('methods') != ['GET']:
+                  raise ValueError('This workflow accepts only a GET permission')
+              # Only local CA filenames change. Provider scope and application
+              # login stay exactly as downloaded from Serverware.
+              config['ca_file'] = 'serverware-ca.pem'
+              extra = os.environ.get('SERVERWARE_PROXY_CA_PEM', '')
+              config['proxy_ca_file'] = 'proxy-ca.pem' if extra else None
+              private_file(directory, 'serverware-ca.pem', os.environ['SERVERWARE_CA_PEM'].encode('ascii'))
+              if extra:
+                  private_file(directory, 'proxy-ca.pem', extra.encode('ascii'))
+              private_file(directory, 'client.private.json', json.dumps(config).encode('utf-8'))
+              loaded = example.load_configuration(directory / 'client.private.json')
+              example.public_ca(loaded['ca_file'])
+              if loaded['proxy_ca_file']:
+                  example.public_ca(loaded['proxy_ca_file'])
+          except Exception:
+              raise SystemExit('Invalid private client configuration or public CA inputs; no request sent.') from None
+          PY
+          unset SERVERWARE_CLIENT_CONFIG_JSON SERVERWARE_CA_PEM SERVERWARE_PROXY_CA_PEM
+          timeout --signal=TERM --kill-after=5s 50s \
+            "$RUNNER_TEMP/serverware-common-apps-venv/bin/python" request.py \
+            --config "$private_dir/client.private.json" > "$private_dir/response.private.json"
+          # Do not print provider data or upload private configuration as artifacts.
+          printf '%s\n' 'One permitted read completed. Provider response withheld from workflow logs.'
+      - name: Remove any remaining private files
+        if: always()
+        run: |
+          set -euo pipefail
+          private_dir="${SERVERWARE_COMMON_PRIVATE_DIR:-}"
+          if [[ -z "$private_dir" || ! -d "$private_dir" ]]; then exit 0; fi
+          case "$private_dir" in
+            "$RUNNER_TEMP"/serverware-common-read.????????) ;;
+            *) printf '%s\n' 'Refusing cleanup of an unexpected directory.' >&2; exit 1 ;;
+          esac
+          rm -f -- "$private_dir/client.private.json" "$private_dir/serverware-ca.pem" \
+            "$private_dir/proxy-ca.pem" "$private_dir/response.private.json"
+          rmdir -- "$private_dir"

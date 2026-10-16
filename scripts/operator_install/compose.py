@@ -47,7 +47,9 @@ def render(config, artifact, instance_id):
         "SERVERWARE_OPERATOR_MANAGED_X_ENABLED": "1",
         "SERVERWARE_HOST_TRUSTED_APPROVALS_ENABLED": "1",
         "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
-        "SERVERWARE_DATA_PLANE_INSTANCE_ID": instance_id,
+        # The ordinary app/gate protocol admits this exact local profile ID.
+        # Independent installation ownership uses the UUID labels/manifest.
+        "SERVERWARE_DATA_PLANE_INSTANCE_ID": "spiffe://operator-demo.serverware/decision-gate/local",
     }
     isolated = {
         "image": config["paired_image"], "pull_policy": "never", "restart": "unless-stopped",

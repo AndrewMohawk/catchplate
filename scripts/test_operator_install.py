@@ -339,6 +339,21 @@ class InstallerTests(unittest.TestCase):
             self.assertNotIn("name", model["networks"][name])
         self.assertEqual(len({service["labels"][lifecycle.LABEL] for service in model["services"].values()}), 1)
 
+    def test_compiled_profile_identity_is_separate_from_installation_ownership(self):
+        identifier = "11111111-2222-4333-8444-555555555555"
+        expected = "spiffe://operator-demo.serverware/decision-gate/local"
+        value = {**config.load_config(self.path), "paired_image": IMAGE, "edge_image": EDGE_IMAGE}
+        model = compose.render(value, ARTIFACT, identifier)
+        for name in ("serverware", "decision-gate-rs"):
+            service = model["services"][name]
+            self.assertEqual(service["environment"]["SERVERWARE_DATA_PLANE_INSTANCE_ID"], expected)
+            self.assertEqual(service["labels"][lifecycle.LABEL], identifier)
+        self.assertEqual(model["services"]["edge"]["labels"][lifecycle.LABEL], identifier)
+        for network in model["networks"].values():
+            self.assertEqual(network["labels"][lifecycle.LABEL], identifier)
+        source = Path(__file__).resolve().parents[1] / "data-plane/decision-gate-rs/src/operator_demo.rs"
+        self.assertIn('state.server_instance_id.as_deref()\n                != Some("' + expected + '")', source.read_text())
+
     def test_baked_runtime_start_reads_only_small_artifact_and_executes_no_build(self):
         artifact_path = self.root / "artifact.json"
         artifact_path.write_text(json.dumps(ARTIFACT), encoding="utf-8")

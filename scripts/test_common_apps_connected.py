@@ -62,6 +62,14 @@ def sdk_audit_target(method, url):
         "path_bytes": len(path), "query_keys": []})
 
 
+def sdk_process_timeout(deadline):
+    # OperatorDemoCheck.timeout() is a four-second HTTP-call budget, not a
+    # process budget: a cold SDK CLI also starts and imports its own child.
+    remaining = deadline - time.monotonic()
+    require(remaining > 0, "SDK process exceeded the checker deadline")
+    return min(40.0, remaining)
+
+
 def sdk_module(name):
     path = Path(__file__).resolve().parents[1] / "examples/common-apps" / ("ai_python.py" if name in AI_PROVIDERS else "services_python.py")
     spec = importlib.util.spec_from_file_location("connected_sdk_example", path)
@@ -337,8 +345,21 @@ class CommonAppsCheck(OperatorCatalogCheck):
                             for item in ("--query", key + "=" + value)]
                 else:
                     argv = [sys.executable, "-I", "-B", "/app/" + SCRIPT, "sdk-negative", "--config", str(paths["wrong-scope"])]
-                completed = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    env={}, timeout=min(40, self.timeout()), check=False)
+                self.last = {"case": case}
+                with subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                        env={}, start_new_session=True) as child:
+                    try:
+                        output, error = child.communicate(timeout=sdk_process_timeout(self.deadline))
+                    except BaseException:
+                        # The example CLI owns a nested SDK child. Terminate the
+                        # whole private group before reaping the outer process.
+                        try:
+                            os.killpg(child.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        child.communicate(timeout=5)
+                        raise
+                    completed = subprocess.CompletedProcess(argv, child.returncode, output, error)
                 require(len(completed.stdout) <= 65536 and len(completed.stderr) <= 65536, "SDK output exceeded bound")
                 self.clean(completed.stdout); self.clean(completed.stderr)
                 observed = self.provider_observations()
@@ -372,7 +393,7 @@ class CommonAppsCheck(OperatorCatalogCheck):
         with subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 env={}, start_new_session=True) as child:
             try:
-                output, error = child.communicate(timeout=min(40, self.timeout()))
+                output, error = child.communicate(timeout=sdk_process_timeout(self.deadline))
             except subprocess.TimeoutExpired:
                 timed_out = True
                 os.killpg(child.pid, signal.SIGKILL)
@@ -494,6 +515,8 @@ def check(args):
     except Exception as error:
         result = {"ok": False, "phase": instance.phase if instance else "preflight", "exceptionType": type(error).__name__,
             "failureSite": failure_site(error, Path(__file__).resolve().parents[1]), "observation": instance.last if instance else None}
+        if isinstance(error, subprocess.TimeoutExpired) and type(error.timeout) in (int, float):
+            result["timeoutSeconds"] = error.timeout
     print(json.dumps(result, sort_keys=True), flush=True)
     return 0 if result["ok"] else 1
 

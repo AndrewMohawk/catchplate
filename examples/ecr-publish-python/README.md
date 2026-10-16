@@ -14,8 +14,10 @@ establish real AWS acceptance or availability in a particular deployment.
 Connected verification with the normal `a69503f8` / `ffe0fbe4…` proxy and stock
 Boto3 passed in 62.391 seconds against an isolated synthetic provider: all five
 actions, eight exactly signed requests, eight correlated ACK/audit records and
-no automatic retries. The matching pair is now deployed, with existing permissions
-unchanged and no automatically enabled AWS access. This is not real AWS, Docker
+no automatic retries. The `15ef645c` app-only UI follow-up is now deployed with the
+same proxy; public and read-only browser checks passed without provider calls,
+notification delivery or human SSO login. Existing permissions remain unchanged,
+with no automatically enabled AWS access. This is not real AWS, Docker
 push or hardware acceptance. See the [current verification record](../../docs/operator-ecr-publication.md#evidence-boundary-and-implementation).
 
 ## Setup

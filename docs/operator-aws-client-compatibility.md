@@ -15,10 +15,13 @@ expiry, with no automatic retry after an uncertain write.
 The normal `a69503f8` / `ffe0fbe4…` build and connected stock-Boto3 acceptance
 passed: all five actions, eight signed requests and eight ACK/audit results in
 62.391 seconds with no automatic retries, against a synthetic provider only.
-The matching pair is deployed as app `5ae9ae8b…` / gate `53fd9a79…`. The existing
+The subsequent app-only UI source `15ef645c` is deployed as app `86fde364…`,
+retaining gate `53fd9a79…` / normal Rust `ffe0fbe4…`. The existing
 16 destinations and permissions are unchanged, with a 32-origin cap; no AWS
-destination or grant was automatically enabled. Public-route/browser checks are
-separate and pending. The four retained artifact slots can be reclaimed by explicit
+destination or grant was automatically enabled. Public routing/Gatus and six-GET
+internal desktop/mobile browser checks passed; they did not perform a provider
+request, notification delivery or human SSO login. The four retained artifact
+slots can be reclaimed by explicit
 eligible-terminal retirement, never for uncertain/possible-send records; AWS
 images and owner/audit history remain untouched. The 1,024-parent lifetime stop
 is removed in favor of retained indexed history with ten-record pages. ECR action

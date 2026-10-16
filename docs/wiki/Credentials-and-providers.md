@@ -101,9 +101,11 @@ The deployed capability adds exact ECR
 publication permissions and a stage → human review → explicit UUID activation →
 Boto3 publication workflow. The normal `a69503f8` / `ffe0fbe4…` build and connected
 stock-Boto3 run passed all five actions with eight signed requests/ACKs in
-62.391 seconds and no automatic retries, using a synthetic provider. The matching
-pair is deployed; existing destinations/permissions were preserved and AWS access
-was not automatically enabled. Real AWS remains unverified. See the
+62.391 seconds and no automatic retries, using a synthetic provider. The
+`15ef645c` app-only UI follow-up is deployed with the same proxy; public/read-only
+browser checks passed without human SSO, provider calls or notification delivery.
+Existing destinations/permissions are unchanged and AWS access was not
+automatically enabled. Real AWS remains unverified. See the
 [ECR recipe](https://github.com/AndrewMohawk/serverware/wiki/Clients-and-recipes#aws-ecr-publication)
 and [current guide](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-ecr-publication.md).
 

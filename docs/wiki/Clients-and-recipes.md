@@ -261,8 +261,10 @@ only Serverware login/scope/trust settings, never AWS keys.
 The normal `a69503f8` / `ffe0fbe4…` build and connected stock-Boto3 check passed:
 all five actions, eight signed requests and matching ACK/audit records in
 62.391 seconds, with no automatic retries. This used a synthetic provider;
-the matching pair is deployed, with existing destinations/permissions unchanged
-and no automatically enabled AWS access. Real AWS remains unverified. Review is host-trusted, not TEE or
+the `15ef645c` UI follow-up is deployed with the same proxy, existing
+destinations/permissions unchanged and no automatically enabled AWS access.
+Public/read-only browser checks passed, not human SSO, notification delivery or
+real AWS. Review is host-trusted, not TEE or
 YubiKey enforcement. The original 30-minute deadline is clipped to client/AWS
 expiry; never automatically replay an uncertain upload. Explicit **Retire staged
 files** reclaims a retained slot for eligible terminal publications, preserving

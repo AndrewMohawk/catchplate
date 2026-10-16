@@ -10,13 +10,17 @@ eight proxy ACK/release audit records and no automatic retries. The embedded
 schema correction is included in this successful run; the earlier failure
 remains retained, not reported as a pass.
 
-The matching pair is deployed as app `5ae9ae8b…` / gate `53fd9a79…`, with all
-four services healthy. The existing 16 destinations and saved permissions are
+The app-only UI follow-up `15ef645c` is deployed as app `86fde364…`, retaining
+gate `53fd9a79…` and normal Rust `ffe0fbe4…`; all four services are healthy.
+The existing 16 destinations and saved permissions are
 unchanged; the destination cap is now 32. No AWS destination or publication grant
-was automatically enabled. Three ECR tables were added while retaining the
-original 219 tables and all 727 audit events. The artifact root and 8-GiB app
-memory ceiling are installed. Public-route/browser checks remain separate and
-pending; see the [project tracker](project-completion.md).
+was automatically enabled. The artifact root and 8-GiB app memory ceiling are
+installed. Verified-TLS public checks passed: console 302 to SSO, lab health 200
+and all six Gatus conditions; the proxy's ordinary GET returned 404, not a CONNECT
+test. Six read-only internal-app browser GETs confirmed the empty ECR list,
+15 ECR audit types and four separate notification slots without errors or mobile
+overflow. These checks performed no publication, notification delivery, provider
+call or human SSO login. See the [project tracker](project-completion.md).
 
 This ordinary, host-trusted workflow keeps AWS credentials in Serverware and
 uses the [stock Boto3 example](../examples/ecr-publish-python/README.md). It is
@@ -180,6 +184,9 @@ Successful deployment continuation:
 A stale fixture-only checker stopped the original rollout; corrected read-only
 checker `8d3e866f` allowed the 11.285-second narrow continuation without repeating
 the backup or restarting the app/gate. The original failure remains preserved.
+The subsequent `15ef645c` app-only public/browser checks are separate receipts:
+`/srv/catchplate-fast/homelab_data/serverware-public-15ef.1EzZXD/public-verification.json`
+and `/tmp/serverware-ecr-notifications-readonly.GzHa2v/ui15.jAQjkc/receipt.json`.
 The connected acceptance used the normal proxy and stock Boto3 with a synthetic provider, not real
 AWS. The separate offline tests intercept SDK sends and are component evidence,
 not additional connected acceptance. Core source:

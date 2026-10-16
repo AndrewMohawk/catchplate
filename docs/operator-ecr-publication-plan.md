@@ -8,9 +8,11 @@ verified artifact staging, host-trusted whole-image review, explicit UUID
 activation and the five stock Boto3 calls. The normal `a69503f8` / `ffe0fbe4…`
 build passed, followed by connected stock-Boto3 acceptance in 62.391 seconds:
 all five actions, eight signed requests and eight correlated ACK/audit results,
-with no automatic retries. This was synthetic-provider verification. The matching
-pair is now deployed; existing destinations/permissions are unchanged and real
-AWS remains unverified. Generic AWS
+with no automatic retries. This was synthetic-provider verification. The app-only
+UI follow-up `15ef645c` is now deployed, retaining normal Rust `ffe0fbe4…`.
+Public and read-only browser checks passed without provider calls, delivery or
+human SSO login; existing destinations/permissions are unchanged and real AWS
+remains unverified. Generic AWS
 credential release remains closed: the dedicated signer leases encrypted headers
 for one exact request, not the AWS tuple. Explicit eligible-terminal retirement
 now reclaims the four retained artifact slots without deleting AWS images or

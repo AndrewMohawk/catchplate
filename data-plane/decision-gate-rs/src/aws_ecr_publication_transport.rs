@@ -3,6 +3,7 @@
 use crate::aws_ecr_publication as ecr;
 use crate::*;
 use std::sync::atomic::AtomicUsize;
+use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 
 const ERROR: &str = "ecr_publication_unavailable";
 const UNKNOWN: &str = "ecr_publication_outcome_unknown";

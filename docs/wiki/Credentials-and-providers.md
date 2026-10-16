@@ -66,6 +66,27 @@ Account-authorized text posting is a separate managed OAuth flow, offered only w
 
 Choose **Alchemy · chain status** and enter only the API/access key—not a URL, wallet key, Notify token or Authorization header. Assign the client one approved chain, Ethereum mainnet or Sepolia. The preset allows `eth_chainId` and `eth_blockNumber` with empty parameters; it does not sign/send transactions or grant general JSON-RPC access. Saving the key does not verify provider entitlement. [Alchemy contract](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-provider-presets.md#fixed-x-and-alchemy-contracts).
 
+## Common app presets
+
+The guided credential chooser also includes **OpenAI, Anthropic / Claude,
+Google Gemini, OpenRouter, Slack, Discord, Notion, Stripe, Resend, GitLab,
+Cloudflare and Sentry**. Save the provider key once, then choose one explicit
+operation and scope when assigning a client. These are static API-key
+connections, not new OAuth consent flows; saving does not verify the provider
+key or activate a destination.
+
+Examples include one AI model with a per-request output limit, a message to one
+Slack/Discord channel, a Notion page read, one GitLab/Sentry project's issues,
+read-only Stripe/Cloudflare operations, or Resend text email between fixed
+addresses. The [common-app guide](https://github.com/AndrewMohawk/serverware/blob/main/docs/common-apps.md)
+lists exact scopes, provider setup, request shapes and important limits.
+
+For Discord, paste the raw bot token: the preset supplies the `Bot` prefix.
+Gemini Developer API keys are separate from managed Google/Gmail OAuth.
+Slack client permissions are separate from Serverware's Slack notification
+destinations. Use provider-side least privilege too; an AI output ceiling is
+not a daily spend budget.
+
 ## Manual API key: Bearer or custom header
 
 Follow the [worked custom-API guide](https://github.com/AndrewMohawk/serverware/wiki/Custom-API-credentials) for a narrow GET permission, verified-TLS curl request, exact dummy replacement and audit check.

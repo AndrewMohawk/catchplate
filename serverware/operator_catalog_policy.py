@@ -53,6 +53,7 @@ def _request_profile(rule: dict, credential: dict, route: dict) -> None:
 
 
 def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=None) -> dict:
+    from serverware import operator_common_apps
     from serverware import operator_demo_store as legacy
     from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy
     from serverware import operator_catalog_aws
@@ -60,6 +61,8 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
     from serverware import operator_catalog_npm_install
     aws_ids = {row['id'] for row in catalog['credentials'] if operator_catalog_aws.selected(row)}
     for rule in catalog['access_rules']:
+        if operator_common_apps.selected(rule):
+            operator_common_apps.validate_shape(rule)
         if rule.get('credential_id') in aws_ids:
             raise schema.CatalogIntegrityError('AWS credentials have no access-rule signing profile')
         if operator_catalog_x_post.selected(rule):
@@ -124,6 +127,8 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
         principals[application['id']] = principal
         credential_policy = generated['credentials'][0]
         credential_policy['providerSubject'] = credential['provider_subject']
+        if operator_common_apps.selected(credential):
+            credential_policy['injection'] = operator_common_apps.credential_injection(credential)
         credential_policies[credential['id']] = credential_policy
         route = generated['routes'][0]
         route['adapter']['config']['credentialBinding']['subjects'] = [credential['provider_subject']]
@@ -153,6 +158,8 @@ def render(catalog: dict, sequence: int, initial_hash: str, *, metadata_profile=
         else:
             _request_profile(rule, credential, route)
             _response_profile(rule, route)
+            if operator_common_apps.selected(rule):
+                operator_common_apps.apply_route(rule, credential, route)
         replacement = schema.rule_credential_header(rule, credential)
         if not (operator_catalog_npm_publish.selected(rule) or operator_catalog_npm_install.selected(rule)):
             emitted = [route]

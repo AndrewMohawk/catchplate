@@ -129,6 +129,10 @@ function createUpstreamsView(workspace) {
   }
   function render() {
     const catalog = workspace.state.catalog;
+    const presets = catalog?.capabilities?.common_apps?.presets || [];
+    element('upstreams-common-apps').hidden = !presets.length;
+    element('upstreams-common-origins').textContent = presets.map(item => item.label + ': ' +
+      [...new Set(item.operations.map(operation => operation.origin))].join(', ')).join('\n');
     element('upstreams-effective').textContent = catalog ? catalog.allowed_upstreams.join('\n') : 'Effective destinations unavailable. Refresh workspace status.';
     element('upstreams-review').disabled = busy || !catalog || workspace.state.busy;
     element('upstreams-form').hidden = !review;

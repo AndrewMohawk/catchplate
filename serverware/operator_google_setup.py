@@ -121,7 +121,7 @@ def _settings(raw):
     _require(isinstance(raw, str) and len(raw.encode("utf-8")) <= 16384)
     value = json.loads(raw)
     _require(isinstance(value, dict) and set(value) == {"allowed_upstreams", "fixture_cidrs"}
-        and isinstance(value["allowed_upstreams"], list) and 1 <= len(value["allowed_upstreams"]) <= 16
+        and isinstance(value["allowed_upstreams"], list) and 1 <= len(value["allowed_upstreams"]) <= operator_demo.MAX_ALLOWED_UPSTREAMS
         and all(isinstance(item, str) and operator_demo.origin(item)[0] == item for item in value["allowed_upstreams"])
         and len(set(value["allowed_upstreams"])) == len(value["allowed_upstreams"])
         and isinstance(value["fixture_cidrs"], list) and len(value["fixture_cidrs"]) <= 16
@@ -131,10 +131,11 @@ def _settings(raw):
 
 
 def _target(old):
+    from serverware.operator_demo import MAX_ALLOWED_UPSTREAMS
     origins = list(old["allowed_upstreams"])
     if "https://gmail.googleapis.com" not in origins:
         origins.append("https://gmail.googleapis.com")
-    _require(len(origins) <= 16)
+    _require(len(origins) <= MAX_ALLOWED_UPSTREAMS)
     return {"allowed_upstreams": origins, "fixture_cidrs": list(old["fixture_cidrs"])}
 
 

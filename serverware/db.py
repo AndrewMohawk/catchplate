@@ -67842,6 +67842,12 @@ def replace_operator_static_credential_secret_if_version(
         _refuse_generic_github_app_credential(current["kind"], metadata)
         _refuse_generic_github_app_credential(catalog.get("auth_type"), catalog)
         metadata_fields = {"provider_id", "provider_subject", "secret_class"}
+        if "app_preset" in metadata or "app_preset" in catalog:
+            from serverware import operator_common_apps
+            if not operator_common_apps.validate_credential(catalog, metadata):
+                raise ValueError("common app credential binding refused")
+            operator_common_apps.validate_secret(catalog["app_preset"], secret)
+            metadata_fields.add("app_preset")
         if "connection_type" in metadata or "connection_type" in catalog:
             if not operator_catalog_schema.validate_static_connection(catalog, metadata):
                 raise ValueError("static connection binding refused")

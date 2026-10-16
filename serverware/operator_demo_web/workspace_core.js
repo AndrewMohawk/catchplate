@@ -43,6 +43,8 @@ function isXPostRule(rule) { return rule?.operation_bundle === 'x_text_post_v1';
 function isAlchemyCredential(credential) { return credential?.connection_type === 'alchemy_key_v1'; }
 function isAlchemyRule(rule) { return rule?.operation_bundle === 'alchemy_chain_status_read_v1'; }
 function isAwsCredential(credential) { return credential?.auth_type === 'aws_sigv4_v1' || credential?.connection_type === 'aws_sigv4_v1'; }
+function isCommonAppCredential(value) { return Object.hasOwn(value || {}, 'app_preset'); }
+function isCommonAppRule(value) { return ['app_preset', 'app_operation', 'scope'].some(key => Object.hasOwn(value || {}, key)); }
 function gmailAvailable(catalog, credential) {
   return credential?.status === 'active' && credential.auth_type === 'google_oauth' &&
     credential.permission_preset === 'gmail_readonly' && Boolean(catalog?.capabilities.google_oauth) &&
@@ -109,6 +111,7 @@ function operatorRequestBodyInput(choice, requestFields, catalog, credential) {
   return {request_fields: requestFields, ...(choice === 'preserve_json_v1' ? {request_body_mode: choice} : {})};
 }
 function operatorRuleContentValid(rule, credential) {
+  if (isCommonAppRule(rule) !== isCommonAppCredential(credential)) return false;
   if (isAwsCredential(credential)) return false; // Stored tuple is not a header credential or a grant.
   if (rule && ['quota', 'daily_quota'].some(key => Object.hasOwn(rule, key))) return false;
   if (rule && !isXPostRule(rule) && Object.hasOwn(rule, 'daily_post_attempt_limit')) return false;
@@ -151,6 +154,8 @@ function operatorRuleSupported(rule, catalog) {
       (rule.approval_mode !== 'host_review_v1' || !operatorHostApprovalAvailable(catalog, rule))) return false;
   const credential = catalog?.credentials.find(item => item.id === rule?.credential_id && item.status === 'active');
   const application = catalog?.applications.find(item => item.id === rule?.application_id && item.status === 'active');
+  if (isCommonAppRule(rule)) return Boolean(credential && application && applicationProxyAuthenticationSupported(catalog, application) &&
+    commonAppRuleValid(rule, credential, catalog) && commonAppAvailable(catalog, credential, rule.app_operation) && operatorRuleCredentialValid(rule, credential));
   if (isXPostRule(rule)) return Boolean(credential && application && applicationProxyAuthenticationSupported(catalog, application) &&
     xPostRuleValid(rule, credential) && operatorRuleCredentialValid(rule, credential) && xPostAvailable(catalog, credential) &&
     (!Object.hasOwn(rule, 'daily_post_attempt_limit') || xPostQuotaAvailable(catalog, credential)));
@@ -426,6 +431,7 @@ function projectCatalog(value) {
       !['credentials', 'applications', 'access_rules', 'allowed_upstreams'].every(key => Array.isArray(value[key])))
     throw operatorError('This page did not receive the expected workspace catalog. Changes are disabled.');
   const pick = (item, names) => Object.fromEntries(names.map(name => [name, item[name]]));
+  const commonApps = value.capabilities?.common_apps == null ? null : projectCommonAppsCapability(value.capabilities.common_apps);
   const base = ['id', 'name', 'status', 'created_at', 'revoked_at'];
   const project = (items, names, credentialRecords = false) => items.map(item => {
     if (!item || typeof item.id !== 'string' || typeof item.name !== 'string' ||
@@ -439,6 +445,12 @@ function projectCatalog(value) {
   const credentials = project(value.credentials, ['auth_type', 'header_name', 'active_rule_count', 'legacy_upstream_origin'], true);
   credentials.forEach((credential, index) => {
     const original = value.credentials[index];
+    if (isCommonAppCredential(original)) {
+      const preset = commonApps?.presets.find(item => item.id === original.app_preset);
+      if (!preset || original.connection_type || original.auth_type !== preset.auth_type || original.header_name !== preset.header_name)
+        throw operatorError('Saved app credential metadata is unsupported. Refresh before making changes.');
+      credential.app_preset = preset.id;
+    }
     if (isAwsCredential(original)) return; // Exact non-header tuple projection already validated above.
     if (original.auth_type === 'x_oauth') return; // Closed account projection is separate from static keys.
     if (Object.hasOwn(original, 'github_app') && !isGithubAppCredential(original))
@@ -469,7 +481,7 @@ function projectCatalog(value) {
   const accessRules = project(value.access_rules, ['application_id', 'credential_id', 'route_id', 'upstream_url', 'methods',
     'request_fields', 'response_fields', 'query_keys', 'allowed_headers', 'response_mode', 'credential_input', 'enforcement']);
   accessRules.forEach((rule, index) => {
-    for (const name of ['request_body_mode', 'placeholder', 'operation_bundle', 'age_policy', 'query_mode', 'repository', 'packages', 'package', 'tag', 'publishing_window', 'username', 'chain', 'quota', 'daily_quota', 'daily_post_attempt_limit', 'approval_mode'])
+    for (const name of ['request_body_mode', 'placeholder', 'operation_bundle', 'age_policy', 'query_mode', 'repository', 'packages', 'package', 'tag', 'publishing_window', 'username', 'chain', 'quota', 'daily_quota', 'daily_post_attempt_limit', 'approval_mode', 'app_preset', 'app_operation', 'scope'])
       if (Object.hasOwn(value.access_rules[index], name)) rule[name] = value.access_rules[index][name];
     if (Object.hasOwn(rule, 'approval_mode') && rule.approval_mode !== 'host_review_v1')
       throw operatorError('Saved approval mode is unsupported. Refresh before changing permissions.');
@@ -482,6 +494,7 @@ function projectCatalog(value) {
     const credential = credentials.find(item => item.id === rule.credential_id);
     const application = applications.find(item => item.id === rule.application_id);
     if (!credential || !application || !operatorRuleContentValid(rule, credential) || !operatorRuleCredentialValid(rule, credential) ||
+        isCommonAppRule(rule) && !commonAppRuleValid(rule, credential, {capabilities: {common_apps: commonApps}}) ||
         rule.status === 'active' && (credential.status !== 'active' || application.status !== 'active'))
       throw operatorError('Saved rule content modes or resource references are inconsistent. Changes are disabled.');
   }
@@ -497,6 +510,7 @@ function projectCatalog(value) {
   const capabilities = pick(value.capabilities || {}, ['credential_types', 'response_modes', 'request_body_modes',
     'credential_input_modes', 'token_lifetime_seconds', 'oauth']);
   capabilities.host_approvals = projectHostApprovalsCapability(value.capabilities?.host_approvals);
+  capabilities.common_apps = commonApps;
   capabilities.static_key_replacement = projectStaticKeyReplacementCapability(value.capabilities?.static_key_replacement);
   capabilities.application_proxy_authentication = projectApplicationProxyAuthenticationCapability(value.capabilities?.application_proxy_authentication);
   capabilities.workload_renewal = value.capabilities?.workload_renewal == null ? null :

@@ -382,6 +382,7 @@ _OPERATOR_CATALOG_BODY_POST_PATHS = frozenset({
     "/api/operator-demo/applications/renewal/enroll",
     "/api/operator-demo/applications/renewal/cancel",
     "/api/operator-demo/access-rules",
+    "/api/operator-demo/access-rules/common-app",
     "/api/operator-demo/access-rules/revoke",
     "/api/operator-demo/access-rules/gmail-read",
     "/api/operator-demo/access-rules/github",

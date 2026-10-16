@@ -27,6 +27,7 @@ def _review(value, rows, *, pending_destinations):
     """Render the existing eligible v2 CAS review, never call a write owner."""
     from serverware import operator_google_setup as setup, operator_provider_custody as custody
     from serverware import operator_catalog_oauth_profile as profiles
+    from serverware.operator_demo import MAX_ALLOWED_UPSTREAMS
     if value["state"] == "pending":
         return "pending_configuration", None
     if value["state"] == "activated":
@@ -36,7 +37,7 @@ def _review(value, rows, *, pending_destinations):
         return "pending_destinations", None
     old = value["effective_settings"]
     if (len(rows) >= min(setup.MAX_OPERATIONS, custody.MAX_VERSIONS)
-            or len(set(old["allowed_upstreams"]) | set(profiles.API_ORIGINS)) > 16):
+            or len(set(old["allowed_upstreams"]) | set(profiles.API_ORIGINS)) > MAX_ALLOWED_UPSTREAMS):
         return "capacity", None
     return None, {"schema": "serverware.operatorGoogleManagedSetupReview/v2",
         "expected_revision": value["revision"], "expected_policy_hash": value["policy_hash"],

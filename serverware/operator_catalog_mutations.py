@@ -17,7 +17,7 @@ from serverware import operator_catalog_schema as schema
 from serverware import operator_catalog_timing as _catalog_timing
 from serverware import operator_demo_store as store
 from serverware.operator_catalog_inputs import (
-    ApplicationInput, CredentialInput, RuleInput, TargetInput, RotateApplicationInput, GmailReadRuleInput,
+    ApplicationInput, CredentialInput, RuleInput, CommonAppRuleInput, TargetInput, RotateApplicationInput, GmailReadRuleInput,
     ReplaceCredentialKeyInput, ApplicationProxyAuthenticationInput, RuleApprovalInput,
     GithubTokenInput, GithubAppInput, ReplaceGithubAppKeyInput, GithubRuleInput, NpmTokenInput, NpmMetadataRuleInput, NpmPublishRuleInput, NpmInstallRuleInput,
     XAppBearerInput, XUsernameRuleInput, XPostRuleInput,
@@ -182,6 +182,10 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
     if collection == "credentials":
         result.update(auth_type=record["auth_type"], header_name=record["header_name"],
             active_rule_count=len(_active_rules(catalog, "credential_id", record["id"])))
+        if "app_preset" in record:
+            from serverware import operator_common_apps
+            operator_common_apps.validate_credential(record)
+            result["app_preset"] = record["app_preset"]
         if record["auth_type"] == "google_oauth":
             from serverware import operator_catalog_google
             result.update(operator_catalog_google.public_fields(record))
@@ -238,6 +242,9 @@ def _public(collection: str, record: dict, catalog: dict, observation: dict, now
             result["request_body_mode"] = record["request_body_mode"]
         if "approval_mode" in record:
             result["approval_mode"] = record["approval_mode"]
+        if "app_preset" in record or "app_operation" in record:
+            from serverware import operator_common_apps
+            result.update(operator_common_apps.public_fields(record))
         from serverware import operator_catalog_github, operator_catalog_gmail, operator_catalog_npm, operator_catalog_npm_publish, operator_catalog_x, operator_catalog_alchemy
         from serverware import operator_catalog_npm_install
         from serverware import operator_catalog_x_post
@@ -369,10 +376,13 @@ def create_credential(payload: CredentialInput, actor_id: str) -> dict:
         credential = db.create_credential(payload.name, payload.auth_type, payload.secret,
             {"provider_id": "operator-demo", "provider_subject": subject,
              "secret_class": "bearerToken" if payload.auth_type == "bearer" else "customHeader",
+             **({"app_preset": payload.app_preset} if payload.app_preset is not None else {}),
              **({"injection_name": payload.header_name} if payload.auth_type == "header" else {})}, _connection=conn)
         record = {"id": credential["id"], "name": payload.name, "auth_type": payload.auth_type,
             "header_name": "Authorization" if payload.auth_type == "bearer" else payload.header_name,
             "provider_subject": subject, "created_at": db.iso_now(), "status": "active"}
+        if payload.app_preset is not None:
+            record["app_preset"] = payload.app_preset
         return _Change(schema.save_resource(conn, "credentials", record, create=True))
     return _mutate(payload, actor_id, "credentials", "credential.created", change)
 
@@ -529,7 +539,11 @@ def replace_credential_key(payload: ReplaceCredentialKeyInput, actor_id: str) ->
         if record.get("connection_type") == operator_github_app.CONNECTION:
             raise CatalogConflict()
         from serverware import operator_catalog_github, operator_catalog_npm, operator_catalog_x, operator_catalog_alchemy
-        if schema.validate_static_connection(record):
+        from serverware import operator_common_apps
+        if "app_preset" in record:
+            operator_common_apps.validate_credential(record)
+            operator_common_apps.validate_secret(record["app_preset"], payload.secret)
+        elif schema.validate_static_connection(record):
             providers = {item.CONNECTION: item for item in
                 (operator_catalog_github, operator_catalog_npm, operator_catalog_x, operator_catalog_alchemy)}
             provider = providers[record["connection_type"]]
@@ -586,6 +600,28 @@ def create_rule(payload: RuleInput, actor_id: str) -> dict:
         record.update(id=identifier, route_id="operator." + identifier, created_at=db.iso_now(), status="active")
         operator_catalog_npm_publish.admit_rule(record, catalog)
         operator_catalog_npm_install.admit_rule(record, catalog)
+        return _Change(schema.save_resource(conn, "access_rules", record, create=True), authority_changed=True)
+    return _mutate(payload, actor_id, "access_rules", "access_rule.created", change)
+
+
+def create_common_app_rule(payload: CommonAppRuleInput, actor_id: str) -> dict:
+    from serverware import operator_common_apps, operator_demo
+    fields = operator_common_apps.record_fields(payload)
+    upstream, _ = operator_demo.origin(fields["upstream_url"], target=True)
+    if upstream not in operator_demo.settings()["allowed_upstreams"]:
+        raise ValueError("destination is not deployment-allowlisted")
+
+    def change(db, conn, catalog):
+        _admit_create(conn, catalog, "access_rules")
+        _target(catalog, "applications", payload.application_id)
+        credential = _target(catalog, "credentials", payload.credential_id)
+        try:
+            operator_common_apps.validate_rule(fields, credential)
+        except CatalogIntegrityError:
+            raise ValueError("common app operation requires its matching credential") from None
+        identifier = str(uuid.uuid4())
+        record = {**fields, "id": identifier, "route_id": "operator." + identifier,
+            "created_at": db.iso_now(), "status": "active"}
         return _Change(schema.save_resource(conn, "access_rules", record, create=True), authority_changed=True)
     return _mutate(payload, actor_id, "access_rules", "access_rule.created", change)
 
@@ -942,6 +978,7 @@ def catalog_status() -> dict:
     from serverware import operator_catalog_x_oauth, operator_catalog_x_post
     from serverware import operator_workload_renewal_store
     from serverware import operator_catalog_approvals
+    from serverware import operator_common_apps
     return {"schema": "serverware.operatorCatalog/v1", "mode": "operator-development",
         "productionReady": False, "hardwareVerified": False, "revision": catalog["revision"],
         "policy": observation, "proxy_url": settings["proxy_url"], "allowed_upstreams": settings["allowed_upstreams"],
@@ -953,6 +990,7 @@ def catalog_status() -> dict:
         "capabilities": {"credential_types": ["bearer", "header"] + (["google_oauth"] if google_oauth else [])
                 + (["x_oauth"] if x_post_available else []),
             "host_approvals": operator_catalog_approvals.capability(),
+            "common_apps": operator_common_apps.capability(),
             "application_proxy_authentication": {"schema": "serverware.operatorProxyAuthentication/v1",
                 "modes": ["bearer", "basic_and_bearer_v1"],
                 "path": "/api/operator-demo/applications/proxy-authentication"},

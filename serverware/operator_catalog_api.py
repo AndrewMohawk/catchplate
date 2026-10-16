@@ -28,6 +28,7 @@ MUTATION_PATHS = frozenset(PREFIX + path for path in (
     "/applications/renewal/enroll", "/applications/renewal/cancel",
     "/access-rules", "/access-rules/revoke", "/access-rules/approval", "/access-rules/gmail-read", "/access-rules/github", "/access-rules/npm-metadata", "/access-rules/npm-publish", "/access-rules/x-username", "/access-rules/x-post",
     "/access-rules/alchemy-chain-status", "/access-rules/npm-install",
+    "/access-rules/common-app",
     "/oauth/google/disconnect", "/oauth/google/reauthorize", "/oauth/google/reauthorization-storage",
     "/oauth/google/setup", "/oauth/google/setup/cancel",
     "/proxy/upstreams", "/proxy/upstreams/cancel",
@@ -330,6 +331,11 @@ async def cancel_workload_renewal(request: Request, identity: auth.AdminIdentity
 @router.post("/access-rules")
 async def create_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
     return await _mutate(request, identity, "RuleInput", "create_rule", 32768, created=True)
+
+
+@router.post("/access-rules/common-app")
+async def create_common_app_rule(request: Request, identity: auth.AdminIdentity = Depends(_admin_identity)) -> JSONResponse:
+    return await _mutate(request, identity, "CommonAppRuleInput", "create_common_app_rule", 8192, created=True)
 
 
 @router.post("/access-rules/revoke")

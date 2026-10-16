@@ -56,9 +56,18 @@ class ApprovalRuleInput(NamedInput):
 
 
 class CredentialInput(NamedInput):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
     auth_type: Literal["bearer", "header"]
     header_name: str | None = Field(default=None, max_length=128)
     secret: str = Field(min_length=1, max_length=8192, repr=False)
+    app_preset: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @model_serializer(mode="wrap")
+    def omit_unselected_preset(self, handler):
+        result = handler(self)
+        if self.app_preset is None:
+            result.pop("app_preset", None)
+        return result
 
     @model_validator(mode="after")
     def static_injection(self):
@@ -72,6 +81,10 @@ class CredentialInput(NamedInput):
         else:
             injection = {"type": "header", "name": self.header_name, "prefix": ""}
         _validate_credential_injection("operator-catalog", injection)
+        if "app_preset" in self.model_fields_set:
+            from serverware import operator_common_apps
+            operator_common_apps.validate_credential_input(self.app_preset, self.auth_type, self.header_name)
+            operator_common_apps.validate_secret(self.app_preset, self.secret)
         return self
 
 
@@ -405,6 +418,21 @@ class RuleInput(ApprovalRuleInput):
             validate_credential_header_replacement(
                 {"mode": "replaceExact", "expectedValue": self.placeholder},
                 {"type": "bearer", "header": "Authorization"})
+        return self
+
+
+class CommonAppRuleInput(ApprovalRuleInput):
+    application_id: str = Field(min_length=36, max_length=36)
+    credential_id: str = Field(min_length=36, max_length=36)
+    app_preset: str = Field(min_length=1, max_length=64)
+    operation: str = Field(min_length=1, max_length=64)
+    scope: dict[str, str | int] = Field(default_factory=dict, max_length=8)
+    _canonical_ids = field_validator("application_id", "credential_id")(_identifier)
+
+    @model_validator(mode="after")
+    def exact_common_app_scope(self):
+        from serverware import operator_common_apps
+        operator_common_apps.derived_fields(self.app_preset, self.operation, self.scope)
         return self
 
 

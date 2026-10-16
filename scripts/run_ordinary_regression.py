@@ -62,6 +62,7 @@ SUITES = (
     Suite("backend", "test_host_trusted_approval_policy.py", seconds=60),
     Suite("backend", "test_operator_catalog_host_approvals.py", seconds=60),
     Suite("backend", "test_operator_host_approvals.py", seconds=60),
+    Suite("backend", "test_operator_common_apps.py", seconds=120),
     Suite("backend", "test_authority_jit_review_receipt.py", seconds=60),
     Suite("backend", "test_operator_workload_renewal_contract.py", seconds=60),
     Suite("backend", "test_proxy_managed_renewal.py", seconds=60),
@@ -185,6 +186,7 @@ SUITES = (
     Suite("ui_contract", "test_approval_decision_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_workload_renewal_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_pending_actions_ui.cjs", "node", seconds=60),
+    Suite("ui_contract", "test_operator_common_apps_ui.cjs", "node", seconds=60),
     Suite("ui_contract", "test_native_jit_review_portal.cjs", "node", seconds=60),
     Suite("ui_contract", "test_operator_auth_state_ui.cjs", "node", seconds=60),
 )
@@ -378,6 +380,8 @@ def node_completion(script, raw):
         "test_operator_pending_actions_ui.cjs": {"ok": True, "backendAcceptance": False,
             "nativeReviewAcceptance": False,
             "scope": "pending-actions UI with inert DOM and synthetic API replies"},
+        "test_operator_common_apps_ui.cjs": {"ok": True, "providers": 12, "operations": 15,
+            "scope": "pure catalog, derived authority, public request examples and download contract; no provider or browser traffic"},
         "test_native_jit_review_portal.cjs": {"ok": True, "synthetic": True,
             "nativeAdmission": False, "providerRequests": False},
         "test_operator_auth_state_ui.cjs": {"ok": True,
@@ -402,7 +406,8 @@ def node_completion(script, raw):
             count = result["groups"]
         if type(count) is not int or not 0 < count <= 10000:
             return None
-        if script in {"test_operator_catalog_browser.cjs", "test_operator_gmail_sdk_languages.cjs"}:
+        if script in {"test_operator_catalog_browser.cjs", "test_operator_gmail_sdk_languages.cjs",
+                "test_operator_common_apps_ui.cjs"}:
             return count if len(lines) == 1 else None
         return count if len(lines) - 1 == count and all(line.startswith("PASS ") for line in lines[:-1]) else None
     except (OSError, ValueError, KeyError, UnicodeError):

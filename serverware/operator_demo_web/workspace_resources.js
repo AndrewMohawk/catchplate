@@ -93,6 +93,7 @@ function renderOperatorRequestBodyForm(prefix, catalog, credential, warningId, a
       'No request body is permitted when the field list is empty, even for POST, PUT and PATCH. List fields only if you deliberately want to restrict a JSON body.');
 }
 function operatorRuleRestrictions(rule) {
+  if (isCommonAppRule(rule)) return commonAppRuleRestrictions(rule);
   if (isXPostRule(rule)) return xPostRuleRestrictions(rule);
   if (isAlchemyRule(rule)) return alchemyRuleRestrictions(rule);
   if (isXRule(rule)) return xRuleRestrictions(rule);
@@ -249,7 +250,7 @@ function keyReplacementBindings(catalog) {
 }
 function keyReplacementIdentity(credential) {
   return JSON.stringify(Object.fromEntries(['id', 'name', 'status', 'created_at', 'revoked_at', 'auth_type',
-    'header_name', 'active_rule_count', 'legacy_upstream_origin'].map(name => [name, credential[name]])));
+    'header_name', 'app_preset', 'active_rule_count', 'legacy_upstream_origin'].map(name => [name, credential[name]])));
 }
 function createStaticKeyReplacementView(workspace) {
   const panel = element('credential-replace-panel'); const form = element('credential-replace-form');
@@ -360,6 +361,16 @@ function createCredentialsView(workspace, actions = {}) {
         operatorCredentialUseRows(credential, catalog));
       if (isAwsCredential(credential)) card.dataset.credentialType = 'aws_sigv4_v1';
       if (!google) {
+        if (isCommonAppCredential(credential)) {
+          const preset = commonAppPreset(catalog, credential.app_preset);
+          card.append(textNode('p', (preset?.label || credential.app_preset) +
+            ' · Saved provider key. Use Set up access to choose a scoped operation. The key is not tested or renewed automatically.', 'small muted'));
+          const missing = [...new Set((preset?.operations || []).map(item => item.origin))].filter(origin => !catalog.allowed_upstreams.includes(origin));
+          if (missing.length) {
+            const notice = textNode('p', 'Destination approval required: ' + missing.join(', ') + '. ', 'notice');
+            const link = textNode('a', 'Review Proxy destinations'); link.href = '#proxy'; notice.append(link); card.append(notice);
+          }
+        }
         if (xAccount) card.append(textNode('p', credential.provider_account + ' · Connected X account. ' +
           (credential.status === 'active' ? 'Posting requires a separate permission and current paired gate. Saved consent is not proof of current entitlement or refresh health.' :
             'Unavailable locally. Provider cleanup is confirmed only by its operation result.'), 'small muted'));
@@ -582,7 +593,7 @@ function createAccessRulesView(workspace) {
     chooseModeOptions('rule-response-mode', responseFormChoices(catalog, element('rule-response-mode').value), 'No supported response mode available');
     renderResponseMode();
     chooseOptions('rule-application-id', catalog.applications.filter(item => item.status === 'active'), 'Create an application first');
-    chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active' && !isAwsCredential(item) && !isGithubCredential(item) && !isNpmCredential(item) && !isXCredential(item) && !isXOAuthCredential(item) && !isAlchemyCredential(item)), 'Provider presets need Set up access; AWS storage cannot grant access');
+    chooseOptions('rule-credential-id', catalog.credentials.filter(item => item.status === 'active' && !isCommonAppCredential(item) && !isAwsCredential(item) && !isGithubCredential(item) && !isNpmCredential(item) && !isXCredential(item) && !isXOAuthCredential(item) && !isAlchemyCredential(item)), 'Provider presets need Set up access; AWS storage cannot grant access');
     chooseOptions('rule-credential-input', credentialInputModes.map(mode => ({id: mode, name: operatorCredentialInputModes[mode]})), 'No supported credential input available');
     renderCredentialInput();
     renderRequestBody();

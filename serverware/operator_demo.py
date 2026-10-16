@@ -14,6 +14,8 @@ from serverware.development_sandbox import (
 )
 
 SCHEMA = "serverware.operatorDemo/v1"
+# Keep aligned with the deployed Rust operator_demo::Deployment parser.
+MAX_ALLOWED_UPSTREAMS = 16
 MARKER = ".serverware-operator-demo.json"
 MARKER_BYTES = b'{"schema": "serverware.operatorDemo/v1", "syntheticOnly": false}\n'
 _pid = None
@@ -100,8 +102,8 @@ def active() -> bool:
 
 def _destinations(raw, fixture) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Validate both raw deployment inputs and retained managed settings."""
-    if not isinstance(raw, list) or not 1 <= len(raw) <= 16:
-        raise RuntimeError("operator demo requires 1-16 explicitly allowed HTTPS origins")
+    if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_ALLOWED_UPSTREAMS:
+        raise RuntimeError("operator workspace requires 1-16 explicitly allowed HTTPS origins")
     upstreams = tuple(origin(item)[0] for item in raw)
     if len(set(upstreams)) != len(upstreams):
         raise RuntimeError("operator demo upstream origins must be unique")

@@ -182,12 +182,12 @@ def _raw_profile() -> tuple[Profile, Path]:
     client_id = os.getenv("SERVERWARE_GOOGLE_OAUTH_CLIENT_ID", "")
     if _CLIENT_ID.fullmatch(client_id) is None:
         _refuse()
-    from serverware.operator_demo import origin
+    from serverware.operator_demo import MAX_ALLOWED_UPSTREAMS, origin
     public_url = os.getenv("SERVERWARE_PUBLIC_URL", "")
     try:
         public_origin, _ = origin(public_url)
         raw_origins = json.loads(os.getenv("SERVERWARE_OPERATOR_DEMO_UPSTREAMS", "null"))
-        if not isinstance(raw_origins, list) or not 1 <= len(raw_origins) <= 16:
+        if not isinstance(raw_origins, list) or not 1 <= len(raw_origins) <= MAX_ALLOWED_UPSTREAMS:
             _refuse()
         origins = tuple(origin(value)[0] for value in raw_origins)
     except (ValueError, TypeError, AttributeError):

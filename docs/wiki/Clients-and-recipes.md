@@ -208,6 +208,23 @@ Four reviewed **inactive samples** are available: [GitHub issues](https://github
 
 The samples do not publish, post, rotate tokens or manage GitHub Actions through the proxy. Their `contents: read` permission is for repository checkout, not the target provider API. They are not evidence of a successful hosted workflow or public-provider job.
 
+## Common apps and AI providers
+
+The [common-app recipes](https://github.com/AndrewMohawk/serverware/blob/main/examples/common-apps/README.md)
+cover the guided OpenAI, Anthropic, Gemini, OpenRouter, Slack, Discord, Notion,
+Stripe, Resend, GitLab, Cloudflare and Sentry presets. The service example uses
+ordinary Python HTTP requests; the AI example uses the actual provider SDKs.
+Use the supplied public dummy credentials, approved request shapes and explicit
+proxy/CA configuration, never the real provider secret.
+
+Read the [operation and compatibility guide](https://github.com/AndrewMohawk/serverware/blob/main/docs/common-apps.md)
+before choosing an SDK. These are non-streaming, bounded JSON permissions, not
+unrestricted native-client compatibility. A full Slack/Discord bot, arbitrary
+Notion traversal, Stripe payments, AI tools/files and automatic header-based
+pagination are outside these recipes. Provider writes and AI calls that may
+incur charges require an explicit deliberate run; do not replay uncertain
+outcomes automatically.
+
 ## Agents, scheduled scripts and existing applications
 
 Use the same workload model: create a client for the agent/job, grant only its required operations, and inject only that client's proxy token and trusted CA inputs. Run the maintained example entrypoint as a tool when it matches the task. Do not put provider secrets or the client token into prompts, tool output or conversation history.

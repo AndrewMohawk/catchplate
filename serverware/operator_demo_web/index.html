@@ -22,6 +22,7 @@
       <label id="connect-diagnostics-option" class="small muted" hidden><input id="connect-include-diagnostics" type="checkbox"> Include saved connection-check resources (advanced)</label>
       <div id="connect-credential-step">
         <article id="connect-method-choice" class="card"><h2>Choose a provider or set up manually</h2>
+          <div id="connect-common-app-picker" hidden><label for="connect-common-search">Find an app</label><input id="connect-common-search" type="search" placeholder="Search AI, messaging, payments, developer tools…" autocomplete="off"><label for="connect-common-category">Category</label><select id="connect-common-category"><option value="all">All common apps</option><option value="ai">AI</option><option value="services">Work and developer tools</option></select><div id="connect-common-apps" class="actions"></div><p id="connect-common-empty" class="small muted" hidden>No apps match this search.</p><p class="small muted">Choose an app for guided keys and scoped permissions. A saved key grants no access. Destinations are approved separately in <a href="#proxy">Proxy setup</a>.</p></div>
           <div class="actions"><button id="connect-use-saved" class="secondary" disabled>Use a saved credential</button><button id="connect-google" class="secondary" disabled>Google connection unavailable</button><button id="connect-use-github" class="secondary" disabled>GitHub</button><button id="connect-use-npm" class="secondary" disabled>npm</button><button id="connect-use-x" class="secondary" disabled>X · username lookup</button><button id="connect-use-alchemy" class="secondary" disabled>Alchemy · chain status</button><button id="connect-use-key" class="secondary" disabled>Manual API key</button></div>
           <p class="small muted">AWS credentials can be stored separately in <a href="#credentials">Credentials</a> when advertised. ECR publishing and AWS client setup are not available; a manual header key is not a substitute.</p>
           <p id="connect-google-status" class="small muted">Google connection is unavailable until this deployment advertises its supported consent profile. Do not paste Google access or refresh tokens.</p>
@@ -39,7 +40,7 @@
             <label for="connect-credential-name">Give this credential a name</label><input id="connect-credential-name" maxlength="128" placeholder="My API key" required>
             <div id="connect-credential-auth-group"><label for="connect-credential-auth-type">How the provider expects it</label><select id="connect-credential-auth-type"><option value="bearer">Bearer token</option><option value="header">API key in a custom header</option></select></div>
             <div id="connect-credential-header-group" hidden><label for="connect-credential-header-name">Provider header name</label><input id="connect-credential-header-name" maxlength="128" placeholder="X-API-Key" disabled></div>
-            <div id="connect-provider-secret-group"><label for="connect-credential-secret">Provider key or token</label><input id="connect-credential-secret" type="password" maxlength="8192" autocomplete="new-password" spellcheck="false" required>
+            <div id="connect-provider-secret-group"><label id="connect-credential-secret-label" for="connect-credential-secret">Provider key or token</label><input id="connect-credential-secret" type="password" maxlength="8192" autocomplete="new-password" spellcheck="false" required>
             <p class="small muted">Stored encrypted by this development server. Cleared when submitted, never returned to apps. Saving it does not test the provider key or grant access.</p></div>
             <p id="connect-github-token-note" class="small muted" hidden>Use a GitHub personal access token limited to the intended repositories and issue permissions. Serverware does not renew it. Apps use a public dummy token, never this provider token.</p>
             <div id="connect-github-app-fields" hidden>
@@ -53,6 +54,7 @@
               <p class="small muted">Save contacts GitHub to verify this App, installation, repository and permission, and obtain a scoped token. The private key stays encrypted in Serverware and is cleared from this form on submission or navigation. Serverware automatically renews installation tokens; your application's separate proxy token still expires. No user OAuth consent or app access is started.</p>
             </div>
             <p id="connect-npm-token-note" class="small muted" hidden>Use a least-privilege npm token for reading the intended packages at registry.npmjs.org. It is saved only in Serverware, never put in the client recipe. Serverware does not renew or test this token.</p>
+            <p id="connect-common-key-note" class="small muted" hidden></p>
           </div>
           <div id="connect-x-new" hidden>
             <label for="connect-x-name">Give this X connection a name</label><input id="connect-x-name" maxlength="128" placeholder="My X lookup token" autocomplete="off" required disabled>
@@ -105,6 +107,7 @@
           <label for="connect-rule-choice">Access for this client and credential</label><select id="connect-rule-choice"></select>
           <div id="connect-rule-new">
             <div id="connect-operation-group" hidden><label for="connect-operation">Permission</label><select id="connect-operation"><option value="">Choose permitted use</option></select></div>
+            <div id="connect-common-permission" hidden><p id="connect-common-summary" class="notice"></p><div id="connect-common-scopes"></div><p id="connect-common-limits" class="small muted"></p><p class="small muted">Only this operation and the reviewed scopes are granted. No streaming, file uploads or arbitrary endpoints. Your provider token must already have the required access.</p></div>
             <p id="connect-gmail-summary" class="notice" hidden>Read Gmail: list messages, follow pagination and read individual messages in this account. No age restriction or optional content filtering. No sending, changes, attachments, history or Calendar. GET only, no request body; bounded JSON responses only.</p>
             <div id="connect-gmail-client-group" hidden>
               <label for="connect-gmail-client">Gmail client</label><select id="connect-gmail-client" required disabled><option value="sdk" selected>Official Gmail SDK</option><option value="custom">Custom HTTP client</option></select>
@@ -331,6 +334,7 @@ user-agent</textarea><p class="small muted">Do not list Content-Type: the reques
 <article id="proxy-upstreams" class="card">
   <h2>Proxy destinations</h2><p>Apps still need permission. Changes require a controlled restart.</p>
   <h3>Effective destinations</h3><pre id="upstreams-effective">Loading workspace settings...</pre>
+  <details id="upstreams-common-apps" hidden><summary>Destinations for common apps</summary><p class="small muted">Copy only the origins you intend to use into the reviewed proposed list. Saving a credential does not add a destination; preparation requires a separate controlled restart.</p><pre id="upstreams-common-origins"></pre></details>
   <button id="upstreams-review" type="button" class="secondary" disabled>Review destination settings</button>
   <p id="upstreams-status" role="status" aria-live="polite"></p>
   <form id="upstreams-form" autocomplete="off" hidden>

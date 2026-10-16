@@ -267,6 +267,10 @@ def rule_content_modes(rule: dict) -> tuple[str | None, str]:
 
 def rule_request_body_mode(rule: dict, credential: dict) -> str | None:
     """Google's existing exact GET/no-body contract is not widened by this mode."""
+    from serverware import operator_common_apps
+    if operator_common_apps.selected(rule) or operator_common_apps.selected(credential):
+        operator_common_apps.validate_rule(rule, credential)
+        return None
     from serverware import operator_catalog_aws
     if operator_catalog_aws.selected(credential):
         raise CatalogIntegrityError('AWS credentials have no access-rule signing profile')
@@ -306,6 +310,9 @@ def rule_request_body_mode(rule: dict, credential: dict) -> str | None:
 
 def validate_static_connection(record: dict, metadata: dict | None = None) -> bool:
     """Closed dispatch keeps generic credentials unmarked and retained unchanged."""
+    from serverware import operator_common_apps
+    if operator_common_apps.selected(record) or (type(metadata) is dict and "app_preset" in metadata):
+        return operator_common_apps.validate_credential(record, metadata)
     from serverware import operator_catalog_x_oauth
     if operator_catalog_x_oauth.selected(record) or (type(metadata) is dict
             and operator_catalog_x_oauth.MARKER in metadata):

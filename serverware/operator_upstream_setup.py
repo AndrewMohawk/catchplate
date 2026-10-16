@@ -19,6 +19,7 @@ from pydantic import Field, field_validator
 from serverware import operator_catalog_schema as catalog
 from serverware.db_common import audit_hash
 from serverware.operator_catalog_inputs import RevisionInput, _identifier
+from serverware.operator_demo import MAX_ALLOWED_UPSTREAMS
 from serverware.operator_publication import assert_held, exclusive
 
 TABLE = "operator_upstream_setups"
@@ -75,7 +76,7 @@ def _digest(value):
 
 def _origins(values):
     from serverware.operator_demo import origin
-    if (not isinstance(values, list) or not 1 <= len(values) <= 16
+    if (not isinstance(values, list) or not 1 <= len(values) <= MAX_ALLOWED_UPSTREAMS
             or any(not isinstance(value, str) or origin(value)[0] != value for value in values)
             or len(set(values)) != len(values)):
         raise ValueError("canonical unique HTTPS origins required")
@@ -84,7 +85,7 @@ def _origins(values):
 
 class PrepareInput(RevisionInput):
     operation_id: str = Field(min_length=36, max_length=36)
-    allowed_upstreams: list[str] = Field(min_length=1, max_length=16)
+    allowed_upstreams: list[str] = Field(min_length=1, max_length=MAX_ALLOWED_UPSTREAMS)
     expected_settings_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$", min_length=71, max_length=71)
     _uuid = field_validator("operation_id")(_identifier)
     _canonical_origins = field_validator("allowed_upstreams")(_origins)

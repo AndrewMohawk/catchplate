@@ -13,6 +13,7 @@ function operatorExampleProjects(rule, catalog) {
   const branch = 'main/';
   const project = (label, directory) => ({label, kind: 'project', href: source + 'tree/' + branch + 'examples/' + directory});
   const guide = (label, filename) => ({label, kind: 'guide', href: source + 'blob/' + branch + 'docs/' + filename});
+  if (isCommonAppRule(rule)) return [project('Python HTTP and official AI SDK examples', 'common-apps'), guide('App scopes and compatibility', 'common-apps.md')];
   switch (rule.operation_bundle) {
     case 'github_issues_read_v1':
     case 'github_issues_write_v1':
@@ -62,6 +63,8 @@ function renderOperatorExampleProjects(rule, catalog) {
   }
 }
 function operatorFileHandoff(rule) {
+  if (isCommonAppRule(rule)) return {commands: 'python3 request.py --config ./serverware-client.private.json',
+    note: 'From examples/common-apps after installing its pinned dependencies. GET reads run directly. Writes require a reviewed local JSON file plus --body ./request.json --execute-write. The config example body is not automatic permission to send. AI SDK instructions are in the same README; keep retries and streaming disabled.'};
   const profiles = {
     alchemy_chain_status_read_v1: {python: 'chain_status.py', note: 'Reads chain ID and block number for the saved chain; no transactions.'},
     x_username_read_v1: {python: 'username.py', note: 'Looks up only the saved username; no posting.'},
@@ -165,6 +168,10 @@ function createProxyView(workspace, applications) {
       'Run the selected official Gmail SDK example to list at most two pages of five inbox messages and read metadata for their returned IDs. It prints counts only, makes no writes, and has a two-minute overall deadline. The three examples passed isolated synthetic-provider proxy checks, not real Google acceptance. This page does not run the job or verify your account.' : gmail ?
       'List messages first, then use an actual returned message ID to read it. Your client handles pagination and each request. These templates are not an automated mail job or proof of a successful Gmail request.' :
       'This template includes no request body or query parameter values. It is not a complete API operation or a successful request test. Supply endpoint-specific data in your existing client, using only what the selected rule permits.';
+    if (isCommonAppRule(rule)) {
+      element('client-template-title').textContent = (commonAppPreset(catalog, rule.app_preset)?.label || 'App') + ' · Request example';
+      element('client-template-warning').textContent = 'This example includes the exact public dummy and a suggested scoped body or query. Review all content before running. Writes can create data or incur charges. No request is sent by this page; never automatically retry an uncertain write.';
+    }
     chooseOptions('proxy-method', (rule?.methods || []).filter(method => operatorMethods.includes(method)).map(method => ({id: method, name: method})), 'No supported method');
     const credential = catalog.credentials.find(item => item.id === rule?.credential_id);
     if (!application || !rule) {
@@ -224,10 +231,10 @@ function createProxyView(workspace, applications) {
         repository: rule.repository, bundle: rule.operation_bundle, operation: element('github-client-operation').value,
         caPath: element('ca-path').value, proxyCaPath: element('github-proxy-ca-path').value}) :
         gmailSdk ? buildGmailSdkClientRecipe(gmailSdkOptions(catalog, application, rule)) :
-        buildCurlCommand({proxyUrl: catalog.proxy_url, upstreamUrl: rule.upstream_url + (messageRead ? '/' + messageId : ''), method: element('proxy-method').value,
+        (isCommonAppRule(rule) ? commonAppCurlCommand : buildCurlCommand)({proxyUrl: catalog.proxy_url, upstreamUrl: rule.upstream_url + (messageRead ? '/' + messageId : ''), method: element('proxy-method').value,
         caPath: element('ca-path').value, allowedHeaders: rule.allowed_headers,
         credentialInput: rule.credential_input, placeholder: rule.placeholder, credential,
-        proxyAuthentication, applicationId: application.id});
+        proxyAuthentication, applicationId: application.id}, rule, catalog);
       dummyHeader = clientCredentialInput({credentialInput: rule.credential_input, placeholder: rule.placeholder, credential});
     } catch (_) { element('client-command').textContent = gmailSdk ?
       'A current saved Gmail SDK application, valid HTTPS proxy and explicit printable CA paths are required.' :
@@ -247,6 +254,13 @@ function createProxyView(workspace, applications) {
     element('client-proxy-login-status').textContent = (ready ? 'The exact saved policy is loaded. No client connection was tested here. ' :
       'Wait for the exact saved policy to load and resolve uncertain changes before using this login. ') +
       'Application token expires ' + new Date(application.token_expires_at_epoch_ms).toLocaleString() + '; no token was renewed.';
+    if (isCommonAppRule(rule)) {
+      const preset = commonAppPreset(catalog, rule.app_preset), operation = commonAppOperation(catalog, rule);
+      element('client-guidance').textContent = (ready ? 'The saved permission is loaded; no provider request has been tested here. ' : 'Wait for exact policy activation. ') +
+        preset.label + ': ' + operation.description + ' The request below is a ready example, not an executed request. Review its content before running; writes may create data or charges. ' +
+        'Use only the fixed public dummy header. No streaming, automatic retries or provider secret in client configuration.';
+      return;
+    }
     if (xPost) {
       element('client-guidance').textContent = (ready ? 'The exact policy is loaded; no post has been sent or tested. ' : 'Wait for the exact policy and resolve uncertain changes. ') +
         'Use the reviewed examples/x-post-node project with your Serverware app token and locally supplied text. The client uses a public dummy; no X access or refresh token is shared. ' + xPostQuotaSummary(rule) + ' No media, replies, quotes or threads. Keep both TLS checks enabled. Inspect Audit log and the account after any uncertain outcome; do not replay automatically.';
@@ -350,7 +364,8 @@ function createProxyView(workspace, applications) {
     render(); if (element('copy-command').disabled || !command) return;
     try {
       await navigator.clipboard.writeText(command);
-      element('client-copy-status').textContent = !element('x-post-client-controls').hidden ?
+      element('client-copy-status').textContent = isCommonAppRule(workspace.state.catalog?.access_rules.find(item => item.id === element('proxy-rule').value)) ?
+        'Copied the scoped request example, including its example body or query. Review content before running; no request was sent. Set only the Serverware app token locally.' : !element('x-post-client-controls').hidden ?
         'Copied the X posting SDK recipe. Supply text and the app token locally; no post was sent. Do not automatically repeat an uncertain result.' : isNpmInstallRule(workspace.state.catalog?.access_rules.find(item => item.id === element('proxy-rule').value)) ?
         'Copied the npm install/ci example setup. Set the reviewed project/output paths and app token privately; no job was executed.' : !element('gmail-sdk-client-controls').hidden ?
         'Copied the Bash recipe for the selected Gmail SDK job. Set the application token privately and prepare its reviewed dependencies first; no Google token, build or request is included in this copy action.' : !element('alchemy-client-controls').hidden ?
@@ -378,6 +393,15 @@ function createProxyView(workspace, applications) {
       {proxy_authentication: 'basic_and_bearer_v1', proxy_username: application.id, proxy_password: token});
     else config.proxy_authorization = 'Bearer ' + token;
     if (Object.hasOwn(rule, 'request_body_mode')) config.request_body_mode = rule.request_body_mode;
+    if (isCommonAppRule(rule)) {
+      const preset = commonAppPreset(catalog, rule.app_preset), request = commonAppRequest(rule, catalog);
+      Object.assign(config, {app_preset: rule.app_preset, app_operation: rule.app_operation, scope: {...rule.scope},
+        common_app: {preset_id: rule.app_preset, operation_id: rule.app_operation, scope: {...rule.scope}},
+        request_headers: request.headers, request_body: request.body, request_query: request.query,
+        query_keys: [...rule.query_keys], proxy_ca_file: null,
+        client_recipe: {automatic_retries: 0, sdk_auth_token: preset.sdk_auth_token}});
+      config.note += ' The request body is a suggested example, never automatic write intent. Review it and provide --body plus --execute-write to the common HTTP runner. Streaming and automatic retries are unsupported. No provider secret is included.';
+    }
     if (isXPostRule(rule)) {
       config.operation_bundle = rule.operation_bundle;
       config.client_recipe = {entrypoint: 'examples/x-post-node/client.mjs', automatic_retries: 0,

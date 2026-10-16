@@ -2,6 +2,22 @@
 
 # Operator notifications: action alerts and audit delivery
 
+## Current ordinary source — October 15
+
+Host-trusted approvals now supply action-required alerts for valid pending
+requests. The existing administrator reviews the linked request in **Pending
+actions**; following the link or receiving an alert does not approve or execute
+it. Reviewed, approved, denied, expired and claimed events are separate audit
+filters. The two channels and their four destination settings remain independent.
+Provider keys, request bodies and notification URLs are not included in alerts.
+
+The host-review source is deployed, but all four destinations remain
+unconfigured in the current deployment record: real receiver delivery is not
+verified. A host administrator can bypass this control. The native observation
+bridge described below is a separate future assurance path, not a prerequisite
+for ordinary approval notifications. See the
+[current host-review record](project-completion.md#host-trusted-approvals--connected-acceptance-passed).
+
 The **operator-development notification feature** includes four
 destination settings, notification-only encrypted custody, a persistent outbox,
 safe audit projections, Slack/generic HTTPS transport, administrator API routes
@@ -30,8 +46,8 @@ delivery**. Each channel has its own Slack and generic-webhook slots:
 
 | Slot | Intended use | Current source boundary |
 | --- | --- | --- |
-| `action_required.slack` | Ask someone in Slack to act | Separately admitted native observation bridge; legacy approval source suppressed |
-| `action_required.webhook` | Send the same kind of attention request to an automation receiver | Same native source checks, independently configured destination |
+| `action_required.slack` | Ask someone in Slack to act | Ordinary host-review pending requests; separately admitted native observations when configured |
+| `action_required.webhook` | Send the same kind of attention request to an automation receiver | Same source checks, independently configured destination |
 | `audit_log.slack` | Show selected events in Slack | Committed operator-development SQLite events, including recorded native observations |
 | `audit_log.webhook` | Export selected structured event copies | Same committed audit sources, independently configured destination |
 

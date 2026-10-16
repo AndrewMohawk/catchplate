@@ -1,5 +1,27 @@
 # Credential-first operator workspace
 
+## Current ordinary-product status — October 15
+
+The user accepts a trusted server administrator for the present product. Optional
+host-trusted approve/deny and finite managed workload renewal are implemented
+and deployed; native/TEE enforcement is a separate future assurance target, not
+a prerequisite for either. Earlier statements below about missing ordinary
+approvals or renewal are superseded by the current records:
+[host review](project-completion.md#host-trusted-approvals--connected-acceptance-passed),
+[managed renewal](project-completion.md#finite-workload-token-renewal--deployed),
+and the [current deployment](project-completion.md#current-live-deployment).
+
+The same instance now offers [12 additional common-app providers and 15 scoped
+operations](common-apps.md), with Requests and official AI SDK examples. These
+are specific supported jobs, not blanket service access or universal SDK
+compatibility. Provider keys, real Google/X consent, real jobs and receiver
+delivery still need their own acceptance. Local stdio MCP is implemented using
+downloaded private client configurations; focused protocol/adapter checks passed
+and its connected synthetic smoke is next. Hosted MCP delivery is future work, with no endpoint deployed
+or expanded authentication surface. The [ordinary delivery queue](project-completion.md#remaining-ordinary-product-work--october-15)
+distinguishes missing implementation from private operator inputs and future
+hardware assurance. Historical examples and evidence remain below.
+
 ## Product decisions from the original examples
 
 The primary question is **let this app use this account or key for these
@@ -79,8 +101,10 @@ defaults to copy wholesale.
 
 Keep **Proxy setup** and its CA download first-class, alongside **Credentials**,
 **Clients**, **Permissions**, and **Audit log**. Provider application
-configuration belongs in administrator settings. Approvals need their own
-pending-action workflow when implemented; do not offer an inert approval option.
+configuration belongs in administrator settings. Approvals use their own
+**Pending actions** workflow. Ordinary host review is now available when the
+matching runtime is enabled; never offer an inert option or represent it as
+the separate future hardware-backed workflow.
 
 Retained connection checks must not look like configured provider accounts.
 Overview counts and next-step guidance exclude resources used only with the
@@ -262,10 +286,14 @@ form.
 Unattended use has two lifecycles: provider access-token refresh and the app's
 own Serverware identity. A long-running job needs a supported way to renew or
 rotate the latter before its finite expiry; automatic Google refresh alone is
-not indefinite job access. The current development token has an explicit
-30-day default and a 90-day maximum, with manual rotation. Show that limit in
-client setup and treat managed workload-identity renewal as separate unfinished
-work, not an excuse to silently renew tokens or remove their expiry.
+not indefinite job access. Manually managed client tokens retain an explicit
+30-day default and a 90-day maximum, with manual rotation. The earlier backlog
+for managed renewal is now implemented: explicit Ed25519 enrollment grants
+1–90 days of renewal authority and 1–24 hour tokens, clipped to the enrollment
+deadline. Existing clients remain manual until deliberately enrolled. Show the
+selected lifecycle in setup; never silently renew tokens or remove their expiry.
+See the [deployed renewal contract](operator-workload-renewal.md) and
+[connected helper evidence](project-completion.md#default-managed-helper-https--isolated-connected-acceptance).
 
 Normal clients also need their request bodies, provider errors and supported
 response statuses to behave normally. "No optional content filtering" must
@@ -291,10 +319,13 @@ identity, and granted one projected-JSON route together. Those are distinct
 resources. Simplifying labels without separating their lifecycles would not
 meet the requirement.
 
-This workspace changes the development profile only. It does not satisfy or
-remove native commissioning, independent custody, production approval, provider
-ownership, public routing, or production acceptance requirements. No deployment
-is established by this document or by source tests.
+This workspace uses the ordinary host-trusted profile. Its application checks
+still require authentication, client isolation, secret protection and retained
+data integrity. It does not establish native commissioning, independent custody
+or hostile-root resistance; those are future assurance targets, not prerequisites
+for ordinary approval. Provider ownership and actual job acceptance remain
+distinct from implementation. This requirements document and source tests alone
+do not establish deployment; use the linked release records.
 
 ## Resource model
 
@@ -397,8 +428,10 @@ cannot silently disappear when content filtering is disabled.
 
 ### Concrete acceptance boundaries still to finish
 
-These are requirements, not claims that the current UI or runtime implements
-them. They must not broaden existing saved rules.
+These are journey acceptance criteria. Some are now implemented and deployed;
+their linked current records distinguish that evidence from remaining real-use
+acceptance. Historical source-only descriptions do not reopen completed ordinary
+work. None of these criteria may silently broaden existing saved rules.
 
 - **Name the job and client.** Each supported preset must name its client and
   configuration, operation sequence and completion condition. For example,
@@ -439,7 +472,7 @@ them. They must not broaden existing saved rules.
 | Replace a configured value | A normal client with the configured placeholder succeeds; unrelated, ambiguous or mismatching input does not select or reveal a credential. Existing insertion-only rules retain their behavior. |
 | Apply no response content filter | Supported responses retain their logical content without a user-written field allowlist; protocol, size, timeout, target, safe-header and disclosure controls still apply. Unsupported formats are explicit, not silently transformed or advertised as supported. |
 | Complete a provider workflow | One understandable preset covers the necessary bounded operation bundle, such as Gmail list, pagination and message reads, or npm prerequisite reads plus publish. Prove the ordinary client can complete the operation, not just one hand-crafted endpoint call. |
-| Approve a requested action | A real attempted operation creates a pending review showing the exact action, expiry and affected account; approve, deny and timeout produce visible outcomes. Fresh one-use approval admits only the bound action, and the client has a supported continuation or explicit retry path. This workspace integration remains open. |
+| Approve a requested action | Ordinary host-trusted review is implemented and deployed: an actual request creates a pending action; approve, deny, expiry and one-use consumption have visible outcomes and explicit identical-request retry. Connected synthetic acceptance passed. Real-provider use and improved human-readable review remain separate; review currently contains metadata/body hash, not body contents. Native/TEE authority is future work. |
 
 Google OAuth application configuration belongs to administrator setup. An
 account owner still performs initial consent. The interface should show the
@@ -486,11 +519,12 @@ acceptance before rollout. An old gate must reject an unsupported policy; never
 silently substitute another response mode. Saved state is not active until the
 backend reports active publication and the loaded hash matches the saved hash.
 
-Per-rule header replacement is implemented in the catalog, UI and Rust source;
-actual proxy acceptance remains separate. Google profile integration and the
-real-provider consent/refresh journey are still open requirements. Do not
-present inactive OAuth controls, a health check, fixture-only browser success
-or a JSON-only response mode as completion of those journeys.
+Per-rule header replacement is implemented and has actual proxy acceptance;
+the [public allow/revoke boundary](operator-public-proxy-verification.md) is also
+recorded. Google's managed account and Gmail SDK profiles are implemented with
+isolated consent/refresh and job evidence. The real-provider consent/refresh
+journey is still open: do not present inactive OAuth controls, a health check,
+fixture-only browser success or a JSON-only response mode as its completion.
 
 Client placeholder matching belongs to an access rule, not the reusable secret.
 Two applications sharing a credential may use different dummy values, or one
@@ -507,7 +541,7 @@ journey and its exact supported header contract.
 | Gmail recent mail | Connect Google; choose read-only mail and an optional age limit. | Verified account and scopes; message routes and response-side age evidence, not only a rewritten query. |
 | X daily posting | Connect the X account; allow posting with a daily quota. | Shared provider-account quota across applications; changing a client identity cannot reset it. |
 | npm publishing | Store the publishing credential; choose package and allowed hours. | Typed publish operations, exact package and schedule; a time window permits requests rather than scheduling a job. |
-| ECR image publication | Select account, region and repository; require approval for the exact image. | Request-bound, one-use human approval before credential use. Publication is not enclave deployment or attestation. |
+| ECR image publication | Select account, region and repository; require approval for the exact image. | Bind approval to image intent and its upload/manifest workflow, not transient SigV4 request headers. The current ordinary path is not implemented; storage and signing components alone do not publish an image. Native custody is a separate future requirement. |
 | Ordinary API client | Store the key; select destination and credential placement. | Application identity, explicit destination/operation permission and exact replacement semantics; no compulsory content projection. |
 
 These are user-facing presets over the existing policy mechanisms, not reasons
@@ -526,7 +560,10 @@ exposing provider tokens. The actual official Go Gmail SDK example subsequently
 passed that local workflow over an HTTPS proxy using Basic CONNECT and separate
 trust roots, with wrong-trust, unassigned-app and revocation controls. See
 [the exact verification boundary](operator-gmail-job-verification.md).
-Real Google, the joined browser journey and other SDKs remain open.
+That Go checkpoint is historical. Later Node/Python/upgraded-Go synthetic jobs
+passed across expiry and refresh, and their configuration handoff is deployed;
+see the [current Gmail row](project-completion.md#p1--complete-the-explicitly-requested-features).
+Real Google consent and the actual deployed inbox job remain open.
 Mail-age restrictions remain optional, with their independent response checks
 when selected. Attachments, history and other operations must be named explicitly
 rather than silently included in a vague "Google access" grant.
@@ -574,13 +611,20 @@ different limits. A requested-token allowance is not measured token usage or
 provider billing. Show these details only when that restriction is selected.
 
 The approval journey is a first-class workflow, not a checkbox on a credential.
-Request-triggered approval, as in the ECR example, requires a pending-actions view, an exact-action review,
-the configured hardware ceremony, and a visible terminal result. A rejected,
-expired or uncertain action must not silently resubmit. Whether a client waits
-or deliberately retries depends on the implemented provider protocol; the UI
-must not promise transparent continuation where only an explicit retry exists.
-An approval notification contains no provider secret. Current operator catalog
-routes and navigation do not provide this workflow.
+The original ECR example assumed a configured hardware ceremony; that remains
+a future protected-assurance design, not the October 15 ordinary requirement.
+The deployed host-trusted workflow provides Pending actions, explicit exact-
+request review, approve/deny/expiry and visible consumption. It requires no
+per-action hardware ceremony. Review currently shows metadata and a body hash,
+not the request-body contents; improve action/client/account descriptions without
+claiming a richer review than is available.
+
+A rejected, expired or uncertain action must not silently resubmit. The original
+request stops with HTTP 428; after approval the client must explicitly retry the
+identical request once before expiry. The UI must not promise transparent
+continuation. Host-review action alerts contain no provider secret and are
+separate from audit delivery. Real receiver delivery and actual provider approval
+use remain unverified; ECR's multi-request publication protocol is still missing.
 
 Account connectivity/refresh health, application-token validity and actual rule
 activation must be three separately visible states. A healthy Google grant does

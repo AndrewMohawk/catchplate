@@ -14,6 +14,12 @@ This is for ordinary application authentication as well as agentic workflows.
 The application asks to use an API; it does not need possession of that API's
 long-lived credential.
 
+For an MCP-capable agent, the [local MCP server](examples/mcp/README.md) exposes
+configured operations through `list_operations`, `read_operation` and
+`perform_action`. It uses downloaded client permissions, keeps provider keys in
+Serverware, and requires explicit opt-in for actions. It is stdio, not a hosted
+MCP URL or an administrator interface.
+
 ## Use Serverware
 
 Open the running [Serverware instance](https://serverware.example.com/)
@@ -75,13 +81,14 @@ prepares retained configuration for a controlled restart; it does not apply live
 settings or grant application access. See [verification and current limits](docs/ordinary-client-verification.md)
 and the [operator workflow requirements](docs/operator-workspace-requirements.md).
 The [whole-project acceptance tracker](docs/project-completion.md) separates
-immediate ordinary-app work, requested provider features and the six independent
-production gates; none is silently dropped by presentation changes.
+current host-trusted product work from future independent hardware/TEE assurance.
 Historical sandbox and pilot deployments are not alternative product entrypoints.
 The current instance uses local encrypted custody and a development security
-profile, not verified hardware-backed production custody. One product does not
-mean a weaker approval substitute: protected approval features must use their
-required authority. Existing production gates and historical evidence remain.
+profile, not verified hardware-backed custody. The server administrator is
+trusted. Optional **Require human approval** uses the same authenticated console:
+the original request stops, and approval permits one explicit identical retry.
+This is not a per-action YubiKey ceremony or protection against host root.
+Future protected approval authority and historical evidence remain separate.
 
 ### Connect the services your applications use
 
@@ -90,35 +97,31 @@ depends on the deployment's advertised capabilities and approved destinations.
 
 | Job | Current operator-workspace boundary |
 | --- | --- |
+| Use common AI and service APIs | Guided presets for OpenAI, Anthropic, Gemini, OpenRouter, Slack, Discord, Notion, Stripe, Resend, GitLab, Cloudflare and Sentry: 15 specific scoped operations, not unrestricted provider access. Deployed; connected synthetic checks passed, real-provider use remains separate. [Presets and limits](docs/common-apps.md), [runnable clients](examples/common-apps/README.md). |
 | Keep a long-running client's proxy token renewed | Optional finite workload-key enrollment is deployed; existing clients stay manual unless explicitly enrolled. Isolated stock-Requests/normal-proxy handoff, expiry and the standalone helper's default HTTPS transport with its locked dependencies passed. A real enrolled workload/provider job remains unverified. [Client guide](examples/managed-client/README.md), [connected helper verification](docs/project-completion.md#default-managed-helper-https--isolated-connected-acceptance). |
 | Read or create GitHub issues and comments | Deployed PAT and GitHub App connections, exact repository/Issues permissions and automatic App installation-token renewal. Isolated Node/Python/Go App-through-Rust reads passed across token renewal, scope denials and revocation. Real GitHub acceptance remains open. [Contract](docs/operator-github-client-compatibility.md). |
 | Read Gmail for a connected account | Configured Google OAuth and the Gmail read-only permission. Actual Node/Python and updated-Go jobs passed isolated proxy verification across expiry, automatic refresh and denials. Real Google consent and the deployed inbox job remain unverified. [Verification](docs/operator-gmail-job-verification.md#current-node-python-and-go-sdk-acceptance--isolated-jobs-passed). |
 | Call a custom JSON API | Static Bearer/custom-header key, approved HTTPS destination and exact path; bounded request/response modes, not arbitrary API compatibility. |
 | Read npm package metadata | Exact named-package metadata permission only; it does not grant tarball downloads, installation, audit or publication. [Contract](docs/operator-npm-metadata.md). |
-| Publish an npm package | Named-package publishing preset and downloadable stock npm example; historical isolated cases passed. The upgraded npm 11.20.0 graph still needs joined proxy verification. Real registry credentials and publication are separate. [Contract](docs/operator-npm-client-compatibility.md). |
-| Install npm dependencies or run a cold `npm ci` | Separate metadata/tarball/bulk-audit permission with every dependency explicitly listed. Stock npm 11.8.0 passed isolated install, cold `ci` and default-audit checks; npm 11.20.0 has separate CLI/component checks but still needs its own joined proxy run. Public proxy reachability is verified separately; real registry access is not. [Verification](docs/operator-npm-install.md). |
+| Publish an npm package | Named-package publishing preset and downloadable stock npm example. The pinned npm 11.20.0 graph passed a 25-phase isolated proxy run, including scoped/unscoped publication. Real registry credentials and publication are separate. [Verification](docs/operator-npm-example-acceptance.md). |
+| Install npm dependencies or run a cold `npm ci` | Separate metadata/tarball/bulk-audit permission with every dependency explicitly listed. The same npm 11.20.0 isolated run passed install, cold `ci` and default audit. Public proxy reachability is verified separately; real registry access is not. [Verification](docs/operator-npm-example-acceptance.md). |
 | Look up an X username | App-bearer preset for one exact username; Node/Python/Go examples passed against an isolated provider. This is not account-authorized posting. [Verification](docs/operator-x-username-verification.md). |
 | Post text to X using a connected account | Managed OAuth, automatic refresh, protective disconnect and optional shared account-wide UTC-day posting-attempt limits are implemented and deployed. Actual SDK/shared-limit/fault controls passed against an isolated TLS provider. Posting requires configured app/gate readiness; limits also require the durable store. X remains unconfigured in the deployment record, and real-X acceptance is open. [Posting](docs/operator-x-posting.md), [limits](docs/operator-x-posting-quotas.md). |
-| Read an Ethereum chain through Alchemy | Only `eth_chainId` and `eth_blockNumber` on selected mainnet/Sepolia, with Node/Python/Go examples. Historical isolated proxy acceptance does not cover later dependency repairs; real-provider entitlement remains unverified. Blockchain writes are outside this preset. [Verification](docs/operator-alchemy-verification.md). |
+| Read an Ethereum chain through Alchemy | Only `eth_chainId` and `eth_blockNumber` on selected mainnet/Sepolia, with Node/Python/Go examples. Updated Viem-based Node and Python/Go jobs passed isolated proxy verification; real-provider entitlement remains unverified. Blockchain writes are outside this preset. [Verification](docs/operator-alchemy-verification.md). |
 | Store AWS keys or publish an image to ECR | Long-term/session credentials can be stored, replaced and revoked locally. AWS signing, automatic renewal and ECR publication are not available operator permissions. [Boundary](docs/operator-aws-client-compatibility.md). |
-| Send a Slack message or arbitrary webhook | Illustrative use case, not a verified provider preset. A custom-header JSON API is not support for every webhook authentication or response format. |
+| Send a Slack message or webhook | Slack now has a fixed-channel text/thread-reply preset. Arbitrary webhooks still need an explicitly supported authentication, destination and response profile; the Slack preset does not grant them. [Slack preset](docs/common-apps.md#slack). |
 
 The files under `policies/` are policy examples and engineering fixtures. They
 are not ready-to-use provider accounts or safe defaults to import wholesale.
 Serverware's own [action alerts and audit delivery](docs/operator-notifications.md)
-are independently configurable: action alerts ask someone to act (such as using
-a YubiKey); audit alerts record what happened. Each has its own Slack and HTTPS
-webhook settings, encrypted URL and explicit synthetic test. The optional,
-default-off operator-development source now includes a read-only native phase
-bridge with exact owner/source and original-expiry checks; legacy approval/JIT
-alerts remain suppressed. The isolated browser-to-application-to-TLS workflow
-passes, including independent saves, explicit tests and selected audit delivery.
-The running instance enables the feature with four unconfigured destinations. The latest
-paired rollout verified its read-only browser flow, retained data and empty
-app-only custody; outbound TLS was verified at the earlier notification rollout.
-Real receiver delivery and deployed save/test remain unverified.
-The native relay is not running: configuration does not establish a live YubiKey
-action or physical-key acceptance, or grant proxied webhook permissions.
+are independently configurable: action alerts ask someone to review a pending
+request; audit alerts record what happened. Each has its own Slack and HTTPS
+webhook settings, encrypted URL and explicit synthetic test. The ordinary
+host-approval source is implemented and deployed. The isolated notification
+workflow passed; the running instance still has four unconfigured destinations,
+so real receiver delivery remains unverified. A notification cannot approve or
+execute a request. Future native/security-key alerts are a separate source, and
+notification settings do not grant applications proxied webhook permissions.
 
 ## Example workflows
 

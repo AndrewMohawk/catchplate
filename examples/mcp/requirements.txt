@@ -1,0 +1,4 @@
+# Official MCP Python SDK v2; Requests pins match the shared proxy transport.
+-c requirements.lock
+mcp==2.3.0
+-r ../common-apps/requirements.txt

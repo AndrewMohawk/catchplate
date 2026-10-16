@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configuration, npmConfiguration, childEnvironment, pacoteOptions, npmArguments,
   reviewedTarball, reviewedManifest, publishSummary, failure, PUBLIC_NPM_DUMMY, VERSIONS } from './core.mjs';
-import { verifyVersions, trustedPem, invokeWorker, loadClientConfig, parseArguments } from './client.mjs';
+import { verifyVersions, trustedPem, invokeWorker, loadClientConfig, parseArguments, containedMetadataWorker } from './client.mjs';
 import { perform } from './worker.mjs';
 
 const bytes = Buffer.from('inert reviewed fixture bytes, not an archive');
@@ -288,4 +288,24 @@ test('launcher uses a separate process group and bounded captured pipes (mock on
     return fake;
   });
   assert.deepEqual(await pending, { status: 0, signal: null, stdout: '{"ok":true}', stderr: '' });
+});
+
+test('contained worker is internal metadata-view only and retains its supervisor process group', async () => {
+  for (const operation of ['view', 'manifest', 'publish', 'install', 'ci'])
+    assert.equal(containedMetadataWorker({}, operation), false);
+  assert.equal(containedMetadataWorker({SERVERWARE_MCP_CONTAINED_WORKER: '1'}, 'view'), true);
+  for (const operation of ['manifest', 'publish', 'install', 'ci'])
+    assert.throws(() => containedMetadataWorker({SERVERWARE_MCP_CONTAINED_WORKER: '1'}, operation));
+  for (const value of ['0', '', 'true', 1])
+    assert.throws(() => containedMetadataWorker({SERVERWARE_MCP_CONTAINED_WORKER: value}, 'view'));
+  const fake = new EventEmitter();
+  fake.stdout = new EventEmitter(); fake.stderr = new EventEmitter();
+  fake.stdout.setEncoding = fake.stderr.setEncoding = () => {};
+  const pending = invokeWorker('/node', ['/example/worker.mjs', 'view'], {env: {SAFE: 'only'}}, (_node, _args, options) => {
+    assert.equal(options.detached, false);
+    assert.deepEqual(options.stdio, ['ignore', 'pipe', 'pipe']);
+    queueMicrotask(() => { fake.stdout.emit('data', '{"ok":true}'); fake.emit('close', 0, null); });
+    return fake;
+  }, 15000, () => {}, true);
+  assert.deepEqual(await pending, {status: 0, signal: null, stdout: '{"ok":true}', stderr: ''});
 });

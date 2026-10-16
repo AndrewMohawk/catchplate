@@ -135,7 +135,7 @@ class Handler(BaseHTTPRequestHandler):
             assert headers["accept"] == "application/json" and headers["content-type"] == "application/json"
             assert headers.get("accept-encoding", "identity") == "identity"
             assert headers.get("connection", "close") in {"close", "keep-alive"}
-            assert headers["user-agent"] == "serverware-common-apps-fixture/1"
+            assert headers["user-agent"] == self.server.user_agent
             expected_body = encoded(spec["body"])
             assert headers["content-length"] == str(len(expected_body))
             raw = self.rfile.read(len(expected_body))
@@ -147,7 +147,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send(400, {"error": "synthetic_provider_rejected"})
 
 
-def serve():
+def serve(*, mcp_smoke=False):
     assert_isolated()
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -155,6 +155,7 @@ def serve():
     signal.alarm(300)
     with HTTPServer((isolated.FIXTURE_IP, 443), Handler) as server:
         server.total, server.attempts, server.timeout = 0, [], 0.5
+        server.user_agent = "serverware-common-apps-example/1.0" if mcp_smoke else "serverware-common-apps-fixture/1"
         server.socket = context.wrap_socket(server.socket, server_side=True)
         until = time.monotonic() + 290
         while time.monotonic() < until:
@@ -164,7 +165,11 @@ def serve():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("setup", "network", "edge", "provider"))
-    selected = parser.parse_args().operation
+    parser.add_argument("--mcp-smoke", action="store_true")
+    args = parser.parse_args()
+    selected = args.operation
+    if args.mcp_smoke and selected != "provider":
+        parser.error("--mcp-smoke requires the provider operation")
     os.umask(0o077)
     configure_network()
     if selected == "setup":
@@ -175,4 +180,4 @@ if __name__ == "__main__":
     elif selected == "edge":
         guided.edge()
     else:
-        serve()
+        serve(mcp_smoke=args.mcp_smoke)

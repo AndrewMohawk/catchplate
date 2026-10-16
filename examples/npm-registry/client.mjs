@@ -140,17 +140,25 @@ export function verifyVersions(readFile = readFileSync) {
   }
 }
 
-// A separate POSIX process group lets the deadline also stop a nested npm CLI.
-// Killing only the worker could otherwise leave a publish child running.
-export function invokeWorker(command, args, options, launch = spawn, timeoutMs = 15000, observe = () => {}) {
+// Ordinary CLI jobs own a separate process group. A contained metadata-only MCP
+// call instead stays inside its supervisor's group; that supervisor kills the
+// whole group on cancellation AND after completion, then removes its scratch.
+export function containedMetadataWorker(env, operation) {
+  const value = env.SERVERWARE_MCP_CONTAINED_WORKER;
+  requireValue(value === undefined || (value === '1' && operation === 'view'));
+  return value === '1';
+}
+
+export function invokeWorker(command, args, options, launch = spawn, timeoutMs = 15000, observe = () => {}, contained = false) {
   requireValue(Number.isInteger(timeoutMs) && timeoutMs >= 1000 && timeoutMs <= 65000);
+  requireValue(typeof contained === 'boolean');
   return new Promise((accept, reject) => {
-    const child = launch(command, args, { ...options, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = launch(command, args, { ...options, detached: !contained, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '', refused = false, processError;
     const stop = code => {
       refused = true;
       processError = { code };
-      try { process.kill(-child.pid, 'SIGKILL'); }
+      try { if (contained) child.kill('SIGKILL'); else process.kill(-child.pid, 'SIGKILL'); }
       catch { try { child.kill('SIGKILL'); } catch { /* The exit/error handler still refuses. */ } }
     };
     const timer = setTimeout(() => stop('ETIMEDOUT'), timeoutMs);
@@ -184,6 +192,7 @@ async function main() {
   const observe = update => { diagnostic = sanitizeDiagnostic({ ...diagnostic, ...update }); };
   try {
     const parsed = parseArguments(args); operation = parsed.operation;
+    const contained = containedMetadataWorker(process.env, operation);
     requireValue(process.version === 'v25.5.0' && process.platform !== 'win32');
     const config = parsed.configPath ? loadClientConfig(parsed.configPath, process.env, operation)
       : configuration(process.env, operation);
@@ -217,7 +226,7 @@ async function main() {
     observe({ launcherStage: 'worker_process', processRole: 'worker' });
     const result = await invokeWorker(process.execPath, [join(directory, 'worker.mjs'), operation], {
       cwd: taskRoot, env: childEnvironment(config, paths),
-    }, undefined, isInstallation(operation) ? 65000 : 15000, observe);
+    }, undefined, isInstallation(operation) ? 65000 : 15000, observe, contained);
     if (result.status !== 0 || result.signal !== null || result.stderr !== '') {
       const worker = workerDiagnostic(result.stderr);
       if (worker) observe({ ...worker, launcherStage: 'worker_process' });

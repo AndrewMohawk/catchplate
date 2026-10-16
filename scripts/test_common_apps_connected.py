@@ -2,6 +2,8 @@
 """One bounded real catalog -> signed policy -> cached Rust -> synthetic provider check.
 
 Reuses the guided fixture lifecycle, empty-store initializer, images and curl.
+An explicit MCP profile runs only two OpenAI calls through the official stdio
+client and existing Requests helper, using already-installed SDK packages.
 No compilation, download, public DNS, real provider, live deployment or retry.
 Run only from a frozen source export with the exact existing normal Rust binary.
 """
@@ -30,10 +32,13 @@ from scripts.check_operator_guided import CURL_SHA256, run_curl
 from scripts.check_operator_ordinary_client import OrdinaryClientCheck, START, RELEASE
 from scripts.run_operator_guided_fixture import GuidedRun, admitted_image_entrypoint
 from scripts.run_operator_npm_example_fixture import environment
-from scripts.run_operator_x_examples_fixture import failure_site
+from scripts.run_operator_x_examples_fixture import failure_site, PYTHON_IMAGE
 
 SCRIPT = "scripts/test_common_apps_connected.py"
 ORIGINS = sorted("https://" + host for host in fixture.PROVIDERS)
+MCP_PACKAGES = "/usr/local/lib/python3.12/site-packages"
+MCP_PINS = {"mcp": "2.3.0", "requests": "2.34.2", "urllib3": "2.8.0", "certifi": "2026.7.22",
+    "charset-normalizer": "3.5.2", "idna": "3.20"}
 
 
 class CommonAppsCheck(OperatorCatalogCheck):
@@ -46,8 +51,13 @@ class CommonAppsCheck(OperatorCatalogCheck):
         require(args.control_base == "http://127.0.0.1:3000" and args.management_base == "http://127.0.0.1:9091"
             and args.proxy_url == recipe.PROXY_URL and args.operator_origin == recipe.CONTROL_ORIGIN,
             "exact isolated endpoints required")
-        require(args.expected_curl_sha256 == CURL_SHA256 and args.curl_binary == Path("/usr/bin/curl")
-            and hashlib.sha256(args.curl_binary.read_bytes()).hexdigest() == CURL_SHA256, "cached curl differs")
+        if args.mcp_smoke:
+            from importlib.metadata import version
+            require(sys.version_info[:3] == (3, 12, 14)
+                and all(version(name) == expected for name, expected in MCP_PINS.items()), "cached MCP runtime differs")
+        else:
+            require(args.expected_curl_sha256 == CURL_SHA256 and args.curl_binary == Path("/usr/bin/curl")
+                and hashlib.sha256(args.curl_binary.read_bytes()).hexdigest() == CURL_SHA256, "cached curl differs")
         self.provider = Endpoint(ORIGINS[0], address="127.0.0.1")
         self.provider.address = fixture.isolated.FIXTURE_IP
 
@@ -109,6 +119,75 @@ class CommonAppsCheck(OperatorCatalogCheck):
                 "out-of-scope request was not denied")
         return dict(self.last)
 
+    def mcp_configurations(self, rule):
+        """The same downloaded-client fields, with one intentionally wrong local scope.
+
+        Both files retain the single real application login and access-rule ID.
+        The negative changes only local model selection, never proxy authority.
+        """
+        config = {key: deepcopy(rule[key]) for key in ("upstream_url", "methods", "response_mode",
+            "credential_input", "app_preset", "app_operation", "scope", "query_keys")}
+        config.update(application_id=self.application["id"], access_rule_id=rule["id"],
+            proxy_url=self.args.proxy_url, proxy_authentication="basic_and_bearer_v1",
+            proxy_username=self.application["id"], proxy_password=self.client_token,
+            token_expires_at_epoch_ms=self.application["token_expires_at_epoch_ms"],
+            request_headers={"Authorization": rule["placeholder"]}, request_query={},
+            ca_file=str(self.args.ca_file), proxy_ca_file=str(self.args.proxy_ca_file),
+            client_recipe={"automatic_retries": 0})
+        paths = {}
+        for alias in ("approved", "wrongscope"):
+            value = deepcopy(config)
+            if alias == "wrongscope":
+                value["scope"]["model"] = "not-the-approved-model"
+            path = self.args.run_claim_file.parent / ("mcp-" + alias + ".json")
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(descriptor, "wb") as target:
+                target.write(fixture.encoded(value))
+            paths[alias] = path
+        return paths
+
+    def dispatch_mcp(self, rule):
+        import anyio
+        from mcp import Client, StdioServerParameters
+
+        paths = self.mcp_configurations(rule)
+        parameters = StdioServerParameters(command="/usr/local/bin/python", args=["-I", "-B",
+            "/app/examples/mcp/server.py", *[item for alias, path in paths.items()
+                for item in ("--config", alias + "=" + str(path), "--allow-actions", alias)]],
+            cwd="/app", env={"PYTHONDONTWRITEBYTECODE": "1"})
+
+        async def invoke():
+            checks = []
+            with anyio.fail_after(min(120, self.deadline - time.monotonic())):
+                async with Client(parameters, read_timeout_seconds=50, cache=None) as client:
+                    tools = await client.list_tools()
+                    require({tool.name for tool in tools.tools} == {
+                        "list_operations", "read_operation", "perform_action"}, "MCP tools differ")
+                    catalog = await client.call_tool("list_operations", {})
+                    self.clean(catalog.model_dump_json().encode())
+                    require({item["id"] for item in catalog.structured_content["operations"]} == set(paths)
+                        and self.provider_observations()["total"] == 0, "MCP discovery sent traffic")
+                    for alias, status, http_status in (("approved", "ok", 200), ("wrongscope", "provider_error", 403)):
+                        self.phase = "mcp-" + alias
+                        result = await client.call_tool("perform_action", {"operation_id": alias,
+                            "arguments": {"prompt": "Hi", "output_tokens": 16}, "confirmed": True})
+                        self.clean(result.model_dump_json().encode())
+                        value, observed = result.structured_content, self.provider_observations()
+                        self.last = {"case": self.phase, "mcpStatus": value.get("status"),
+                            "httpStatus": value.get("http_status"), "providerArrivals": observed["total"]}
+                        require(value.get("status") == status and value.get("http_status") == http_status
+                            and result.is_error is (status != "ok")
+                            and value.get("automatic_retry") is False and observed["total"] == 1,
+                            "MCP request outcome or arrival count differs")
+                        if alias == "approved":
+                            require(value.get("response") == {"synthetic": True, "provider": "openai",
+                                "result": "fixed fixture response"} and value.get("untrusted_response") is True
+                                and observed["attempts"][0]["accepted"] is True, "MCP provider response differs")
+                        checks.append(dict(self.last))
+            return checks
+
+        return anyio.run(invoke)
+
     def run(self):
         self.admin_token = token_file(self.args.admin_token_file)
         self.health()
@@ -118,8 +197,9 @@ class CommonAppsCheck(OperatorCatalogCheck):
         self.application, self.client_token, _ = self.mutate("/applications", {"name": self.run_id,
             "token_lifetime_seconds": 3600, "proxy_authentication": "basic_and_bearer_v1"},
             collection="applications", result_key="application", event="operator_catalog.application.created", creates=True, token=True)
-        rules = {}
-        for name, spec in fixture.SPECS.items():
+        rules, mcp_rule = {}, None
+        specs = {"openai": fixture.SPECS["openai"]} if self.args.mcp_smoke else fixture.SPECS
+        for name, spec in specs.items():
             self.phase = "create-" + name
             credential, _, _ = self.mutate("/credentials", {"name": self.run_id + "-" + name,
                 "auth_type": "header" if name == "anthropic" else "bearer", "header_name": spec["header"],
@@ -131,9 +211,13 @@ class CommonAppsCheck(OperatorCatalogCheck):
                 "operation": spec["operation"], "scope": scope}, collection="access_rules", result_key="access_rule",
                 event="operator_catalog.access_rule.created", creates=True, authority_changed=True)
             rules[name] = rule["route_id"]
+            if self.args.mcp_smoke:
+                mcp_rule = rule
         self.wait_catalog_loaded("common_apps_loaded")
         checks, arrivals = [], 0
-        for name, spec in fixture.SPECS.items():
+        if self.args.mcp_smoke:
+            checks = self.dispatch_mcp(mcp_rule)
+        for name, spec in (() if self.args.mcp_smoke else specs.items()):
             self.phase = "dispatch-" + name
             arrivals += 1
             checks.append(self.dispatch(name, spec["body"], case=name + "-allowed", count=arrivals, allowed=True))
@@ -151,17 +235,18 @@ class CommonAppsCheck(OperatorCatalogCheck):
             time.sleep(min(0.1, self.timeout()))
         rows = self.audit()
         attempts = [row for row in rows if row["event_type"] in {START, RELEASE}]
-        require(Counter(row["event_type"] for row in attempts) == Counter({START: 3, RELEASE: 3}), "release audit differs")
+        require(Counter(row["event_type"] for row in attempts) == Counter({START: len(specs), RELEASE: len(specs)}), "release audit differs")
         for route in rules.values():
             selected = [row for row in attempts if row["event"].get("route_id") == route]
             require(Counter(row["event_type"] for row in selected) == Counter({START: 1, RELEASE: 1})
                 and all(row["event"].get("policy_hash") == self.policy_hash for row in selected), "signed policy audit binding differs")
         observed = self.provider_observations()
-        require(observed["total"] == 3 and all(row["accepted"] for row in observed["attempts"]), "provider assertions differ")
+        require(observed["total"] == len(specs) and all(row["accepted"] for row in observed["attempts"]), "provider assertions differ")
         return {"schema": "serverware.commonAppsConnectedCheck/v1", "ok": True, "syntheticOnly": True,
             "realProviderVerified": False, "stockSdkVerified": False, "dataPlaneBinaryDigest": self.args.expected_binary_sha256,
             "policyHash": self.policy_hash, "catalogRevision": self.catalog()["revision"], "checks": checks,
-            "provider": observed, "auditCounts": dict(Counter(row["event_type"] for row in attempts))}
+            "provider": observed, "auditCounts": dict(Counter(row["event_type"] for row in attempts)),
+            "mcpSdkVerified": self.args.mcp_smoke, "requestsHelperVerified": self.args.mcp_smoke}
 
 
 def check(args):
@@ -208,6 +293,16 @@ def run(args):
             services[name]["environment"]["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(ORIGINS)
             services[name]["environment"].pop("SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS", None)
         services["check"]["command"][0:1] = ["/app/" + SCRIPT, "check"]
+        if args.mcp_sdk_packages is not None:
+            packages = args.mcp_sdk_packages
+            require(packages.is_absolute() and packages.resolve() == packages and packages.is_dir()
+                and packages.parts[-3:] == ("lib", "python3.12", "site-packages")
+                and packages.is_relative_to(recipe.base.SCRATCH)
+                and (packages / "mcp-2.3.0.dist-info/METADATA").is_file(), "prepared MCP package directory required")
+            services["provider"]["command"].append("--mcp-smoke")
+            services["check"].update(image=PYTHON_IMAGE, entrypoint=["/usr/local/bin/python", "-I", "-B"])
+            services["check"]["command"].append("--mcp-smoke")
+            services["check"]["volumes"].append(recipe.base.bind(packages, MCP_PACKAGES))
         runner.project, runner.services = config["name"], services
         require(not runner.container_rows("preexisting") and runner.no_project_networks("preexisting-networks"), "project already exists")
         images, runner.image_environments = {}, {}
@@ -217,7 +312,8 @@ def run(args):
             require(admitted_image_entrypoint(image, value["entrypoint"]), "image entrypoint differs")
             images[image], runner.image_environments[image] = value["id"], environment(value["environment"])
         runner.save("run.claim.json", {"sourceCommit": args.commit, "source": str(source), "binarySha256": args.expected_binary_sha256,
-            "checkerSha256": recipe.base.digest(source / SCRIPT), "images": images, "jobRoot": str(root), "syntheticOnly": True})
+            "checkerSha256": recipe.base.digest(source / SCRIPT), "images": images, "jobRoot": str(root), "syntheticOnly": True,
+            "mcpSdkPackages": str(args.mcp_sdk_packages) if args.mcp_sdk_packages else None})
         (root / "runtime").mkdir(mode=0o700)
         compose_file = root / "compose.json"
         with compose_file.open("x") as stream:
@@ -277,6 +373,8 @@ def main():
         host.add_argument("--" + name, type=Path, required=True)
     for name in ("commit", "expected-binary-sha256"):
         host.add_argument("--" + name, required=True)
+    host.add_argument("--mcp-sdk-packages", type=Path,
+        help="Opt into only two MCP OpenAI calls, using an existing Python 3.12 site-packages tree")
     client = modes.add_parser("check")
     for name in ("control-base", "management-base", "proxy-url", "operator-origin", "expected-binary-sha256", "expected-curl-sha256"):
         client.add_argument("--" + name, required=True)
@@ -285,6 +383,7 @@ def main():
     for name in ("proxy-ca-file", "control-ca-file", "management-ca-file"):
         client.add_argument("--" + name, type=Path)
     client.add_argument("--timeout-seconds", type=int, default=180)
+    client.add_argument("--mcp-smoke", action="store_true")
     args = parser.parse_args()
     os.umask(0o077)
     if args.mode == "run":

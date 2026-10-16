@@ -74,7 +74,7 @@ def configuration(app, token, rule, name):
         "ca_file": str(sdk.TRUST_FILES["inner"]), "proxy_ca_file": str(sdk.TRUST_FILES["outer"]),
         "client_recipe": {"schema": "serverware.gmailSdkClient/v2", "clear_environment": True,
             "environment": environment, "access_rule_id": rule["id"], "token_expires_at_epoch_ms": app["token_expires_at_epoch_ms"]}}
-    path = Path("/client-work/gmail-age-" + name + ".json")
+    path = Path("/tmp/gmail-age-" + name + ".json")
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(descriptor, "wb") as output:
         output.write(sdk.encoded(value))

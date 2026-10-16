@@ -175,6 +175,32 @@ class GmailAgeTests(unittest.TestCase):
         self.assertEqual(selected, baseline)
         with self.assertRaises(ValueError): recipe.build(*old_recipe.ARGS, **old_recipe.PINS, age_profile=True)
 
+    def test_configuration_paths_use_actual_private_writable_recipe_tmpfs(self):
+        service = recipe.build(*old_recipe.ARGS, **old_recipe.PINS)["services"]["check"]
+        self.assertTrue(service["read_only"])
+        self.assertEqual(service["user"], "10001:10001")
+        self.assertIn("/tmp:rw,noexec,nosuid,nodev,size=32m,uid=10001,gid=10001,mode=0700", service["tmpfs"])
+        self.assertFalse(any(item["target"] == "/client-work" for item in service["volumes"]))
+        app = {"id": "00000000-0000-4000-8000-000000000001", "token_expires_at_epoch_ms": 2000000000000}
+        token = "a" * 43
+        environment = check.sdk.client_environment(app["id"], token, "first")
+        for name in ("unrestricted", "recent"):
+            path = Path("/tmp/gmail-age-" + name + ".json")
+            # Stop at each actual filesystem/process boundary; this is a
+            # path/recipe regression, not a file write or SDK execution.
+            with patch.object(check.os, "open", side_effect=RuntimeError("captured open")) as opened:
+                with self.assertRaisesRegex(RuntimeError, "captured open"):
+                    check.configuration(app, token, {"id": app["id"]}, name)
+            opened.assert_called_once_with(path,
+                check.os.O_WRONLY | check.os.O_CREAT | check.os.O_EXCL | check.os.O_NOFOLLOW, 0o600)
+            with patch.object(check.sdk.subprocess, "Popen", side_effect=RuntimeError("captured process")) as process:
+                with self.assertRaisesRegex(RuntimeError, "captured process"):
+                    check.sdk.run_example(environment, 5, command=check.sdk.profiles.COMMANDS["python"], config_file=path)
+            self.assertEqual(process.call_args.args[0], (*check.sdk.profiles.COMMANDS["python"], "--config", str(path)))
+        with self.assertRaises(check.sdk.CheckFailure):
+            check.sdk.run_example(environment, 5, command=check.sdk.profiles.COMMANDS["python"],
+                config_file=Path("/client-work/gmail-age-recent.json"))
+
 
 if __name__ == "__main__":
     unittest.main()

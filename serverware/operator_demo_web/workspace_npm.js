@@ -2,7 +2,7 @@
 // registry URL grants this preset implicitly; source support is not live proof.
 const operatorNpm = Object.freeze({origin: 'https://registry.npmjs.org', connection: 'npm_token_v1',
   // Joined to examples/npm-registry package/core/lock pins by the UI regression suite.
-  versions: Object.freeze({npm: '11.20.0', pacote: '21.5.1', 'npm-registry-fetch': '19.1.1'}), nodeVersion: '25.5.0',
+  versions: Object.freeze({npm: '11.21.1', pacote: '21.5.1', 'npm-registry-fetch': '19.1.1'}), nodeVersion: '25.5.0',
   bundle: 'npm_metadata_read_v1', response: 'npm_metadata_json_v1', token: 'serverware-npm-placeholder-v1',
   placeholder: 'Bearer serverware-npm-placeholder-v1', headers: ['accept', 'npm-auth-type', 'npm-command',
     'npm-in-ci', 'npm-scope', 'pacote-pkg-id', 'pacote-req-type', 'pacote-version', 'user-agent']});

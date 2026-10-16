@@ -493,7 +493,7 @@ def run_example(environment, seconds, *, command=COMMAND, config_file=None):
     require(command in (COMMAND, *profiles.COMMANDS.values()), "Gmail SDK fixed entrypoint differs")
     if config_file is not None:
         require(command == profiles.COMMANDS["python"] and config_file in
-            (Path("/client-work/gmail-age-unrestricted.json"), Path("/client-work/gmail-age-recent.json")),
+            (Path("/tmp/gmail-age-unrestricted.json"), Path("/tmp/gmail-age-recent.json")),
             "Gmail age configuration path differs")
         command = (*command, "--config", str(config_file))
     require(0 < seconds <= 30 and set(environment) == {"LANG", "SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID",

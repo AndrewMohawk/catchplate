@@ -20,9 +20,9 @@ Do not recreate its state, regenerate its keys or run a historical rollout scrip
 
 The [standalone installation guide](../docker/serverware-standalone/README.md)
 provides the new host-trusted app/proxy/Nginx package and one JSON configuration.
-**It is a committed candidate; fresh-install acceptance is still pending.** The
-cached-artifact build passed, but the default source build and corrected
-empty-instance startup have not yet passed. Follow the
+**Isolated installation and lifecycle verified.** Both build paths and fresh
+starts passed, together with browser, persisted-state restart and TLS replacement
+checks. Public deployment and real-provider use remain separate. Follow the
 [verification record](standalone-installation-verification.md) for current results.
 It does not
 depend on the homelab login or retained deployment paths. You supply a Linux

@@ -268,6 +268,7 @@ class Baseline:
         public.chmod(0o755)
         write(public / "outer.crt", certificate.read_bytes(), mode=0o644)
         receipt = {"schema": "serverware.standaloneBaselineReady/v1", "sourceRevision": REVISION, "pairedImage": self.image,
+            "dataPlaneBinaryDigest": manifest["artifact"]["dataPlaneBinaryDigest"],
             "hostInstallerFiles": host_hashes,
             "project": project, "instanceId": manifest["instance_id"], "stateDir": str(state), "services": services,
             "edgeIp": edge_ip, "consoleHost": CONSOLE, "proxyHost": PROXY, "seconds": round(time.monotonic() - self.started, 3),

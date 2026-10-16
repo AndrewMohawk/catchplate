@@ -13,6 +13,16 @@ TEE/YubiKey approval. An administrator with full host control can bypass it.
 
 ## Operator setup
 
+For the container deployment, enable the optional
+[`docker-compose.ecr.yml`](../docker/serverware-operator-demo/docker-compose.ecr.yml)
+overlay while retaining every existing Compose layer. Precreate the empty
+`/data/ecr-artifacts` directory in the persistent app volume, owned by the app
+UID/GID `10001:10001` with mode `0700`. The overlay sets the app's memory ceiling
+to **8 GiB**: at most four active 1-GiB sealed images plus two transient captures
+must fit alongside the application and request buffers. The ordinary 1-GiB app
+limit cannot support the advertised image size. This is a ceiling, not a memory
+reservation; do not change CPU, other services or persisted resources.
+
 1. Save an AWS access-key pair in **Credentials**, or the complete temporary
    tuple including session token and future expiry. Imported sessions do not
    renew automatically. Saving a credential does not test AWS access.

@@ -1,6 +1,6 @@
 # Credential-first operator workspace
 
-## Current ordinary-product status — October 15
+## Current ordinary-product status — October 16
 
 The user accepts a trusted server administrator for the present product. Optional
 host-trusted approve/deny and finite managed workload renewal are implemented
@@ -554,18 +554,18 @@ notifications; see the [current completion record](project-completion.md#p1--com
 Selecting a restriction still requires its actual request and response
 enforcement, and choosing an unfiltered mode must not silently discard it.
 
-Optional Gmail age restrictions remain unfinished ordinary-product work. The
-deployed Read Gmail workflow is unrestricted; the approved October 16 additive
-contract is now in source implementation. It uses
+Optional Gmail age restrictions are implemented and deployed. Source `8b0277f0`
+passed connected synthetic acceptance against normal Rust `13ad08c0…`; the
+matching app/gate rollout preserved existing state. The additive contract uses
 `age_policy: {"mode":"recent_internal_date_v1","max_age_days":N}`, N from 1
 through 3650, while preserving unrestricted defaults and existing grants.
 Restricted lists require explicit `maxResults` of at most 32 and bounded
 same-parent metadata evidence for every returned ID. A missing, old, future or
 otherwise invalid date blocks the whole page; no rows or query values are
 silently changed. Direct reads and final release also check the moving window.
-A client's date search is only a convenience, never the proof. Keep completion
-open until the source, build, connected and deployment boundaries are verified;
-see the [exact contract and limitations](operator-gmail-job-verification.md#optional-last-n-days-policy--implementation-in-progress).
+A client's date search is only a convenience, never the proof. Google remains
+unconfigured on the running instance, so real consent and inbox acceptance are
+still separate; see the [exact contract and evidence boundaries](operator-gmail-job-verification.md#optional-last-n-days-policy--connected-acceptance-passed-and-deployed).
 
 The Google delivery boundary is a **usable inbox job**, not merely a successful
 consent callback. Generic catalog rules still bind one literal path; the new

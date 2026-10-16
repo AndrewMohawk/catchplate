@@ -11,9 +11,9 @@ The current dependency pins are Node **25.5.0**, npm **11.21.1**, pacote
 versions and POSIX process groups (Linux/macOS). Earlier isolated proxy
 acceptance used npm 11.8.0/pacote 21.0.4. The npm 11.20.0 graph separately
 passed all 25 isolated proxy phases on October 13 after a narrow publish-receipt
-compatibility fix. The 11.21.1 update has component and lockfile-audit checks,
-not a new connected proxy run; see the verification record below. Other
-versions/platforms are unverified.
+compatibility fix. The current 11.21.1 graph passed all 25 isolated proxy phases
+on October 16, alongside component and lockfile-audit checks; see the verification
+record below. Other versions/platforms are unverified.
 Run as a normal OS account with a resolvable home directory (as on a GitHub-hosted
 runner), not an arbitrary numeric container UID with no passwd entry.
 
@@ -296,8 +296,8 @@ All 35 existing Node component tests passed; their process and transport
 boundaries are mocked, not a fresh stock-client proxy acceptance run.
 The 58 inert Python fixture/checker/recipe tests also passed after correcting
 three stale exact-version header checks found by the first component attempt.
-Do not hand-edit bundled dependencies or treat the older proxy receipt as
-verification of 11.21.1; the October 13 acceptance below used 11.20.0.
+Do not hand-edit bundled dependencies. The separate October 16 connected run
+below verifies 11.21.1; the retained October 13 acceptance used 11.20.0.
 
 During the October 12 update, 29 Node component groups and 99 Python fixture/checker/recipe
 groups passed in a read-only, network-disabled container. The actual stock CLI
@@ -310,7 +310,24 @@ CLI attempt ran as an unsupported numeric UID without a passwd entry and
 failed before any registry arrival; using the image's existing normal account
 resolved that harness error without changing application configuration.
 
-## Latest isolated proxy verification (npm 11.20.0)
+## Latest isolated proxy verification (npm 11.21.1)
+
+On October 16, 2026, source `8b0277f041359ad24c7edbff169eeae3d3dd22f6`
+passed all **25 phases** with the current dependency pins through the real
+Serverware application, Rust gate and HTTPS proxy against a network-isolated
+synthetic registry. Nine commands succeeded and 16 expected refusals passed in
+152.680 seconds, including setup and cleanup. Three exact publications, install,
+cold `ci`, transitive package bytes, default-audit failure detection and the
+complete persisted audit chain were verified.
+
+All 545 actual compiler inputs matched normal Rust `13ad08c0…`; source and
+dependency inventories were unchanged. Independent cleanup found no owned
+containers or networks. See [the acceptance record](../../docs/operator-npm-example-acceptance.md)
+for exact evidence identities. This proves the bounded synthetic workflow, not
+real npm entitlement, public routing, GitHub Actions execution or deployment;
+the matching rollout is tracked separately. Publishing is never the default.
+
+## Historical isolated proxy verification (npm 11.20.0)
 
 On October 13, 2026, source `e7d7e05b` passed the actual 25-phase example flow
 with npm 11.20.0, pacote 21.5.1 and npm-registry-fetch 19.1.1 through the real
@@ -322,7 +339,7 @@ failure despite npm exiting zero, permission/revocation controls, and the
 complete persisted audit chain. All owned containers were removed; source and
 cached dependency bytes were unchanged.
 
-The first current-graph attempt stopped at unscoped publication: npm succeeded,
+The first 11.20.0-graph attempt stopped at unscoped publication: npm succeeded,
 but our example expected the older flat JSON receipt instead of npm 11.20's
 package-keyed receipt. That failed attempt is retained and was not replayed.
 The fix accepts exactly one matching package key and preserves the inner

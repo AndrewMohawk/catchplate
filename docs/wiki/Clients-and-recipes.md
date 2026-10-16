@@ -234,13 +234,24 @@ confirmation below remain required.
 
 ## GitHub Actions
 
-Four reviewed **inactive samples** are available: [GitHub issues](https://github.com/AndrewMohawk/serverware/blob/main/examples/github-issues-node/workflow.example.yml), [npm metadata](https://github.com/AndrewMohawk/serverware/blob/main/examples/npm-registry/workflow.example.yml), [Alchemy reads](https://github.com/AndrewMohawk/serverware/blob/main/examples/alchemy-chain-status-node/workflow.example.yml), and [X username lookup](https://github.com/AndrewMohawk/serverware/blob/main/examples/x-username-node/workflow.example.yml).
+Five reviewed **inactive samples** are available: [GitHub issues](https://github.com/AndrewMohawk/serverware/blob/main/examples/github-issues-node/workflow.example.yml), [npm metadata](https://github.com/AndrewMohawk/serverware/blob/main/examples/npm-registry/workflow.example.yml), [Alchemy reads](https://github.com/AndrewMohawk/serverware/blob/main/examples/alchemy-chain-status-node/workflow.example.yml), [X username lookup](https://github.com/AndrewMohawk/serverware/blob/main/examples/x-username-node/workflow.example.yml), and [a common-app GET](https://github.com/AndrewMohawk/serverware/blob/main/examples/common-apps/github-actions.yml).
+
+For the four Node samples:
 
 1. Keep the corresponding example directory and lock in your repository. Review the sample, then deliberately copy it into `.github/workflows/`.
 2. Create a protected GitHub environment, restrict it to trusted default-branch runs, and control who may approve access. The samples call it `serverware-demo`; that is a legacy **GitHub environment name**, not a separate Serverware mode. Rename it consistently if desired.
 3. Set environment secrets `SERVERWARE_PROXY_TOKEN`, `SERVERWARE_CA_PEM`, and optional `SERVERWARE_PROXY_CA_PEM` where supported. Obtain CA material from your trusted operator. Never add provider keys, refresh tokens or GitHub App private keys.
 4. Set the sample's variables: proxy URL, client UUID and exact provider selectors. Ensure the proxy is reachable from the runner and the client token remains valid.
 5. Run manually on the trusted default branch. Dependency installation receives no Serverware token; only the final bounded read step receives the client configuration.
+
+The common-app sample uses Ubuntu 24.04's Python 3.12 and the checked-in
+`examples/common-apps/request.py` and `requirements.txt`. Supply the complete
+GET-only private download as `SERVERWARE_CLIENT_CONFIG_JSON`, plus
+`SERVERWARE_CA_PEM` and optional `SERVERWARE_PROXY_CA_PEM`; no per-selector
+variable mapping is needed. The client login must be unexpired and the proxy
+reachable from the runner. Dispatch manually on the trusted default branch.
+It refuses POST permissions, withholds provider responses from logs and removes
+its private temporary files. See the [common-app workflow setup](https://github.com/AndrewMohawk/serverware/blob/main/examples/common-apps/README.md#github-actions-one-manual-read).
 
 The samples do not publish, post, rotate tokens or manage GitHub Actions through the proxy. Their `contents: read` permission is for repository checkout, not the target provider API. They are not evidence of a successful hosted workflow or public-provider job.
 

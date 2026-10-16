@@ -2,8 +2,8 @@
 
 ## Current ordinary ECR integration
 
-The [ECR publication workflow](operator-ecr-publication.md) is now implemented in
-source and under integration, **not deployed or real-AWS verified**. It connects
+The [ECR publication workflow](operator-ecr-publication.md) is now **deployed with
+connected synthetic-provider acceptance; real AWS remains unverified**. It connects
 saved AWS credentials to an exact client/account/standard-region/repository/tag
 permission, verified staging, mandatory host-trusted review, explicit publication
 UUID activation and five stock Boto3 actions. It is not Docker push or arbitrary
@@ -12,9 +12,13 @@ closed and the dedicated signer returns only an encrypted exact-request headers
 lease. The original deadline is at most 30 minutes, clipped to client/AWS-session
 expiry, with no automatic retry after an uncertain write.
 
-The matching cached Rust build and connected acceptance remain pending. Live
-remains `1eff1fd` / `48953fea…` with 16 origins; the source-only 32-origin cap is
-not deployed. The four retained artifact slots can now be reclaimed by explicit
+The normal `a69503f8` / `ffe0fbe4…` build and connected stock-Boto3 acceptance
+passed: all five actions, eight signed requests and eight ACK/audit results in
+62.391 seconds with no automatic retries, against a synthetic provider only.
+The matching pair is deployed as app `5ae9ae8b…` / gate `53fd9a79…`. The existing
+16 destinations and permissions are unchanged, with a 32-origin cap; no AWS
+destination or grant was automatically enabled. Public-route/browser checks are
+separate and pending. The four retained artifact slots can be reclaimed by explicit
 eligible-terminal retirement, never for uncertain/possible-send records; AWS
 images and owner/audit history remain untouched. The 1,024-parent lifetime stop
 is removed in favor of retained indexed history with ten-record pages. ECR action
@@ -26,8 +30,8 @@ and example for the current ordinary contract.
 The ordinary example now uses Boto3/Botocore 1.43.114, urllib3 2.8.0 and Requests
 2.34.2 with all dependencies pinned. Its eleven focused checks pass against that
 maintained environment. The older SDK versions in the historical evidence below
-are not the current installation recommendation; connected proxy acceptance is
-still separate.
+are not the current installation recommendation. The connected result above uses
+the maintained SDK; real-provider acceptance remains separate.
 
 ## Historical foundation and future native design
 

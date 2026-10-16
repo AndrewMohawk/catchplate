@@ -93,21 +93,24 @@ Follow the [worked custom-API guide](https://github.com/AndrewMohawk/serverware/
 
 Choose **Manual API key**, name the credential, and select how the provider expects it: a Bearer token or one custom header such as `X-API-Key`. Enter the provider secret without inventing an OAuth lifecycle. Later, a permission selects automatic insertion or exact public-dummy replacement, the approved origin, exact path and methods. This covers supported JSON APIs, not every authentication scheme, SDK or webhook. [Ordinary JSON contract](https://github.com/AndrewMohawk/serverware/blob/main/docs/ordinary-client-compatibility.md).
 
-## AWS: live storage; ECR source integration pending
+## AWS credentials and reviewed ECR publication
 
-When offered in **Credentials**, select **AWS credentials — storage only**. Store either a long-term access-key pair, or the complete temporary tuple: access key ID, secret, session token and future UTC expiry. Imported sessions are not renewed automatically.
+When offered in **Credentials**, select **AWS credentials**. Store either a long-term access-key pair, or the complete temporary tuple: access key ID, secret, session token and future UTC expiry. Imported sessions are not renewed automatically.
 
-The recorded live instance still offers storage only. New source adds exact ECR
+The deployed capability adds exact ECR
 publication permissions and a stage → human review → explicit UUID activation →
-Boto3 publication workflow, but its matching proxy build and connected acceptance
-are pending; it is not deployed or real-AWS verified. See the
-[ECR recipe](https://github.com/AndrewMohawk/serverware/wiki/Clients-and-recipes#aws-ecr-publication--source-integration-not-deployed)
+Boto3 publication workflow. The normal `a69503f8` / `ffe0fbe4…` build and connected
+stock-Boto3 run passed all five actions with eight signed requests/ACKs in
+62.391 seconds and no automatic retries, using a synthetic provider. The matching
+pair is deployed; existing destinations/permissions were preserved and AWS access
+was not automatically enabled. Real AWS remains unverified. See the
+[ECR recipe](https://github.com/AndrewMohawk/serverware/wiki/Clients-and-recipes#aws-ecr-publication)
 and [current guide](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-ecr-publication.md).
 
-Source also supports explicit terminal staging retirement and separate ECR
+The capability also supports explicit terminal staging retirement and separate ECR
 action/audit notification projections. Retirement preserves AWS images and
 publication/audit history; it never clears an uncertain or possible-send outcome.
-These are focused-component results, not deployed cleanup or receiver delivery.
+The focused checks are not a live cleanup action or verified receiver delivery.
 
 Do not put AWS credentials into a generic custom-header rule as a workaround.
 The dedicated source path signs exact requests without exporting the AWS tuple

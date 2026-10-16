@@ -15,7 +15,7 @@ const HEADERS = ['amz-sdk-invocation-id', 'amz-sdk-request', 'authorization', 'u
 const CAPABILITY = {schema: 'serverware.operatorEcrPublication/v1', connection_type: 'aws_sigv4_v1',
   create_rule_path: '/api/operator-demo/access-rules/aws-ecr-publication', operation_bundles: ['aws_ecr_publish_v1'],
   approval_mode: 'host_review_v1', publication_approval_required: true, credential_input: 'aws_ecr_signing_v1',
-  response_mode: 'aws_ecr_publication_json_v1', max_request_bytes: 16777216, max_response_bytes: 26214400,
+  response_mode: 'aws_ecr_publication_json_v1', route_scope: 'one_per_client_region', max_request_bytes: 16777216, max_response_bytes: 26214400,
   automatic_retries: false, source_pair_required: true};
 const credential = () => ({id: IDS[0], name: 'Release AWS credentials', status: 'active', created_at: new Date(NOW).toISOString(),
   auth_type: 'aws_sigv4_v1', connection_type: 'aws_sigv4_v1', provider_id: 'aws', header_name: null,
@@ -60,8 +60,26 @@ function load() {
 }
 function main() {
   const api = load(), raw = catalog(), projected = api.projectCatalog(raw), key = projected.credentials[0], client = projected.applications[0], grant = projected.access_rules[0];
+  // Exercise the actual backend descriptor with readiness stubbed, never a live
+  // app/gate/database check. The independent literal detects drift on either side.
+  const backend = JSON.parse(execFileSync('python3', ['-B', '-c', `
+import json, sys
+def deny_runtime(event, args):
+    if event.startswith(('socket.', 'subprocess.')) or event in {'os.system', 'os.fork', 'os.posix_spawn'}:
+        raise AssertionError('descriptor attempted runtime I/O')
+sys.addaudithook(deny_runtime)
+from serverware import operator_catalog_ecr as ecr
+assert 'serverware.app' not in sys.modules and 'serverware.config' not in sys.modules
+ecr._available = lambda policy_hash: True
+print(json.dumps(ecr.capability('sha256:' + '0' * 64)))
+`], {cwd: ROOT, encoding: 'utf8', timeout: 5000, maxBuffer: 16384}));
+  assert.deepEqual(backend, CAPABILITY, 'actual backend and independent capability fixture agree on every field');
+  assert.deepEqual(copy(api.projectEcrCapability(backend)), backend, 'actual backend capability survives strict UI projection');
+  const missingRouteScope = {...backend}; delete missingRouteScope.route_scope;
+  assert.equal(api.projectEcrCapability(missingRouteScope), null);
   assert.deepEqual(copy(api.projectEcrCapability(CAPABILITY)), CAPABILITY);
-  for (const patch of [{automatic_retries: true}, {source_pair_required: false}, {create_rule_path: 'https://other.test'}, {publication_approval_required: false}])
+  for (const patch of [{automatic_retries: true}, {source_pair_required: false}, {create_rule_path: 'https://other.test'},
+    {publication_approval_required: false}, {route_scope: 'unrestricted'}, {unknown_field: true}])
     assert.equal(api.projectEcrCapability({...CAPABILITY, ...patch}), null);
   assert(api.operatorRuleSupported(grant, projected)); assert.equal(api.operatorRuleSupported(grant, {...projected, capabilities: {...projected.capabilities, ecr_publication: null}}), false);
   assert(api.ecrRuleValid(grant, key)); assert.equal(api.operatorRuleCredentialValid({...grant, operation_bundle: undefined}, key), false);
@@ -113,7 +131,7 @@ function main() {
   for (const patch of [{scope: {...SCOPE, image_tag: 'different'}}, {policy_hash: hash(99)}, {credential_generation: 2}, {id: IDS[4]}])
     assert.throws(() => api.projectEcrReview({...receipt, publication: publication(patch)}, publicValue));
   assert.throws(() => api.projectEcrReview({...receipt, review_expires_at_epoch_ms: NOW}, publicValue));
-  console.log(JSON.stringify({ok: true, groups: 10, scope: 'pure ECR capability, typed scope, config, compound review, paging and local retirement contracts', network: false}));
+  console.log(JSON.stringify({ok: true, groups: 11, scope: 'actual backend/UI capability equality, typed scope, config, compound review, paging and local retirement contracts', network: false}));
 }
 if (require.main === module) main();
 module.exports = {ROOT, NOW, IDS, SCOPE, CAPABILITY, hash, copy, credential, application, rule, catalog, artifact, publication, load};

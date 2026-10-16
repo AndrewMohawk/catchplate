@@ -11,6 +11,13 @@ image build, a multi-platform/index upload, or TEE/YubiKey enforcement. Someone
 controlling the Serverware host remains trusted. The source tests below do not
 establish real AWS acceptance or availability in a particular deployment.
 
+Connected verification with the normal `a69503f8` / `ffe0fbe4…` proxy and stock
+Boto3 passed in 62.391 seconds against an isolated synthetic provider: all five
+actions, eight exactly signed requests, eight correlated ACK/audit records and
+no automatic retries. The matching pair is now deployed, with existing permissions
+unchanged and no automatically enabled AWS access. This is not real AWS, Docker
+push or hardware acceptance. See the [current verification record](../../docs/operator-ecr-publication.md#evidence-boundary-and-implementation).
+
 ## Setup
 
 Use Linux with Python 3.12 and the full repository checkout: the client reuses

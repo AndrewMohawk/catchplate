@@ -5,7 +5,7 @@ function ecrCapabilityDescriptor() {
   return {schema: 'serverware.operatorEcrPublication/v1', connection_type: 'aws_sigv4_v1',
     create_rule_path: '/api/operator-demo/access-rules/aws-ecr-publication', operation_bundles: [operatorEcr.bundle],
     approval_mode: 'host_review_v1', publication_approval_required: true, credential_input: operatorEcr.input,
-    response_mode: operatorEcr.response, max_request_bytes: 16777216, max_response_bytes: 26214400,
+    response_mode: operatorEcr.response, route_scope: 'one_per_client_region', max_request_bytes: 16777216, max_response_bytes: 26214400,
     automatic_retries: false, source_pair_required: true};
 }
 function projectEcrCapability(value) { return operatorExact(value, ecrCapabilityDescriptor()) ? ecrCapabilityDescriptor() : null; }

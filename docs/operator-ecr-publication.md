@@ -1,13 +1,22 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Publish one reviewed image to ECR
 
-**Status: source implementation under integration, not deployed or verified
-against real AWS.** The matching cached Rust build passes; connected proxy
-acceptance and deployment are still pending. The recorded live app remains `1eff1fd` with proxy `48953fea…`
-and a 16-origin limit; the new 32-origin source limit is not live yet. Check the
-[project tracker](project-completion.md) before relying on this capability.
-The latest connected attempt reached the control plane but exposed a missing
-`$defs` object in the proxy's embedded ECR schema. The correction requires a
-warm rebuild; compilation alone did not establish that the gate could start.
+**Status: normal build, connected stock-Boto3 acceptance and paired deployment
+passed; real AWS remains unverified.** Source `a69503f8` with normal
+proxy `ffe0fbe4…` completed all five actions in **62.391 seconds** against the
+isolated synthetic provider: eight exactly signed requests, eight owner ACKs,
+eight proxy ACK/release audit records and no automatic retries. The embedded
+schema correction is included in this successful run; the earlier failure
+remains retained, not reported as a pass.
+
+The matching pair is deployed as app `5ae9ae8b…` / gate `53fd9a79…`, with all
+four services healthy. The existing 16 destinations and saved permissions are
+unchanged; the destination cap is now 32. No AWS destination or publication grant
+was automatically enabled. Three ECR tables were added while retaining the
+original 219 tables and all 727 audit events. The artifact root and 8-GiB app
+memory ceiling are installed. Public-route/browser checks remain separate and
+pending; see the [project tracker](project-completion.md).
 
 This ordinary, host-trusted workflow keeps AWS credentials in Serverware and
 uses the [stock Boto3 example](../examples/ecr-publish-python/README.md). It is
@@ -16,7 +25,7 @@ TEE/YubiKey approval. An administrator with full host control can bypass it.
 
 ## Operator setup
 
-For the container deployment, enable the optional
+For a new container deployment, enable the optional
 [`docker-compose.ecr.yml`](../docker/serverware-operator-demo/docker-compose.ecr.yml)
 overlay while retaining every existing Compose layer. Precreate the empty
 `/data/ecr-artifacts` directory in the persistent app volume, owned by the app
@@ -152,15 +161,28 @@ Configure each action/audit slot and its event filters explicitly; this adds no
 automatic enablement or historical replay. Uncertain publication retains its
 do-not-retry warning; uncertain notification delivery is not automatically resent.
 Retirement messages describe local cleanup, never AWS deletion, and removal
-counts cover that cleanup attempt only. Focused component checks passed, not
-live Slack/webhook or AWS delivery. Connected acceptance and deployment remain
-pending. The locally delivered MCP tools still exclude ECR publication.
+counts cover that cleanup attempt only. Focused notification checks passed, not
+live Slack/webhook delivery. Connected ECR publication passed against a synthetic
+provider and the matching pair is deployed; real AWS remains unverified. The locally
+delivered MCP tools still exclude ECR publication.
 
 ## Evidence boundary and implementation
 
-This guide describes inspected source, not new test execution or a live upload.
-The example's offline tests intercept SDK sends and use synthetic responses;
-they do not establish connected proxy or real-provider acceptance. Core source:
+The connected receipt and successful cleanup terminal are retained at
+`/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/ecr-gate-connected.K2JfMIlG`.
+`result.json` SHA-256:
+`cf4c6ce389544af4bda6b5e11ab6d868de2ee566d3bcf97ce7d5f0fcff8cc9a1`;
+`terminal.json` SHA-256:
+`d701560c0fbe251d2a55a0997522882aa8e48c90a50d1e12f830630bbe91b05a`.
+Successful deployment continuation:
+`/srv/catchplate-fast/homelab_data/serverware-ecr-rollout.ozBlDVMm/continuation/result.json`
+(SHA-256 `5cf7f02e96327f925fc315bc19e39fda87ee5adf305bc3d986417da57634c42b`).
+A stale fixture-only checker stopped the original rollout; corrected read-only
+checker `8d3e866f` allowed the 11.285-second narrow continuation without repeating
+the backup or restarting the app/gate. The original failure remains preserved.
+The connected acceptance used the normal proxy and stock Boto3 with a synthetic provider, not real
+AWS. The separate offline tests intercept SDK sends and are component evidence,
+not additional connected acceptance. Core source:
 [permission](../serverware/operator_catalog_ecr.py),
 [artifact storage](../serverware/operator_ecr_artifacts.py),
 [publication owner](../serverware/operator_ecr_publications.py), and

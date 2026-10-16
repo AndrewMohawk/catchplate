@@ -8,6 +8,8 @@ A credential is a provider account or key stored by Serverware. It is not your c
 
 Open **Credentials** and choose a provider directly. For an API key or token, paste the secret and choose **Save credential** (or press Enter). The provider's authentication settings and an editable name are already filled in. GitHub App, AWS and OAuth connections ask for their required details instead of pretending they are single API keys.
 
+The **Add credential** shortcut on Overview or above the access-setup templates opens this same short flow. You do not need to finish the client/permission wizard just to save a key.
+
 After saving, choose **Back to Credentials** to stop, **Add another credential** to save another, or **Set up access for a client** to assign it. A saved card's **Use with a client** reuses that exact credential without retrieving or reentering its secret.
 
 Provider options are capability-dependent. An unavailable destination or unsupported operation must be configured first; saving a manual key does not turn it into a provider-specific connection. Response filtering belongs to a permission, not credential storage. [Shared editor](https://github.com/AndrewMohawk/serverware/blob/main/serverware/operator_demo_web/workspace_connect.js).

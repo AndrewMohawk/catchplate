@@ -117,6 +117,19 @@ async function saved(page, state) {
 
 function cases(artifacts) {
   return [
+    ['overview and access templates link directly to credential-only setup', browser => synthetic(browser,
+      {provider: 'openai'}, async (page, state) => {
+        await view(page, 'overview');
+        await page.getByRole('link', {name: 'Add credential', exact: true}).click();
+        await page.locator('#credential-provider-picker').waitFor({state: 'visible'});
+        await view(page, 'overview'); await page.locator('#overview-connect-service').click();
+        await page.locator('#connect-method-choice').waitFor({state: 'visible'});
+        await page.getByRole('link', {name: 'Add credential', exact: true}).click();
+        await page.locator('#credential-provider-picker').waitFor({state: 'visible'});
+        assert.equal(state.posts.length, 0, 'shortcuts only navigate, never save or grant access');
+        await choose(page, 'openai'); await page.locator('#connect-credential-secret').fill(SECRET);
+        await page.locator('#connect-credential-secret').press('Enter'); await saved(page, state);
+      })],
     ...['openai', 'github', 'npm', 'manual'].map(provider => [provider + ': provider tile, default name, focused secret and Enter save only a credential',
       browser => synthetic(browser, {provider}, async (page, state) => {
         await choose(page, provider);

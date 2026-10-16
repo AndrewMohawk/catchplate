@@ -25,6 +25,7 @@ import signal
 import subprocess
 import sys
 import time
+from urllib.parse import urlsplit
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -48,6 +49,15 @@ SDK_PINS = {"openai": "3.31.0", "anthropic": "1.15.0", "google-genai": "2.31.0",
     "httpx2": "2.13.1", "httpx": "0.28.1", "slack-sdk": "3.45.0", "notion-client": "3.1.0",
     "stripe": "16.0.0", "cloudflare": "5.9.0", "aiohttp": "3.14.5"}
 AI_PROVIDERS = frozenset({"openai", "anthropic", "gemini", "openrouter"})
+
+
+def sdk_audit_target(method, url):
+    """Match Rust audit_url_parts: query names/values are deliberately omitted."""
+    target = urlsplit(url)
+    origin, path = (target.scheme + "://" + target.netloc).encode(), target.path.encode()
+    return method, fixture.encoded({"origin_sha256": "sha256:" + hashlib.sha256(origin).hexdigest(),
+        "origin_bytes": len(origin), "path_sha256": "sha256:" + hashlib.sha256(path).hexdigest(),
+        "path_bytes": len(path), "query_keys": []})
 
 
 def sdk_module(name):
@@ -91,6 +101,7 @@ class CommonAppsCheck(OperatorCatalogCheck):
         fixture.assert_isolated(args.sdk_smoke)
         super().__init__(argparse.Namespace(**{**vars(args), "upstream_address": "127.0.0.1"}))
         self.credential, self.phase, self.last = fixture.TOKEN, "preflight", None
+        self.sdk_negative_targets = {}
         require(args.control_base == "http://127.0.0.1:3000" and args.management_base == "http://127.0.0.1:9091"
             and args.proxy_url == recipe.PROXY_URL and args.operator_origin == recipe.CONTROL_ORIGIN,
             "exact isolated endpoints required")
@@ -258,6 +269,7 @@ class CommonAppsCheck(OperatorCatalogCheck):
         else:
             require(name == "stripe", "unknown negative SDK case")
             wrong.update(app_operation="balance", upstream_url="https://api.stripe.com/v1/balance", query_keys=[])
+        self.sdk_negative_targets[name] = sdk_audit_target(wrong["methods"][0], wrong["upstream_url"])
         paths = {}
         for variant, value in (("allowed", config), ("wrong-scope", wrong)):
             path = self.args.run_claim_file.parent / ("sdk-" + name + "-" + variant + ".json")
@@ -380,8 +392,22 @@ class CommonAppsCheck(OperatorCatalogCheck):
         require(observed["total"] == len(specs) and all(row["accepted"] for row in observed["attempts"]), "provider assertions differ")
         denials = [row for row in rows if row["event_type"] == "data_plane.request.denied"]
         if self.args.sdk_smoke:
-            require(len(denials) == len(specs) and all(row["event"].get("policy_hash") == self.policy_hash for row in denials),
-                "SDK denial audit binding differs")
+            # Early generic denials lack policy_hash/principal_id. Verify their
+            # exact status and target, then bind the isolated calls through the
+            # corresponding CONNECT audit records, which do carry both fields.
+            require(len(denials) == len(specs) and Counter((row["event"].get("method"),
+                fixture.encoded(row["event"].get("url"))) for row in denials) == Counter(self.sdk_negative_targets.values())
+                and all(row["event"].get("status_code") == 403 and row["event"].get("outcome") == "denied"
+                    and row["event"].get("policy_hash", self.policy_hash) == self.policy_hash for row in denials),
+                "SDK denial audit target or status differs")
+            connects = [row["event"] for row in rows if row["event_type"] == "data_plane.connect.established"]
+            require(Counter(row.get("authority") for row in connects) == Counter({spec["host"] + ":443": 2 for spec in specs.values()})
+                and all(row.get("method") == "CONNECT" and row.get("status_code") == 200 and row.get("outcome") == "established"
+                    and row.get("target") == row.get("authority") and row.get("policy_hash") == self.policy_hash
+                    and row.get("principal_id") == self.application["id"] for row in connects),
+                "SDK CONNECT policy or application binding differs")
+            require(self.catalog()["policy"]["policy_hash"] == self.policy_hash and self.health()["policy_hash"] == self.policy_hash,
+                "SDK final policy changed")
         return {"schema": "serverware.commonAppsConnectedCheck/v1", "ok": True, "syntheticOnly": True,
             "realProviderVerified": False, "stockSdkVerified": self.args.sdk_smoke, "dataPlaneBinaryDigest": self.args.expected_binary_sha256,
             "policyHash": self.policy_hash, "catalogRevision": self.catalog()["revision"], "checks": checks,

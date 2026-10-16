@@ -126,6 +126,44 @@ class StockSDKTests(unittest.TestCase):
                     example.infer(configuration(provider), "Hi", client=client)
                 self.assertEqual(len(seen), 1)
 
+    def test_anthropic_without_home_uses_private_profile_and_restores_environment(self):
+        import httpx2
+        from anthropic.lib.credentials import _constants
+
+        for previous in (None, "/never-read-ambient-anthropic-profile"):
+            for status in (200, 429):
+                with self.subTest(previous=previous, status=status):
+                    if previous is None:
+                        os.environ.pop("ANTHROPIC_CONFIG_DIR", None)
+                    else:
+                        os.environ["ANTHROPIC_CONFIG_DIR"] = previous
+                    paths = []
+
+                    def handler(request):
+                        directory = Path(os.environ["ANTHROPIC_CONFIG_DIR"])
+                        self.assertNotEqual(str(directory), previous)
+                        self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+                        self.assertEqual(list(directory.iterdir()), [])
+                        self.assertNotIn("HOME", os.environ)
+                        self.assertEqual(request.headers["x-api-key"], "serverware-anthropic-placeholder-v1")
+                        paths.append(directory)
+                        return httpx2.Response(status, json=response_body("anthropic") if status == 200 else {
+                            "error": {"type": "rate_limit_error", "message": "Synthetic refusal"}})
+
+                    client = httpx2.Client(transport=httpx2.MockTransport(handler), trust_env=False,
+                        headers={"accept-encoding": "identity"})
+                    with patch.object(Path, "home", side_effect=RuntimeError("No passwd home")), \
+                            patch.object(_constants, "_read_active_config_pointer",
+                                side_effect=AssertionError("Ambient profile read refused")):
+                        if status == 200:
+                            self.assertEqual(example.infer(configuration("anthropic"), "Hi", client=client)["text"], "Hello")
+                        else:
+                            with self.assertRaises(Exception):
+                                example.infer(configuration("anthropic"), "Hi", client=client)
+                    self.assertEqual(len(paths), 1)
+                    self.assertFalse(paths[0].exists())
+                    self.assertEqual(os.environ.get("ANTHROPIC_CONFIG_DIR"), previous)
+
     def test_four_sdk_approval_responses_keep_only_safe_review_path(self):
         identifier = "c72b3ace-e45f-4743-9c43-06f46c03e97e"
         path = "/approvals/" + identifier

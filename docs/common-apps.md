@@ -197,7 +197,7 @@ custom permissions.
 Use the [common-app examples](../examples/common-apps/README.md) for reviewed
 request shapes and transport configuration. The AI example uses the actual
 provider SDKs. The generic Python example uses ordinary HTTP requests for the
-service presets. A separate standard-library recipe uses the Slack, Stripe and
+service presets. A separate SDK recipe uses the Slack, Stripe and
 Cloudflare SDKs and the maintained third-party Notion Python client, including
 explicit single-page pagination. A preset's existence is not a claim that every native SDK,
 CLI or pagination helper works without configuration.

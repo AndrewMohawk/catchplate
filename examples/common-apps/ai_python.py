@@ -15,6 +15,7 @@ import re
 import ssl
 import subprocess
 import sys
+import tempfile
 from uuid import UUID
 
 PINS = {"openai": "3.31.0", "anthropic": "1.15.0", "google-genai": "2.31.0",
@@ -129,12 +130,23 @@ def _infer(config, prompt, *, client):
                 "text": response.choices[0].message.content}
     if provider == "anthropic":
         from anthropic import Anthropic
-        with Anthropic(api_key=token, base_url="https://api.anthropic.com", max_retries=0,
-                timeout=30.0, http_client=client) as sdk:
-            response = sdk.messages.create(model=model,
-                messages=[{"role": "user", "content": prompt}], max_tokens=maximum, stream=False)
-            return {"provider": provider, "status": response.stop_reason,
-                "text": "".join(block.text for block in response.content if block.type == "text")}
+        # The SDK probes profile discovery even with an explicit key. An empty
+        # private directory avoids ambient profiles and works without a Unix home.
+        with tempfile.TemporaryDirectory(prefix="serverware-anthropic-") as profile_dir:
+            previous = os.environ.get("ANTHROPIC_CONFIG_DIR")
+            os.environ["ANTHROPIC_CONFIG_DIR"] = profile_dir
+            try:
+                with Anthropic(api_key=token, base_url="https://api.anthropic.com", max_retries=0,
+                        timeout=30.0, http_client=client) as sdk:
+                    response = sdk.messages.create(model=model,
+                        messages=[{"role": "user", "content": prompt}], max_tokens=maximum, stream=False)
+                    return {"provider": provider, "status": response.stop_reason,
+                        "text": "".join(block.text for block in response.content if block.type == "text")}
+            finally:
+                if previous is None:
+                    os.environ.pop("ANTHROPIC_CONFIG_DIR", None)
+                else:
+                    os.environ["ANTHROPIC_CONFIG_DIR"] = previous
     from google import genai
     from google.genai import types
     options = types.HttpOptions(api_version="v1beta", timeout=30000, httpx_client=client,

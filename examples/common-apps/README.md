@@ -139,13 +139,15 @@ are text-only and non-streaming: no tools, images, files or background work.
 Output-token limits are per request, **not a daily spending cap**. Gemini API keys
 are distinct from Google OAuth connections and Vertex AI credentials. Provider
 access and model availability still depend on your provider account.
+The Anthropic recipe uses an empty private SDK configuration directory, so it
+does not load unrelated local profiles and also works without a Unix home entry.
 
 ## Approval, failure and TLS behavior
 
 - HTTP 428 means review is required. Open the review URL in the returned JSON,
   approve in Serverware, then explicitly rerun the identical command/body before
   approval expires. The original connection is not held open.
-- Neither example retries automatically. A timeout, lost response or non-success
+- None of these examples retries automatically. A timeout, lost response or non-success
   after a write can mean the provider acted. Inspect the provider and audit log
   before deciding whether another attempt is safe; approval is not an idempotency
   guarantee. A denied request does not become an automatic retry.
@@ -170,6 +172,7 @@ access and model availability still depend on your provider account.
 
 ```sh
 .venv/bin/python test_request.py
+.venv-services/bin/python test_services_python.py
 ```
 
 The focused tests use actual Requests with its final network send intercepted and

@@ -212,6 +212,9 @@ def invoke_sdk(config, operation, params, client):
             sdk.blocks.children.list(block_id=config["scope"]["block_id"], **params)
     elif provider == "stripe":
         import stripe
+        # Documented SDK opt-out: no telemetry files, home-directory lookup or
+        # request-history metadata in this isolated one-call client.
+        stripe.enable_telemetry = False
 
         class ScopedHTTPClient(stripe.HTTPClient):
             name = "httpx"

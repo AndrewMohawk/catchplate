@@ -134,6 +134,27 @@ class ServicesSDKTests(unittest.TestCase):
         self.assertEqual(request.url.query, b"email=team%2Btest%40example.com&ending_before=cus_before&limit=1")
         self.assertTrue(result["response"]["has_more"])
 
+    def test_stripe_cold_no_home_disables_optional_telemetry(self):
+        import stripe
+        import stripe._telemetry_id
+        # Reset the SDK's one-time cache: earlier requests otherwise hide its
+        # first-use home lookup. Anonymous container UIDs can have no home.
+        with patch.object(stripe, "enable_telemetry", True), \
+                patch.object(stripe._telemetry_id, "_loaded", False), \
+                patch.object(Path, "home", side_effect=RuntimeError("No home directory")) as home:
+            result, request = self.capture(config("stripe", "customers"),
+                {"object": "list", "url": "/v1/customers", "data": [{"id": "cus_fixture_next",
+                    "object": "customer", "email": "fixture@example.test"}], "has_more": True},
+                ["limit=1", "starting_after=cus_fixture_start"])
+            self.assertTrue(result["ok"])
+            self.assertEqual(request.url.query, b"limit=1&starting_after=cus_fixture_start")
+            self.assertFalse(stripe.enable_telemetry)
+            home.assert_not_called()
+            metadata = json.loads(request.headers["x-stripe-client-user-agent"])
+            self.assertNotIn("telemetry_id", metadata)
+            self.assertNotIn("platform", metadata)
+            self.assertNotIn("x-stripe-client-telemetry", request.headers)
+
     def test_actual_cloudflare_metadata_and_first_page_only(self):
         payload = {"success": True, "errors": [], "messages": [], "result": [],
             "result_info": {"page": 1, "per_page": 1, "count": 0, "total_pages": 2, "total_count": 1}}

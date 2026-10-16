@@ -9,6 +9,7 @@ from copy import deepcopy
 from dataclasses import FrozenInstanceError
 import base64
 import hashlib
+from itertools import combinations
 import json
 from pathlib import Path
 import socket
@@ -341,10 +342,32 @@ class EcrSdkProtocolTests(unittest.TestCase):
             base = response_value(action)
             for changed in changes:
                 self.refused(self.response, request, {**base, **changed})
-            for missing in base:
+            for missing in set(base) - {"registryId", "repositoryName"}:
                 self.refused(self.response, request, {key: value for key, value in base.items() if key != missing})
         self.assertEqual(self.response(self.request("InitiateLayerUpload"),
             {"uploadId": UPLOAD, "partSize": 10 * 1024**2}).part_size, 10 * 1024**2)
+
+    def test_upload_and_complete_optional_scope_echoes(self):
+        for action in ("UploadLayerPart", "CompleteLayerUpload"):
+            request = self.request(action)
+            base = response_value(action)
+            for omitted in (("registryId",), ("repositoryName",), ("registryId", "repositoryName")):
+                with self.subTest(action=action, omitted=omitted):
+                    value = {key: item for key, item in base.items() if key not in omitted}
+                    result = self.response(request, value)
+                    self.assertIs(result.request, request)
+                    self.assertEqual(result.upload_id, UPLOAD)
+                    if action == "UploadLayerPart":
+                        self.assertEqual(result.last_byte_received, request.part_last_byte)
+                    else:
+                        self.assertEqual(result.layer_digest, DIGEST)
+            minimal = {key: item for key, item in base.items()
+                if key not in {"registryId", "repositoryName"}}
+            for field, wrong in (("registryId", "000000000000"), ("registryId", None),
+                    ("repositoryName", "other"), ("repositoryName", None),
+                    ("unexpected", "PRIVATE-CANARY")):
+                with self.subTest(action=action, field=field, wrong=wrong):
+                    self.refused(self.response, request, {**minimal, field: wrong})
 
     def test_put_response_exact_manifest_digest_tag_scope_and_media(self):
         request = self.request("PutImage")
@@ -363,10 +386,9 @@ class EcrSdkProtocolTests(unittest.TestCase):
             changed = deepcopy(base)
             del changed["image"]["imageId"][missing]
             self.refused(self.response, request, changed)
-        for missing in base["image"]:
-            changed = deepcopy(base)
-            del changed["image"][missing]
-            self.refused(self.response, request, changed)
+        changed = deepcopy(base)
+        del changed["image"]["imageId"]
+        self.refused(self.response, request, changed)
         minimal = request_value("PutImage")
         del minimal["imageManifestMediaType"]
         request = self.request("PutImage", minimal)
@@ -374,6 +396,62 @@ class EcrSdkProtocolTests(unittest.TestCase):
         result = self.response(request, base)
         self.assertEqual(result.image_digest, MANIFEST_DIGEST)
         self.assertIsNone(result.image_manifest_media_type)
+
+    def test_put_response_optional_echo_combinations_keep_digest_tag_evidence(self):
+        request = self.request("PutImage")
+        base = response_value("PutImage")
+        optional = ("registryId", "repositoryName", "imageManifest", "imageManifestMediaType")
+        for count in range(len(optional) + 1):
+            for omitted in combinations(optional, count):
+                with self.subTest(omitted=omitted):
+                    value = {"image": {key: item for key, item in base["image"].items()
+                        if key not in omitted}}
+                    result = self.response(request, value)
+                    self.assertIs(result.request, request)
+                    self.assertEqual(result.image_digest, MANIFEST_DIGEST)
+                    self.assertEqual(result.image_tag, TAG)
+                    expected_media = None if "imageManifestMediaType" in omitted else MEDIA
+                    self.assertEqual(result.image_manifest_media_type, expected_media)
+        minimal = {"imageId": {"imageDigest": MANIFEST_DIGEST, "imageTag": TAG}}
+        for field, wrong in (("registryId", "000000000000"), ("registryId", None),
+                ("repositoryName", "other"), ("repositoryName", None),
+                ("imageManifest", MANIFEST + " "), ("imageManifest", None),
+                ("imageManifestMediaType", DOCKER_MEDIA), ("imageManifestMediaType", None),
+                ("unexpected", "PRIVATE-CANARY")):
+            with self.subTest(field=field, wrong=wrong):
+                self.refused(self.response, request, {"image": {**minimal, field: wrong}})
+
+    def test_minimal_responses_still_require_evidence_and_reject_duplicates_and_errors(self):
+        for action in ACTIONS:
+            self.refused(self.response, self.request(action), {})
+        for action, essential in (
+                ("InitiateLayerUpload", {"uploadId": UPLOAD, "partSize": 5 * 1024**2}),
+                ("UploadLayerPart", {"uploadId": UPLOAD, "lastByteReceived": 7 + len(PART) - 1}),
+                ("CompleteLayerUpload", {"uploadId": UPLOAD, "layerDigest": DIGEST})):
+            request = self.request(action)
+            for missing in essential:
+                with self.subTest(action=action, missing=missing):
+                    self.refused(self.response, request,
+                        {key: item for key, item in essential.items() if key != missing})
+        request = self.request("PutImage")
+        for value in ({"image": {}}, {"image": {"imageId": {}}},
+                {"image": {"imageId": {"imageDigest": MANIFEST_DIGEST}}},
+                {"image": {"imageId": {"imageTag": TAG}}}):
+            self.refused(self.response, request, value)
+        echo = '"registryId":"' + REGISTRY + '"'
+        part_raw = ('{"uploadId":"' + UPLOAD + '","lastByteReceived":'
+            + str(7 + len(PART) - 1) + ',' + echo + ',' + echo + '}').encode()
+        self.refused(self.response, self.request("UploadLayerPart"), raw=part_raw)
+        image_raw = ('{"image":{"imageId":{"imageDigest":"' + MANIFEST_DIGEST
+            + '","imageTag":"' + TAG + '"},' + echo + ',' + echo + '}}').encode()
+        self.refused(self.response, request, raw=image_raw)
+        for action, error in (("CompleteLayerUpload", "LayerAlreadyExistsException"),
+                ("PutImage", "ImageAlreadyExistsException"),
+                ("PutImage", "ImageTagAlreadyExistsException")):
+            for status in (200, 400):
+                with self.subTest(action=action, error=error, status=status):
+                    self.refused(self.response, self.request(action),
+                        {"__type": error, "message": "PRIVATE-CANARY"}, status=status)
 
     def test_sealed_frozen_redacted_results_request_binding_and_network_denial(self):
         for action in ACTIONS:

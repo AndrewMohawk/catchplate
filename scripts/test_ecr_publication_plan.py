@@ -152,6 +152,188 @@ class EcrPublicationPlanTests(unittest.TestCase):
             "imageManifestMediaType": self.image.manifest.media_type,
             "imageTag": "fixture-tag", "imageDigest": self.image.manifest.digest, **changes})
 
+    def checkpoint_roundtrip(self, state):
+        raw = planner.export_checkpoint(state)
+        self.assertIs(type(raw), bytes)
+        self.assertLess(len(raw), planner.MAX_CHECKPOINT_BYTES)
+        document = json.loads(raw)
+        self.assertEqual(document["schema"], planner.CHECKPOINT_SCHEMA)
+        self.assertNotIn("_seal", document)
+        self.assertNotIn("_plan", document)
+        self.assertNotIn("_image", document)
+        self.assertNotIn("imageManifest", document)
+        # No replay and no content callback: restoration rejoins the verifier's
+        # observation, while the durable owner must separately retain custody.
+        with patch.object(planner, "begin", side_effect=AssertionError("replay")), \
+                patch.object(planner, "apply_response", side_effect=AssertionError("replay")):
+            restored = planner.restore_checkpoint(self.image, state.scope, raw,
+                clock=state.clock, deadline=state.deadline)
+        self.assertEqual(planner.export_checkpoint(restored), raw)
+        self.assertIsNot(restored, state)
+        self.assertIsNone(restored._plan)
+        self.assertEqual(restored.deadline, state.deadline)
+        return restored
+
+    def checkpoint_refuses_document(self, state, document):
+        self.refuse(lambda: planner.restore_checkpoint(self.image, state.scope, encoded(document),
+            clock=state.clock, deadline=state.deadline))
+
+    def test_checkpoints_roundtrip_each_acked_upload_phase_then_publish(self):
+        state = self.checkpoint_roundtrip(self.initial())
+        state = self.checkpoint_roundtrip(self.mark_available(state, [self.image.config.digest]))
+        state = self.checkpoint_roundtrip(self.initiate(state))
+        self.assertEqual(state.upload.parts, 0)
+        state = self.checkpoint_roundtrip(self.part(state, PREFIX))
+        self.assertEqual(len(state.upload.candidate_digests), 2)
+        state = self.checkpoint_roundtrip(self.part(state, b"other-tail", offset=len(PREFIX)))
+        self.assertEqual(state.upload.candidate_digests, (digest(SECOND_LAYER),))
+        self.refuse(lambda: planner.begin(state, request("CompleteLayerUpload", uploadId=UPLOAD_ID,
+            layerDigests=[digest(FIRST_LAYER)]), clock=clock()))
+        state = self.checkpoint_roundtrip(self.complete(state, digest(SECOND_LAYER)))
+        state = self.checkpoint_roundtrip(self.mark_available(state, [digest(FIRST_LAYER)]))
+        parsed = self.put_request()
+        pending, plan = planner.begin(state, parsed, clock=clock())
+        # Essential ACK only: redundant response echoes are not invented.
+        acknowledged = response(parsed, image={"imageId": {
+            "imageDigest": self.image.manifest.digest, "imageTag": "fixture-tag"}})
+        done = self.checkpoint_roundtrip(planner.apply_response(pending, plan, acknowledged, clock=clock()))
+        self.assertEqual(done.status, "published")
+        self.refuse(lambda: planner.begin(done, request("InitiateLayerUpload"), clock=clock()))
+        with self.assertRaises(FrozenInstanceError):
+            done.status = "active"
+
+    def test_checkpoint_all_uploaded_and_all_available_histories_preserve_counters(self):
+        state = self.initial()
+        for number, data in enumerate((SECOND_LAYER, CONFIG, FIRST_LAYER), start=1):
+            upload_id = "00000000-0000-4000-8000-" + str(number).zfill(12)
+            state = self.checkpoint_roundtrip(self.initiate(state, upload_id=upload_id))
+            for offset in range(0, len(data), PART_SIZE):
+                state = self.checkpoint_roundtrip(self.part(state, data[offset:offset + PART_SIZE],
+                    upload_id=upload_id, offset=offset))
+            state = self.checkpoint_roundtrip(self.complete(state, digest(data), upload_id=upload_id))
+        self.assertEqual(state.calls, 11)
+        self.assertEqual(state.revision, 22)
+        self.assertEqual(state.part_bytes, self.image.total_blob_bytes)
+        available = self.checkpoint_roundtrip(self.mark_available(self.initial(), sorted(self.blobs)))
+        self.assertEqual((available.calls, available.part_bytes, available.comparison_bytes,
+            available.comparison_calls), (1, 0, 0, 0))
+        with patch.object(planner, "MAX_CALLS", available.calls):
+            restored = self.checkpoint_roundtrip(available)
+            self.refuse(lambda: planner.begin(restored, self.put_request(), clock=clock()))
+
+    def test_checkpoint_retains_original_deadlines_and_advances_only_nonregressing_clock(self):
+        state = self.mark_available(self.initial(lifetime=10), [self.image.config.digest], now=clock(2))
+        raw = planner.export_checkpoint(state)
+        restored = planner.restore_checkpoint(self.image, state.scope, raw,
+            clock=clock(3), deadline=state.deadline)
+        self.assertEqual(restored.clock, clock(3))
+        self.assertEqual(restored.deadline, state.deadline)
+        self.assertEqual(restored.calls, state.calls)
+        for observed in (clock(1, 3_000_000_000), clock(3, 1_000_000_000),
+                clock(10, 9_000_000_000), clock(9, 10_000_000_000), object()):
+            self.refuse(lambda: planner.restore_checkpoint(self.image, state.scope, raw,
+                clock=observed, deadline=state.deadline))
+        for change in (-1, 1):
+            for deadline in (planner.Deadline(state.deadline.unix_seconds + change,
+                    state.deadline.monotonic_ns), planner.Deadline(state.deadline.unix_seconds,
+                    state.deadline.monotonic_ns + change)):
+                self.refuse(lambda: planner.restore_checkpoint(self.image, state.scope, raw,
+                    clock=clock(3), deadline=deadline))
+        self.refuse(lambda: planner.begin(restored, request("InitiateLayerUpload"), clock=clock(2)))
+
+    def test_checkpoint_rejoins_every_immutable_scope_field_and_actual_artifact(self):
+        state = self.initial()
+        raw = planner.export_checkpoint(state)
+        for field, value in (("publication_id", "other"), ("principal_id", "other"),
+                ("route_id", "other"), ("credential_id", "other"), ("credential_generation", 8),
+                ("policy_hash", "sha256:" + "2" * 64), ("image_tag", "other-tag")):
+            self.refuse(lambda: planner.restore_checkpoint(self.image, scope(**{field: value}), raw,
+                clock=clock(), deadline=state.deadline))
+        for target in (protocol.Scope("999999999999", REGION, REPOSITORY),
+                protocol.Scope(REGISTRY, "us-west-2", REPOSITORY),
+                protocol.Scope(REGISTRY, REGION, "other-repository")):
+            self.refuse(lambda: planner.restore_checkpoint(self.image, scope(protocol_scope=target), raw,
+                clock=clock(), deadline=state.deadline))
+        other, _ = image_fixture(config=b"other-config", layers=(b"other-layer",))
+        for candidate in (other, artifact.parse_manifest(self.image.manifest_bytes), object()):
+            self.refuse(lambda: planner.restore_checkpoint(candidate, state.scope, raw,
+                clock=clock(), deadline=state.deadline))
+        for field in ("artifact_sha256", "manifest_digest"):
+            self.checkpoint_refuses_document(state, {**json.loads(raw), field: "sha256:" + "0" * 64})
+
+    def test_checkpoint_never_exports_or_restores_inflight_failed_or_uncertain_state(self):
+        initial = self.initial()
+        for action in ("InitiateLayerUpload", "BatchCheckLayerAvailability"):
+            parsed = request(action, **({"layerDigests": [self.image.config.digest]}
+                if action == "BatchCheckLayerAvailability" else {}))
+            pending, plan = planner.begin(initial, parsed, clock=clock())
+            self.refuse(lambda: planner.export_checkpoint(pending))
+            self.refuse(lambda: planner.export_checkpoint(planner.fail(pending, plan, clock=clock())))
+        for status in ("pending", "failed", "uncertain", "unknown", True, None):
+            self.checkpoint_refuses_document(initial, {**json.loads(planner.export_checkpoint(initial)), "status": status})
+        self.refuse(lambda: planner.export_checkpoint(object()))
+
+    def test_checkpoint_json_is_bounded_closed_and_strict(self):
+        state = self.initial()
+        raw = planner.export_checkpoint(state)
+        document = json.loads(raw)
+        malformed = [b"", raw.decode(), bytearray(raw), b"\xff", b"[]", b"null",
+            b" " * (planner.MAX_CHECKPOINT_BYTES + 1), b"[[[[[0]]]]]",
+            b'{"x":' + b"9" * 100 + b"}", b"[" + b"0," * 2048 + b"0]",
+            raw[:-1] + b',"schema":"duplicate"}', raw.replace(b'"calls":0', b'"calls":0.0'),
+            raw.replace(b'"calls":0', b'"calls":NaN'), raw.replace(b'"calls":0', b'"calls":Infinity')]
+        for bad in malformed:
+            self.refuse(lambda: planner.restore_checkpoint(self.image, state.scope, bad,
+                clock=clock(), deadline=state.deadline))
+        for field in document:
+            missing = {key: value for key, value in document.items() if key != field}
+            self.checkpoint_refuses_document(state, missing)
+        self.checkpoint_refuses_document(state, {**document, "unexpected": "PRIVATE-CANARY"})
+        self.checkpoint_refuses_document(state, {**document, "schema": "serverware.ecrPublicationCheckpoint/v2"})
+        for field in ("revision", "calls", "part_bytes", "comparison_bytes", "comparison_calls"):
+            self.checkpoint_refuses_document(state, {**document, field: True})
+            self.checkpoint_refuses_document(state, {**document, field: -1})
+        for field in ("clock", "deadline", "scope"):
+            self.checkpoint_refuses_document(state, {**document, field: {**document[field], "extra": 0}})
+        for field in ("clock", "deadline"):
+            for component in ("unix_seconds", "monotonic_ns"):
+                self.checkpoint_refuses_document(state, {**document,
+                    field: {**document[field], component: True}})
+        self.checkpoint_refuses_document(state, {**document,
+            "scope": {**document["scope"], "credential_generation": True}})
+        self.checkpoint_refuses_document(state, {**document, "scope": {**document["scope"],
+            "protocol_scope": {**document["scope"]["protocol_scope"], "extra": 0}}})
+
+    def test_checkpoint_rejects_inconsistent_counters_rosters_and_upload_shapes(self):
+        state = self.part(self.initiate(self.mark_available(self.initial(), [self.image.config.digest])), PREFIX)
+        original = json.loads(planner.export_checkpoint(state))
+        for changes in ({"revision": state.revision + 1}, {"calls": state.calls + 1},
+                {"calls": planner.MAX_CALLS + 1}, {"revision": 2, "calls": 1},
+                {"part_bytes": len(PREFIX) - 1}, {"part_bytes": self.image.total_blob_bytes + 1},
+                {"comparison_bytes": len(PREFIX) - 1}, {"comparison_bytes": planner.MAX_COMPARISON_BYTES + 1},
+                {"comparison_bytes": 2 * len(PREFIX) - 1}, {"comparison_calls": 3},
+                {"comparison_calls": 0}, {"comparison_calls": planner.MAX_COMPARISON_CALLS + 1},
+                {"ready_digests": [self.image.config.digest] * 2},
+                {"ready_digests": ["sha256:" + "0" * 64]}, {"seen_upload_ids": []},
+                {"seen_upload_ids": [UPLOAD_ID, UPLOAD_ID]}, {"seen_upload_ids": ["invalid"]},
+                {"upload": None}, {"status": "fresh"}, {"status": "published"}):
+            self.checkpoint_refuses_document(state, {**original, **changes})
+        upload = original["upload"]
+        for changes in ({"extra": 0}, {"upload_id": "00000000-0000-4000-8000-000000000099"},
+                {"candidate_digests": []}, {"candidate_digests": [self.image.config.digest]},
+                {"candidate_digests": list(reversed(upload["candidate_digests"]))},
+                {"acknowledged_offset": 0}, {"acknowledged_offset": len(PREFIX) - 1},
+                {"acknowledged_offset": len(FIRST_LAYER) + 1}, {"parts": 0}, {"parts": 2},
+                {"parts": True}, {"part_size": 0}, {"part_size": protocol.MAX_PART_BYTES + 1}):
+            self.checkpoint_refuses_document(state, {**original, "upload": {**upload, **changes}})
+        initial_upload = self.initiate(self.initial())
+        initial_document = json.loads(planner.export_checkpoint(initial_upload))
+        self.checkpoint_refuses_document(initial_upload, {**initial_document, "upload": {
+            **initial_document["upload"], "candidate_digests": [self.image.config.digest]}})
+        completed = self.complete(self.part(self.initiate(self.initial()), CONFIG), self.image.config.digest)
+        completed_document = json.loads(planner.export_checkpoint(completed))
+        self.checkpoint_refuses_document(completed, {**completed_document, "part_bytes": len(CONFIG) - 1})
+
     def test_create_binds_actual_verified_image_and_original_scope_deadline(self):
         state = self.initial()
         self.assertEqual(state.scope, scope())

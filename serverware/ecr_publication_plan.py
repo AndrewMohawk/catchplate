@@ -13,6 +13,10 @@ same proposal; object identity checks are not a durable anti-replay mechanism or
 isolation from adversarial Python. A lost/invalid write response must be passed
 to fail(), never used to reopen its upload slot. No automatic retry or resume is
 provided. Callback I/O/cancellation and final dispatch checks belong to callers.
+Checkpoints are bounded data from a trusted durable owner, not authenticated
+history or dispatch authority. Restoring one never consumes it or proves that
+its claimed ACKs occurred. The owner must bind the latest committed checkpoint,
+original scope/deadline and same monotonic-clock domain, and retain custody.
 
 This supported flow has one active upload and one pending request. Batch checks
 occur between uploads; arbitrary blob order is allowed. Initiate names no blob,
@@ -38,10 +42,16 @@ MAX_CALLS = 4096
 MAX_COMPARISON_BYTES = 1024 * 1024 * 1024
 MAX_COMPARISON_CALLS = 4096
 READ_CHUNK_BYTES = 1024 * 1024
+CHECKPOINT_SCHEMA = "serverware.ecrPublicationCheckpoint/v1"
+MAX_CHECKPOINT_BYTES = 64 * 1024
 _MAX_INTEGER = 9_007_199_254_740_991
 _MAX_UNIX = 253402300799
 _MAX_MONOTONIC = (1 << 63) - 1
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_UPLOAD_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
+_CHECKPOINT_FIELDS = frozenset({"schema", "scope", "deadline", "clock", "revision", "status",
+    "ready_digests", "seen_upload_ids", "upload", "calls", "part_bytes", "comparison_bytes",
+    "comparison_calls", "artifact_sha256", "manifest_digest"})
 _SEAL = object()
 
 
@@ -214,6 +224,196 @@ def create(image: image_artifact.VerifiedImage, scope: PublicationScope, *, cloc
             status="fresh", ready_digests=(), seen_upload_ids=(), upload=None, calls=0, part_bytes=0,
             comparison_bytes=0, comparison_calls=0, artifact_sha256=digest,
             manifest_digest=image.manifest.digest, _image=image, _plan=None, _seal=_SEAL)
+    except Exception:
+        raise PlanError() from None
+
+
+def _checkpoint_integer(value, maximum, *, minimum=0):
+    _require(type(value) is int and minimum <= value <= maximum)
+    return value
+
+
+def _checkpoint_keys(value, expected):
+    _require(type(value) is dict and set(value) == expected)
+    return value
+
+
+def _checkpoint_strings(value, pattern, maximum):
+    _require(type(value) is list and len(value) <= maximum
+        and all(type(item) is str and pattern.fullmatch(item) for item in value)
+        and value == sorted(set(value)))
+    return tuple(value)
+
+
+def _checkpoint_document(raw):
+    _require(type(raw) is bytes and 1 <= len(raw) <= MAX_CHECKPOINT_BYTES)
+    text = raw.decode("utf-8", errors="strict")
+    depth = punctuation = 0
+    quoted = escaped = False
+    for character in text:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                quoted = False
+        elif character == '"':
+            quoted = True
+        elif character in "[{":
+            depth += 1
+            punctuation += 1
+            _require(depth <= 4)
+        elif character in "]}":
+            depth -= 1
+            _require(depth >= 0)
+        elif character in ",:":
+            punctuation += 1
+        _require(punctuation <= 2048)
+    _require(not quoted and depth == 0)
+
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            _require(key not in result)
+            result[key] = value
+        return result
+
+    def integer(value):
+        _require(len(value) <= 19)
+        return int(value)
+
+    def refuse(_value):
+        raise PlanError()
+
+    return json.loads(text, object_pairs_hook=unique, parse_int=integer,
+        parse_float=refuse, parse_constant=refuse)
+
+
+def _restore_checkpoint(image, scope, value, *, clock, deadline):
+    _checkpoint_keys(value, _CHECKPOINT_FIELDS)
+    _require(value["schema"] == CHECKPOINT_SCHEMA and type(value["status"]) is str
+        and value["status"] in {"fresh", "active", "published"})
+    times = {"unix_seconds", "monotonic_ns"}
+    retained_clock = Clock(**_checkpoint_keys(value["clock"], times))
+    retained_deadline = Deadline(**_checkpoint_keys(value["deadline"], times))
+    _require(type(deadline) is Deadline and deadline == retained_deadline)
+    scope_value = _checkpoint_keys(value["scope"], {field.name for field in fields(PublicationScope)})
+    protocol_value = _checkpoint_keys(scope_value["protocol_scope"],
+        {"registry_id", "region", "repository_name"})
+    retained_scope = PublicationScope(**{**scope_value, "protocol_scope": protocol.Scope(**protocol_value)})
+    _require(type(scope) is PublicationScope and scope == retained_scope)
+    # Rejoin a real, freshly supplied verifier result, not serialized descriptors.
+    base = create(image, scope, clock=retained_clock, deadline=deadline)
+    _clock(base, clock)
+    _require(value["artifact_sha256"] == base.artifact_sha256
+        and value["manifest_digest"] == base.manifest_digest)
+    sizes = {blob.digest: blob.size for blob in image.blobs}
+    ready = _checkpoint_strings(value["ready_digests"], _DIGEST, len(sizes))
+    seen = _checkpoint_strings(value["seen_upload_ids"], _UPLOAD_ID, len(sizes))
+    _require(set(ready) <= sizes.keys())
+    calls = _checkpoint_integer(value["calls"], MAX_CALLS)
+    revision = _checkpoint_integer(value["revision"], 2 * MAX_CALLS)
+    part_bytes = _checkpoint_integer(value["part_bytes"], image.total_blob_bytes)
+    comparison_bytes = _checkpoint_integer(value["comparison_bytes"], MAX_COMPARISON_BYTES)
+    comparison_calls = _checkpoint_integer(value["comparison_calls"], MAX_COMPARISON_CALLS)
+    _require(revision == 2 * calls
+        and part_bytes <= comparison_bytes <= part_bytes * len(sizes)
+        and comparison_calls <= comparison_bytes <= comparison_calls * READ_CHUNK_BYTES)
+    upload, offset, parts = None, 0, 0
+    if value["upload"] is not None:
+        raw = _checkpoint_keys(value["upload"], {field.name for field in fields(Upload)})
+        _require(type(raw["upload_id"]) is str and raw["upload_id"] in seen)
+        candidates = _checkpoint_strings(raw["candidate_digests"], _DIGEST, len(sizes))
+        _require(bool(candidates) and set(candidates) <= sizes.keys() - set(ready))
+        offset = _checkpoint_integer(raw["acknowledged_offset"], image_artifact.MAX_BLOB_BYTES)
+        parts = _checkpoint_integer(raw["parts"], MAX_CALLS)
+        part_size = _checkpoint_integer(raw["part_size"], protocol.MAX_PART_BYTES, minimum=1)
+        if parts == 0:
+            _require(offset == 0 and set(candidates) == sizes.keys() - set(ready))
+        else:
+            _require((parts - 1) * part_size < offset <= parts * part_size
+                and all(offset <= sizes[key] for key in candidates)
+                and (offset % part_size == 0 or all(offset == sizes[key] for key in candidates)))
+        upload = _new(Upload, **{**raw, "candidate_digests": candidates})
+    completed = len(seen) - int(upload is not None)
+    _require(0 <= completed <= len(ready) and part_bytes >= offset)
+    # Completed uploads are distinct ready blobs; availability checks may also
+    # populate ready. Their exact provenance is the durable owner's ACK history,
+    # not reconstructed by this bounded structural validator.
+    ready_sizes = sorted(sizes[key] for key in ready)
+    lower = sum(ready_sizes[:completed])
+    upper = sum(ready_sizes[len(ready_sizes) - completed:]) if completed else 0
+    _require(lower <= part_bytes - offset <= upper)
+    # Every surviving candidate matched every acknowledged byte of this upload.
+    # Account for its exact per-part read chunks, not just one plausible blob.
+    current_reads = 0
+    if upload is not None and parts:
+        full_reads = (upload.part_size + READ_CHUNK_BYTES - 1) // READ_CHUNK_BYTES
+        last_size = offset - (parts - 1) * upload.part_size
+        current_reads = len(upload.candidate_digests) * ((parts - 1) * full_reads
+            + (last_size + READ_CHUNK_BYTES - 1) // READ_CHUNK_BYTES)
+        _require(comparison_bytes >= part_bytes + (len(upload.candidate_digests) - 1) * offset)
+    completed_reads = max(completed, (part_bytes - offset + READ_CHUNK_BYTES - 1) // READ_CHUNK_BYTES)
+    _require(comparison_calls >= current_reads + completed_reads)
+    minimum_parts = max(completed + parts, (part_bytes + protocol.MAX_PART_BYTES - 1) // protocol.MAX_PART_BYTES)
+    available = len(ready) - completed
+    minimum_batches = max(int(not seen and calls > 0), (available + 99) // 100)
+    minimum_calls = len(seen) + completed + minimum_parts + minimum_batches + int(value["status"] == "published")
+    _require(minimum_calls <= calls and minimum_parts <= comparison_calls)
+    if value["status"] == "fresh":
+        _require(calls == 0 and not ready and not seen and upload is None)
+    else:
+        _require(calls > 0)
+        if value["status"] == "published":
+            _require(upload is None and set(ready) == sizes.keys())
+    return _change(base, clock=clock, revision=revision, status=value["status"],
+        ready_digests=ready, seen_upload_ids=seen, upload=upload, calls=calls,
+        part_bytes=part_bytes, comparison_bytes=comparison_bytes, comparison_calls=comparison_calls)
+
+
+def export_checkpoint(snapshot: Snapshot) -> bytes:
+    """Encode a quiescent fresh/ACKed/published state, never a pending permit.
+
+    Canonical JSON contains no request body, secret, handle or constructor seal.
+    Only a trusted durable owner may retain/adopt it as current. A checkpoint
+    digest would detect changed bytes, not authenticate the claimed history.
+    """
+    try:
+        _snapshot(snapshot)
+        _require(snapshot._plan is None)
+        scope = {field.name: getattr(snapshot.scope, field.name) for field in fields(PublicationScope)}
+        scope["protocol_scope"] = {field.name: getattr(snapshot.scope.protocol_scope, field.name)
+            for field in fields(protocol.Scope)}
+        value = {key: getattr(snapshot, key) for key in _CHECKPOINT_FIELDS
+            - {"schema", "scope", "deadline", "clock", "upload", "ready_digests", "seen_upload_ids"}}
+        value.update(schema=CHECKPOINT_SCHEMA, scope=scope,
+            deadline={field.name: getattr(snapshot.deadline, field.name) for field in fields(Deadline)},
+            clock={field.name: getattr(snapshot.clock, field.name) for field in fields(Clock)},
+            ready_digests=list(snapshot.ready_digests), seen_upload_ids=list(snapshot.seen_upload_ids),
+            upload=None if snapshot.upload is None else {field.name:
+                list(snapshot.upload.candidate_digests) if field.name == "candidate_digests" else getattr(snapshot.upload, field.name)
+                for field in fields(Upload)})
+        _restore_checkpoint(snapshot._image, snapshot.scope, value, clock=snapshot.clock, deadline=snapshot.deadline)
+        raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("ascii")
+        _require(len(raw) <= MAX_CHECKPOINT_BYTES)
+        return raw
+    except Exception:
+        raise PlanError() from None
+
+
+def restore_checkpoint(image: image_artifact.VerifiedImage, scope: PublicationScope, checkpoint: bytes,
+        *, clock: Clock, deadline: Deadline) -> Snapshot:
+    """Restore bounded data against original owner-selected scope and deadline.
+
+    Pending/failed/uncertain states cannot restore. The observation clock may
+    advance but never regress or reach either original deadline; published
+    remains terminal. The owner must enforce same boot/clock domain, current
+    durable CAS, authenticated history and immutable content custody separately.
+    This function performs no blob reads, history replay, authorization or send.
+    """
+    try:
+        return _restore_checkpoint(image, scope, _checkpoint_document(checkpoint), clock=clock, deadline=deadline)
     except Exception:
         raise PlanError() from None
 

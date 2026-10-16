@@ -8,11 +8,13 @@ Response.request retains the exact in-process Request object for that join.
 Constructor seals are internal provenance, not isolation from Python code.
 
 This supported profile is deliberately stricter than the AWS model: explicit
-account/repository, SHA-256 only, complete successful acknowledgments, no batch
-failures, and parts/provider partSize at most 10 MiB. That is not a claim about
-AWS's universal maximum or acceptance of short final parts. The API reference
-and service-quota page disagree about the maximum part size. No response or
-exception here authorizes retries, reconciliation, approval, or publication.
+account/repository, SHA-256 only, indispensable success acknowledgment fields,
+no batch failures, and parts/provider partSize at most 10 MiB. Redundant response
+scope, manifest and manifest-media echoes are optional but must match when
+present. That is not a claim about AWS's universal maximum or acceptance of
+short final parts. The API reference and service-quota page disagree about the
+maximum part size. No response or exception here authorizes retries,
+reconciliation, approval, or publication.
 
 Manifest strings retain their original UTF-8 bytes and are otherwise opaque;
 the separate artifact verifier owns OCI/Docker structure and blob verification.
@@ -217,6 +219,15 @@ def _scope_echo(value, scope):
         and value["repositoryName"] == scope.repository_name)
 
 
+def _response_scope_echo(value, scope):
+    # AWS models these echoes as optional. The retained request already binds
+    # the scope; a present response echo must never contradict that binding.
+    for name, expected in (("registryId", scope.registry_id),
+                           ("repositoryName", scope.repository_name)):
+        if name in value:
+            _require(value[name] == expected)
+
+
 def _digest(value):
     _require(type(value) is str and _DIGEST.fullmatch(value) is not None)
     return value
@@ -348,12 +359,11 @@ def _batch_response(request, value):
 def _put_response(request, value):
     _keys(value, {"image"})
     image = value["image"]
-    required = {"registryId", "repositoryName", "imageId", "imageManifest"}
-    if request.image_manifest_media_type is not None:
-        required.add("imageManifestMediaType")
-    _keys(image, required, {"imageManifestMediaType"})
-    _scope_echo(image, request.scope)
-    _require(_manifest(image["imageManifest"]) == request.image_manifest)
+    _keys(image, {"imageId"},
+        {"registryId", "repositoryName", "imageManifest", "imageManifestMediaType"})
+    _response_scope_echo(image, request.scope)
+    if "imageManifest" in image:
+        _require(_manifest(image["imageManifest"]) == request.image_manifest)
     identity = image["imageId"]
     _keys(identity, {"imageDigest", "imageTag"})
     digest, tag = _digest(identity["imageDigest"]), _tag(identity["imageTag"])
@@ -379,14 +389,14 @@ def parse_response(request: Request, *, status: int, body: bytes) -> Response:
             fields = {"upload_id": _upload_id(value["uploadId"]),
                 "part_size": _number(value["partSize"], minimum=1, maximum=MAX_PART_BYTES)}
         elif request.action == "UploadLayerPart":
-            _keys(value, {"registryId", "repositoryName", "uploadId", "lastByteReceived"})
-            _scope_echo(value, request.scope)
+            _keys(value, {"uploadId", "lastByteReceived"}, {"registryId", "repositoryName"})
+            _response_scope_echo(value, request.scope)
             upload, last = _upload_id(value["uploadId"]), _number(value["lastByteReceived"])
             _require(upload == request.upload_id and last == request.part_last_byte)
             fields = {"upload_id": upload, "last_byte_received": last}
         elif request.action == "CompleteLayerUpload":
-            _keys(value, {"registryId", "repositoryName", "uploadId", "layerDigest"})
-            _scope_echo(value, request.scope)
+            _keys(value, {"uploadId", "layerDigest"}, {"registryId", "repositoryName"})
+            _response_scope_echo(value, request.scope)
             upload, digest = _upload_id(value["uploadId"]), _digest(value["layerDigest"])
             _require(upload == request.upload_id and digest == request.layer_digests[0])
             fields = {"upload_id": upload, "layer_digest": digest}

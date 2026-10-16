@@ -107,6 +107,11 @@ class BuildSnapshotTests(unittest.TestCase):
         self.assertFalse(receipt["cacheVerified"] or receipt["readOnlyFrozen"])
         self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o700)
 
+    def test_disposable_export_does_not_sync_each_source_file(self):
+        with patch.object(snapshot.os, "fsync", side_effect=AssertionError("per-file source sync")):
+            output, receipt = self.prepare()
+        self.assert_tree(output, self.first, receipt)
+
     def test_identical_reuses_mtime_and_full_mode_without_old_inode_or_metadata_changes(self):
         for ordinary, executable, directory in ((0o644, 0o755, 0o700),
                 (0o664, 0o775, 0o775), (0o444, 0o555, 0o555)):

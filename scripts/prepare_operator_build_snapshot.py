@@ -17,6 +17,10 @@ Only committed objects are read from Git; archive attributes, working files,
 hooks, replacement objects and lazy network fetches cannot supply source bytes.
 No cache is opened. Failure can leave an incomplete NEW destination for manual
 inspection; this helper never removes or rewrites an existing snapshot.
+The export is disposable build input, not a power-loss-durable source backup.
+Do not sync thousands of individual files to disk: Git remains the source of
+truth, and the completed export is byte-verified before use. After a crash,
+reverify or recreate the export rather than trusting a partial destination.
 """
 import argparse
 import hashlib
@@ -348,7 +352,6 @@ def prepare_snapshot(repository, revision, output, *, predecessor=None,
                             view = view[written:]
                         os.fchmod(fd, actual_mode)
                         os.utime(fd, ns=(captured_now, mtime))
-                        os.fsync(fd)
                         info = os.fstat(fd)
                         require(info.st_mtime_ns == mtime and stat.S_IMODE(info.st_mode) == actual_mode
                                 and (reuse or info.st_mtime_ns > floor)

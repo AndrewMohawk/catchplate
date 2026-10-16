@@ -193,6 +193,9 @@ def capability() -> dict:
         app = deepcopy(source)
         app["destination_allowed"] = all(item["origin"] in allowed for item in app["operations"])
         for spec in app["operations"]:
+            # Legacy descriptors remain available for existing-rule validation
+            # and client downloads, but are not choices for a new permission.
+            spec.setdefault("available_for_creation", True)
             spec.update(response_mode=RESPONSE_MODE, credential_input="replace_exact",
                 placeholder=app["placeholder"], response_fields=[], limits=deepcopy(LIMITS),
                 destination_allowed=spec["origin"] in allowed)

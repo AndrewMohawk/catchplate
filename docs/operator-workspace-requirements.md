@@ -542,15 +542,24 @@ journey and its exact supported header contract.
 | Gmail recent mail | Connect Google; choose read-only mail and an optional age limit. | Verified account and scopes; message routes and response-side age evidence, not only a rewritten query. |
 | X daily posting | Connect the X account; allow posting with a daily quota. | Shared provider-account quota across applications; changing a client identity cannot reset it. |
 | npm publishing | Store the publishing credential; choose package and allowed hours. | Typed publish operations, exact package and schedule; a time window permits requests rather than scheduling a job. |
-| ECR image publication | Select account, region and repository; require approval for the exact image. | Bind approval to image intent and its upload/manifest workflow, not transient SigV4 request headers. The current ordinary path is not implemented; storage and signing components alone do not publish an image. Native custody is a separate future requirement. |
+| ECR image publication | Select account, region and repository; require approval for the exact image. | The deployed ordinary path binds whole-image review to exact repository/tag, staged content and its upload/manifest workflow, not transient SigV4 headers. Stock Boto3 through the proxy passed connected synthetic acceptance; real AWS publication remains open. Native custody is a separate future requirement. |
 | Ordinary API client | Store the key; select destination and credential placement. | Application identity, explicit destination/operation permission and exact replacement semantics; no compulsory content projection. |
 
 These are user-facing presets over the existing policy mechanisms, not reasons
-to expose their entire schema during credential creation. The current generic
-rule editor cannot express all of them; the README explicitly keeps ECR-specific
-integration open. Selecting a restriction still requires its actual request and
-response enforcement, and choosing an unfiltered mode must not silently discard
-it.
+to expose their entire schema during credential creation. Use the specific
+operation bundles rather than treating the generic rule editor as a substitute.
+The earlier ECR storage/signing-only gap is closed by the deployed publication
+workflow, including explicit terminal artifact cleanup and separate action/audit
+notifications; see the [current completion record](project-completion.md#p1--complete-the-explicitly-requested-features).
+Selecting a restriction still requires its actual request and response
+enforcement, and choosing an unfiltered mode must not silently discard it.
+
+Optional Gmail age restrictions remain an ordinary-product implementation gap.
+The current Read Gmail catalog bundle accepts only unrestricted age; its UI and
+runtime do not enforce a last-N-days limit. Keep the optional recent-mail
+requirement open, alongside the implemented unrestricted inbox job. A search
+query alone is not an age policy, and existing unrestricted grants must not be
+silently narrowed when an additive restricted mode is introduced.
 
 The Google delivery boundary is a **usable inbox job**, not merely a successful
 consent callback. Generic catalog rules still bind one literal path; the new
@@ -625,7 +634,10 @@ request stops with HTTP 428; after approval the client must explicitly retry the
 identical request once before expiry. The UI must not promise transparent
 continuation. Host-review action alerts contain no provider secret and are
 separate from audit delivery. Real receiver delivery and actual provider approval
-use remain unverified; ECR's multi-request publication protocol is still missing.
+use remain unverified. ECR's separate whole-image review and multi-request
+publication protocol are now deployed, with connected synthetic Boto3/proxy
+acceptance; [real AWS publication](operator-ecr-publication.md) still requires
+its own explicitly authorized job and is not established by those checks.
 
 Account connectivity/refresh health, application-token validity and actual rule
 activation must be three separately visible states. A healthy Google grant does

@@ -106,6 +106,7 @@ class ReadonlyPairTests(unittest.TestCase):
         snapshot = {"schema": "serverware.operatorCatalog/v1", "mode": "operator-development",
             "productionReady": False, "hardwareVerified": False, "allowed_upstreams": origins,
             "revision": 17, "policy": {"policy_hash": "sha256:" + "a" * 64, "sequence": 12},
+            "capabilities": {"oauth": False, "google_oauth": None},
             **{key: [] for key in checker.COLLECTIONS}}
         env = patch.dict(os.environ, {"SERVERWARE_OPERATOR_DEMO_UPSTREAMS": json.dumps(origins),
             "SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS": '["172.16.249.18/32"]'})
@@ -138,6 +139,8 @@ class ReadonlyPairTests(unittest.TestCase):
             ("policy", {"policy_hash": "invalid", "sequence": 12}),
             ("policy", {"policy_hash": "sha256:" + "a" * 64, "sequence": True}),
             ("policy", {"policy_hash": "sha256:" + "a" * 64, "sequence": 0}),
+            ("capabilities", None), ("capabilities", {"oauth": "false"}),
+            ("capabilities", {"oauth": True, "google_oauth": []}),
             *((key, {}) for key in checker.COLLECTIONS))
         for key, value in changes:
             changed = copy.deepcopy(snapshot)
@@ -145,6 +148,13 @@ class ReadonlyPairTests(unittest.TestCase):
             with self.subTest(key=key, value=value), patch.object(self.check, "control_json", return_value=changed):
                 with self.assertRaises(CheckFailure):
                     self.check.catalog()
+        self.parent.assert_not_called()
+
+    def test_catalog_allows_configured_oauth_without_claiming_provider_acceptance(self):
+        snapshot = self.catalog_fixture()
+        snapshot["capabilities"] = {"oauth": True, "google_oauth": {"schema": "synthetic-capability"}}
+        with patch.object(self.check, "control_json", return_value=snapshot):
+            self.assertIs(self.check.catalog(), snapshot)
         self.parent.assert_not_called()
 
     def test_catalog_invalid_configured_origin_is_refused_before_transport(self):
@@ -156,6 +166,46 @@ class ReadonlyPairTests(unittest.TestCase):
             transport.assert_not_called()
         self.parent.assert_not_called()
 
+
+class AuditReadinessTests(unittest.TestCase):
+    def audit(self, **changes):
+        return {"enabled": True, **{key: 0 for key in checker.AUDIT_COUNTERS}, **changes}
+
+    def test_recovered_historical_attempts_do_not_reset_or_fail_drained_state(self):
+        for historical in (0, 1, 6):
+            audit = self.audit(send_failed=historical)
+            before = copy.deepcopy(audit)
+            self.assertTrue(checker.audit_drained(audit))
+            self.assertEqual(audit, before)
+
+    def test_dropped_or_required_failure_is_never_accepted(self):
+        for counter in checker.LOSS_COUNTERS:
+            with self.subTest(counter=counter), self.assertRaises(CheckFailure):
+                checker.audit_drained(self.audit(send_failed=1, **{counter: 1}))
+
+    def test_each_pending_counter_prevents_readiness(self):
+        for counter in checker.DRAIN_COUNTERS:
+            with self.subTest(counter=counter):
+                self.assertFalse(checker.audit_drained(self.audit(send_failed=1, **{counter: 1})))
+
+    def test_missing_invalid_or_disabled_counter_state_is_refused(self):
+        for counter in checker.AUDIT_COUNTERS:
+            for invalid in (None, True, -1, "0", 0.0):
+                with self.subTest(counter=counter, invalid=invalid), self.assertRaises(CheckFailure):
+                    checker.audit_drained(self.audit(**{counter: invalid}))
+            missing = self.audit()
+            del missing[counter]
+            with self.assertRaises(CheckFailure):
+                checker.audit_drained(missing)
+        for enabled in (None, False, 1):
+            with self.assertRaises(CheckFailure):
+                checker.audit_drained(self.audit(enabled=enabled))
+
+    def test_optional_failed_attempt_baseline_is_exact(self):
+        self.assertTrue(checker.audit_drained(self.audit(send_failed=1), expected_send_failed=1))
+        for expected in (0, 2, -1, True):
+            with self.subTest(expected=expected), self.assertRaises(CheckFailure):
+                checker.audit_drained(self.audit(send_failed=1), expected_send_failed=expected)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -4,6 +4,8 @@
 Reuses the guided fixture lifecycle, empty-store initializer, images and curl.
 An explicit MCP profile runs only two OpenAI calls through the official stdio
 client and existing Requests helper, using already-installed SDK packages.
+An explicit stock-SDK profile exercises eight example CLIs, eight real Rust
+scope denials, exact upstream wire assertions and single-page cursor retention.
 No compilation, download, public DNS, real provider, live deployment or retry.
 Run only from a frozen source export with the exact existing normal Rust binary.
 """
@@ -13,11 +15,14 @@ import argparse
 from collections import Counter
 from copy import deepcopy
 import hashlib
+import importlib.util
 import json
+import logging
 import os
 from pathlib import Path
 import re
 import signal
+import subprocess
 import sys
 import time
 
@@ -39,32 +44,72 @@ ORIGINS = sorted("https://" + host for host in fixture.PROVIDERS)
 MCP_PACKAGES = "/usr/local/lib/python3.12/site-packages"
 MCP_PINS = {"mcp": "2.3.0", "requests": "2.34.2", "urllib3": "2.8.0", "certifi": "2026.7.22",
     "charset-normalizer": "3.5.2", "idna": "3.20"}
+SDK_PINS = {"openai": "3.31.0", "anthropic": "1.15.0", "google-genai": "2.31.0",
+    "httpx2": "2.13.1", "httpx": "0.28.1", "slack-sdk": "3.45.0", "notion-client": "3.1.0",
+    "stripe": "16.0.0", "cloudflare": "5.9.0", "aiohttp": "3.14.5"}
+AI_PROVIDERS = frozenset({"openai", "anthropic", "gemini", "openrouter"})
+
+
+def sdk_module(name):
+    path = Path(__file__).resolve().parents[1] / "examples/common-apps" / ("ai_python.py" if name in AI_PROVIDERS else "services_python.py")
+    spec = importlib.util.spec_from_file_location("connected_sdk_example", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def sdk_negative(args):
+    """The unchanged example transport, with only sanitized SDK error metadata."""
+    fixture.assert_isolated(sdk_smoke=True)
+    require(set(os.environ) <= {"LC_CTYPE"}, "clean SDK child environment required")
+    logging.disable(logging.CRITICAL)
+    config = json.loads(args.config.read_bytes())
+    name = config["app_preset"]
+    require(name in AI_PROVIDERS, "AI SDK case differs")
+    helper = sdk_module(name)
+    config = helper.load_configuration(args.config)
+    try:
+        with helper.http_client(config, name) as client:
+            helper.infer(config, "Hi", client=client)
+    except Exception as error:
+        response = getattr(error, "response", None)
+        status = (getattr(error, "status_code", None) or getattr(response, "status_code", None)
+            or getattr(error, "http_status", None) or getattr(error, "status", None))
+        result = {"case": name + "-wrong-scope", "httpStatus": status if type(status) is int else None,
+            "exceptionType": type(error).__name__, "automaticRetry": False}
+        print(json.dumps(result, sort_keys=True))
+        return 0 if status == 403 else 1
+    print(json.dumps({"case": name + "-wrong-scope", "httpStatus": 200, "automaticRetry": False}))
+    return 1
 
 
 class CommonAppsCheck(OperatorCatalogCheck):
     audit_drained = OrdinaryClientCheck.audit_drained
 
     def __init__(self, args):
-        fixture.assert_isolated()
+        require(not (args.mcp_smoke and args.sdk_smoke), "choose one connected profile")
+        fixture.assert_isolated(args.sdk_smoke)
         super().__init__(argparse.Namespace(**{**vars(args), "upstream_address": "127.0.0.1"}))
         self.credential, self.phase, self.last = fixture.TOKEN, "preflight", None
         require(args.control_base == "http://127.0.0.1:3000" and args.management_base == "http://127.0.0.1:9091"
             and args.proxy_url == recipe.PROXY_URL and args.operator_origin == recipe.CONTROL_ORIGIN,
             "exact isolated endpoints required")
-        if args.mcp_smoke:
+        self.origins = sorted("https://" + host for host in (fixture.SDK_PROVIDERS if args.sdk_smoke else fixture.PROVIDERS))
+        if args.mcp_smoke or args.sdk_smoke:
             from importlib.metadata import version
             require(sys.version_info[:3] == (3, 12, 14)
-                and all(version(name) == expected for name, expected in MCP_PINS.items()), "cached MCP runtime differs")
+                and all(version(name) == expected for name, expected in (SDK_PINS if args.sdk_smoke else MCP_PINS).items()),
+                "cached SDK runtime differs")
         else:
             require(args.expected_curl_sha256 == CURL_SHA256 and args.curl_binary == Path("/usr/bin/curl")
                 and hashlib.sha256(args.curl_binary.read_bytes()).hexdigest() == CURL_SHA256, "cached curl differs")
-        self.provider = Endpoint(ORIGINS[0], address="127.0.0.1")
+        self.provider = Endpoint(self.origins[0], address="127.0.0.1")
         self.provider.address = fixture.isolated.FIXTURE_IP
 
     def catalog(self):
         value = self.control_json(PREFIX + "/catalog", authenticated=True)
         require(value.get("schema") == "serverware.operatorCatalog/v1" and value.get("mode") == "operator-development"
-            and value.get("allowed_upstreams") == ORIGINS and all(isinstance(value.get(key), list) for key in COLLECTIONS)
+            and value.get("allowed_upstreams") == self.origins and all(isinstance(value.get(key), list) for key in COLLECTIONS)
             and SHA256.fullmatch(value.get("policy", {}).get("policy_hash", "")), "fixture catalog differs")
         self.snapshot = value
         return value
@@ -188,6 +233,94 @@ class CommonAppsCheck(OperatorCatalogCheck):
 
         return anyio.run(invoke)
 
+    def sdk_configurations(self, name, rule):
+        spec = fixture.SDK_SPECS[name]
+        config = {key: deepcopy(rule[key]) for key in ("upstream_url", "methods", "response_mode",
+            "credential_input", "app_preset", "app_operation", "scope", "query_keys")}
+        config.update(application_id=self.application["id"], access_rule_id=rule["id"],
+            proxy_url=self.args.proxy_url, proxy_authentication="basic_and_bearer_v1",
+            proxy_username=self.application["id"], proxy_password=self.client_token,
+            token_expires_at_epoch_ms=self.application["token_expires_at_epoch_ms"],
+            request_headers={spec["header"]: spec["placeholder"], **spec.get("request_headers", {})}, request_query={},
+            ca_file=str(self.args.ca_file), proxy_ca_file=str(self.args.proxy_ca_file), client_recipe={"automatic_retries": 0})
+        wrong = deepcopy(config)
+        if name in AI_PROVIDERS:
+            wrong["scope"]["model"] = "vendor/not-approved-model" if name == "openrouter" else "not-approved-model"
+            if name == "gemini":
+                wrong["upstream_url"] = config["upstream_url"].replace(fixture.MODEL, wrong["scope"]["model"])
+        elif name == "slack":
+            wrong["scope"]["channel"] = "C9876543210"
+        elif name in {"notion", "cloudflare"}:
+            key = "block_id" if name == "notion" else "zone_id"
+            value = "fedcba98-7654-3210-fedc-ba9876543210" if name == "notion" else "fedcba9876543210fedcba9876543210"
+            wrong["upstream_url"] = config["upstream_url"].replace(config["scope"][key], value)
+            wrong["scope"][key] = value
+        else:
+            require(name == "stripe", "unknown negative SDK case")
+            wrong.update(app_operation="balance", upstream_url="https://api.stripe.com/v1/balance", query_keys=[])
+        paths = {}
+        for variant, value in (("allowed", config), ("wrong-scope", wrong)):
+            path = self.args.run_claim_file.parent / ("sdk-" + name + "-" + variant + ".json")
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(fixture.encoded(value))
+            paths[variant] = path
+        return paths
+
+    def dispatch_sdks(self, rules):
+        checks = []
+        for count, (name, rule) in enumerate(rules.items(), 1):
+            paths = self.sdk_configurations(name, rule)
+            for allowed in (True, False):
+                case = name + ("-allowed" if allowed else "-wrong-scope")
+                self.phase = "sdk-" + case
+                if allowed or name not in AI_PROVIDERS:
+                    example = "/app/examples/common-apps/" + ("ai_python.py" if name in AI_PROVIDERS else "services_python.py")
+                    path = paths["allowed" if allowed else "wrong-scope"]
+                    argv = [sys.executable, "-I", "-B", example, "--config", str(path)]
+                    if name in AI_PROVIDERS:
+                        argv += ["--prompt", "Hi", "--send"]
+                    elif name == "slack":
+                        body_path = path.with_name("sdk-" + case + "-body.json")
+                        descriptor = os.open(body_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                        with os.fdopen(descriptor, "wb") as stream:
+                            body = deepcopy(fixture.SDK_SPECS[name]["body"])
+                            if not allowed:
+                                body["channel"] = "C9876543210"
+                            stream.write(fixture.encoded(body))
+                        argv += ["--body", str(body_path), "--execute-write"]
+                    else:
+                        query = {} if name == "stripe" and not allowed else fixture.SDK_SPECS[name].get("query", {})
+                        argv += [item for key, value in query.items()
+                            for item in ("--query", key + "=" + value)]
+                else:
+                    argv = [sys.executable, "-I", "-B", "/app/" + SCRIPT, "sdk-negative", "--config", str(paths["wrong-scope"])]
+                completed = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    env={}, timeout=min(40, self.timeout()), check=False)
+                require(len(completed.stdout) <= 65536 and len(completed.stderr) <= 65536, "SDK output exceeded bound")
+                self.clean(completed.stdout); self.clean(completed.stderr)
+                observed = self.provider_observations()
+                expected_exit = 2 if not allowed and name not in AI_PROVIDERS else 0
+                value = json.loads(completed.stdout) if completed.returncode == expected_exit else None
+                status = value.get("status") if value and name not in AI_PROVIDERS else 200 if allowed and value else value.get("httpStatus") if value else None
+                self.last = {"case": case, "sdkExit": completed.returncode, "providerArrivals": observed["total"],
+                    "stderrPresent": bool(completed.stderr), "httpStatus": status,
+                    "httpStatusSource": "synthetic-provider-after-sdk-success" if allowed and name in AI_PROVIDERS else "sdk-response"}
+                require(completed.returncode == expected_exit and not completed.stderr and observed["total"] == count,
+                    "SDK transport or arrival count differs")
+                if allowed:
+                    require(observed["attempts"][-1]["case"] == name and observed["attempts"][-1]["accepted"], "SDK provider wire differs")
+                    if name in AI_PROVIDERS:
+                        require(value.get("provider") == name and value.get("text") == "Hello", "SDK text response differs")
+                    else:
+                        require(value.get("provider") == name and value.get("ok") is True and value.get("status") == 200
+                            and value.get("response") == fixture.sdk_response(name), "SDK response envelope differs")
+                else:
+                    require(status == 403 and (value.get("automaticRetry") is False if name in AI_PROVIDERS else value.get("ok") is False),
+                        "wrong-scope SDK request did not reach Rust denial")
+                checks.append(dict(self.last))
+        return checks
+
     def run(self):
         self.admin_token = token_file(self.args.admin_token_file)
         self.health()
@@ -197,27 +330,30 @@ class CommonAppsCheck(OperatorCatalogCheck):
         self.application, self.client_token, _ = self.mutate("/applications", {"name": self.run_id,
             "token_lifetime_seconds": 3600, "proxy_authentication": "basic_and_bearer_v1"},
             collection="applications", result_key="application", event="operator_catalog.application.created", creates=True, token=True)
-        rules, mcp_rule = {}, None
-        specs = {"openai": fixture.SPECS["openai"]} if self.args.mcp_smoke else fixture.SPECS
+        rules, rule_values, mcp_rule = {}, {}, None
+        specs = fixture.SDK_SPECS if self.args.sdk_smoke else {"openai": fixture.SPECS["openai"]} if self.args.mcp_smoke else fixture.SPECS
         for name, spec in specs.items():
             self.phase = "create-" + name
             credential, _, _ = self.mutate("/credentials", {"name": self.run_id + "-" + name,
-                "auth_type": "header" if name == "anthropic" else "bearer", "header_name": spec["header"],
+                "auth_type": "bearer" if spec["header"] == "Authorization" else "header", "header_name": spec["header"],
                 "secret": self.credential, "app_preset": name}, collection="credentials", result_key="credential",
                 event="operator_catalog.credential.created", creates=True)
-            scope = {"channel_id": fixture.CHANNEL} if name == "discord" else {"model": fixture.MODEL, "max_output_tokens": 16}
+            scope = spec["scope"] if self.args.sdk_smoke else {"channel_id": fixture.CHANNEL} if name == "discord" else {"model": fixture.MODEL, "max_output_tokens": 16}
             rule, _, _ = self.mutate("/access-rules/common-app", {"name": self.run_id + "-" + name,
                 "application_id": self.application["id"], "credential_id": credential["id"], "app_preset": name,
                 "operation": spec["operation"], "scope": scope}, collection="access_rules", result_key="access_rule",
                 event="operator_catalog.access_rule.created", creates=True, authority_changed=True)
             rules[name] = rule["route_id"]
+            rule_values[name] = rule
             if self.args.mcp_smoke:
                 mcp_rule = rule
         self.wait_catalog_loaded("common_apps_loaded")
         checks, arrivals = [], 0
         if self.args.mcp_smoke:
             checks = self.dispatch_mcp(mcp_rule)
-        for name, spec in (() if self.args.mcp_smoke else specs.items()):
+        if self.args.sdk_smoke:
+            checks = self.dispatch_sdks(rule_values)
+        for name, spec in (() if self.args.mcp_smoke or self.args.sdk_smoke else specs.items()):
             self.phase = "dispatch-" + name
             arrivals += 1
             checks.append(self.dispatch(name, spec["body"], case=name + "-allowed", count=arrivals, allowed=True))
@@ -242,11 +378,16 @@ class CommonAppsCheck(OperatorCatalogCheck):
                 and all(row["event"].get("policy_hash") == self.policy_hash for row in selected), "signed policy audit binding differs")
         observed = self.provider_observations()
         require(observed["total"] == len(specs) and all(row["accepted"] for row in observed["attempts"]), "provider assertions differ")
+        denials = [row for row in rows if row["event_type"] == "data_plane.request.denied"]
+        if self.args.sdk_smoke:
+            require(len(denials) == len(specs) and all(row["event"].get("policy_hash") == self.policy_hash for row in denials),
+                "SDK denial audit binding differs")
         return {"schema": "serverware.commonAppsConnectedCheck/v1", "ok": True, "syntheticOnly": True,
-            "realProviderVerified": False, "stockSdkVerified": False, "dataPlaneBinaryDigest": self.args.expected_binary_sha256,
+            "realProviderVerified": False, "stockSdkVerified": self.args.sdk_smoke, "dataPlaneBinaryDigest": self.args.expected_binary_sha256,
             "policyHash": self.policy_hash, "catalogRevision": self.catalog()["revision"], "checks": checks,
             "provider": observed, "auditCounts": dict(Counter(row["event_type"] for row in attempts)),
-            "mcpSdkVerified": self.args.mcp_smoke, "requestsHelperVerified": self.args.mcp_smoke}
+            "mcpSdkVerified": self.args.mcp_smoke, "requestsHelperVerified": self.args.mcp_smoke,
+            "stockSdkVersions": SDK_PINS if self.args.sdk_smoke else {}, "denialAuditCount": len(denials)}
 
 
 def check(args):
@@ -289,8 +430,13 @@ def run(args):
             "o=urllib.request.build_opener(urllib.request.ProxyHandler({}),urllib.request.HTTPSHandler(context=c)); "
             "r=o.open('https://api.openai.com/_fixture/observations',timeout=2); raise SystemExit(0 if r.status==200 else 1)")
         services["edge"]["command"] = ["-m", "scripts.operator_common_apps_fixture", "edge"]
+        sdk_smoke = args.stock_sdk_packages is not None
+        if sdk_smoke:
+            for name in ("network-files", "network", "provider", "edge"):
+                services[name]["command"].append("--sdk-smoke")
+        origins = sorted("https://" + host for host in fixture.SDK_PROVIDERS) if sdk_smoke else ORIGINS
         for name in ("serverware", "decision-gate-rs"):
-            services[name]["environment"]["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(ORIGINS)
+            services[name]["environment"]["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(origins)
             services[name]["environment"].pop("SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS", None)
         services["check"]["command"][0:1] = ["/app/" + SCRIPT, "check"]
         if args.mcp_sdk_packages is not None:
@@ -303,6 +449,15 @@ def run(args):
             services["check"].update(image=PYTHON_IMAGE, entrypoint=["/usr/local/bin/python", "-I", "-B"])
             services["check"]["command"].append("--mcp-smoke")
             services["check"]["volumes"].append(recipe.base.bind(packages, MCP_PACKAGES))
+        if sdk_smoke:
+            packages = args.stock_sdk_packages
+            require(args.mcp_sdk_packages is None and packages.is_absolute() and packages.resolve() == packages and packages.is_dir()
+                and packages.parts[-3:] == ("lib", "python3.12", "site-packages") and packages.is_relative_to(recipe.base.SCRATCH)
+                and all((packages / (name.replace("-", "_") + "-" + version + ".dist-info/METADATA")).is_file()
+                    for name, version in SDK_PINS.items()), "prepared stock SDK package directory required")
+            services["check"].update(image=PYTHON_IMAGE, entrypoint=["/usr/local/bin/python", "-I", "-B"])
+            services["check"]["command"].append("--sdk-smoke")
+            services["check"]["volumes"].append(recipe.base.bind(packages, MCP_PACKAGES))
         runner.project, runner.services = config["name"], services
         require(not runner.container_rows("preexisting") and runner.no_project_networks("preexisting-networks"), "project already exists")
         images, runner.image_environments = {}, {}
@@ -313,7 +468,8 @@ def run(args):
             images[image], runner.image_environments[image] = value["id"], environment(value["environment"])
         runner.save("run.claim.json", {"sourceCommit": args.commit, "source": str(source), "binarySha256": args.expected_binary_sha256,
             "checkerSha256": recipe.base.digest(source / SCRIPT), "images": images, "jobRoot": str(root), "syntheticOnly": True,
-            "mcpSdkPackages": str(args.mcp_sdk_packages) if args.mcp_sdk_packages else None})
+            "mcpSdkPackages": str(args.mcp_sdk_packages) if args.mcp_sdk_packages else None,
+            "stockSdkPackages": str(args.stock_sdk_packages) if sdk_smoke else None, "stockSdkPins": SDK_PINS if sdk_smoke else {}})
         (root / "runtime").mkdir(mode=0o700)
         compose_file = root / "compose.json"
         with compose_file.open("x") as stream:
@@ -375,6 +531,8 @@ def main():
         host.add_argument("--" + name, required=True)
     host.add_argument("--mcp-sdk-packages", type=Path,
         help="Opt into only two MCP OpenAI calls, using an existing Python 3.12 site-packages tree")
+    host.add_argument("--stock-sdk-packages", type=Path,
+        help="Opt into eight real SDK successes and eight Rust scope denials using existing Python 3.12 packages")
     client = modes.add_parser("check")
     for name in ("control-base", "management-base", "proxy-url", "operator-origin", "expected-binary-sha256", "expected-curl-sha256"):
         client.add_argument("--" + name, required=True)
@@ -384,8 +542,13 @@ def main():
         client.add_argument("--" + name, type=Path)
     client.add_argument("--timeout-seconds", type=int, default=180)
     client.add_argument("--mcp-smoke", action="store_true")
+    client.add_argument("--sdk-smoke", action="store_true")
+    negative = modes.add_parser("sdk-negative")
+    negative.add_argument("--config", type=Path, required=True)
     args = parser.parse_args()
     os.umask(0o077)
+    if args.mode == "sdk-negative":
+        return sdk_negative(args)
     if args.mode == "run":
         for name in ("DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "DOCKER_API_VERSION"):
             os.environ.pop(name, None)

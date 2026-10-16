@@ -309,7 +309,7 @@ function createConnectView(workspace, applications, proxy) {
       const xPost = isXOAuthCredential(credential());
       const alchemy = isAlchemyCredential(credential());
       const common = isCommonAppCredential(credential());
-      const commonChoices = common ? (commonPreset()?.operations || []).map(item => ({id: item.id, name: item.label})) : [];
+      const commonChoices = common ? commonAppCreationOperations(commonPreset()).map(item => ({id: item.id, name: item.label})) : [];
       const npmChoices = npm ? [...(npmAvailable(value, credential()) ? [{id: operatorNpm.bundle, name: 'Read package metadata'}] : []),
         ...(npmInstallAvailable(value, credential()) ? [{id: operatorNpmInstall.bundle, name: 'Install packages and run npm audit'}] : []),
         ...(value.capabilities.npm_publish && npmPublishAvailable(value, credential()) ? [{id: 'npm_publish_v1', name: 'Publish package'}] : [])] : [];
@@ -343,7 +343,7 @@ function createConnectView(workspace, applications, proxy) {
     const xPost = newRule && isXOAuthCredential(credential());
     const alchemy = newRule && (isAlchemyCredential(credential()) || isAlchemyRule({operation_bundle: element('connect-operation').value}));
     const common = newRule && isCommonAppCredential(credential());
-    const commonOperation = common ? commonPreset()?.operations.find(item => item.id === element('connect-operation').value) : null;
+    const commonOperation = common ? commonAppCreationOperations(commonPreset()).find(item => item.id === element('connect-operation').value) : null;
     const ecr = newRule && isAwsCredential(credential());
     const providerPreset = github || npm || x || xPost || alchemy || common || ecr;
     fields('connect-saved-choice', connectionMethod === 'saved'); fields('connect-credential-new', newCredential && !['x', 'alchemy'].includes(connectionMethod));
@@ -736,7 +736,7 @@ function createConnectView(workspace, applications, proxy) {
       return rule;
     }
     if (isCommonAppCredential(credential())) {
-      const preset = commonPreset(), operation = preset?.operations.find(item => item.id === element('connect-operation').value);
+      const preset = commonPreset(), operation = commonAppCreationOperations(preset).find(item => item.id === element('connect-operation').value);
       if (!operation || !commonAppAvailable(catalog(), credential(), operation.id))
         throw operatorError('Approve this app destination in Proxy setup before granting access. No destination or permission was changed.');
       const rule = {...commonAppRuleFields(preset, operation.id, commonAppScopeInputs(operation)),

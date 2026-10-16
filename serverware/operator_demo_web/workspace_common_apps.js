@@ -23,6 +23,7 @@ function projectCommonAppsCapability(value) {
           !operation.methods.length || operation.methods.some(method => !operatorMethods.includes(method)) ||
           operation.response_mode !== 'unfiltered_json_or_empty_v2' || operation.credential_input !== 'replace_exact' ||
           operation.placeholder !== preset.placeholder || !Array.isArray(operation.scope_fields) || operation.scope_fields.length > 16 ||
+          Object.hasOwn(operation, 'available_for_creation') && typeof operation.available_for_creation !== 'boolean' ||
           Object.hasOwn(operation, 'request_body_mode') && operation.request_body_mode !== 'preserve_json_v1') return null;
       try { const origin = new URL(operation.origin); if (origin.protocol !== 'https:' || origin.origin !== operation.origin || origin.username || origin.password) return null; }
       catch (_) { return null; }
@@ -39,6 +40,8 @@ function projectCommonAppsCapability(value) {
   return JSON.parse(JSON.stringify(value));
 }
 function commonAppPreset(catalog, id) { return catalog?.capabilities?.common_apps?.presets.find(item => item.id === id) || null; }
+// Hide retired creation profiles without removing saved-rule descriptors.
+function commonAppCreationOperations(preset) { return (preset?.operations || []).filter(item => item.available_for_creation !== false); }
 function commonAppOperation(catalog, rule) { return commonAppPreset(catalog, rule?.app_preset)?.operations.find(item => item.id === rule.app_operation) || null; }
 function commonAppAvailable(catalog, credential, operationId) {
   const preset = commonAppPreset(catalog, credential?.app_preset);

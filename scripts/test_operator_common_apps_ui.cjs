@@ -20,6 +20,22 @@ assert.equal(context.projectCommonAppsCapability({...fixture.capability, schema:
 assert.equal(context.projectCommonAppsCapability({...fixture.capability, create_rule_path: 'https://elsewhere.invalid'}), null);
 const duplicate = copy(fixture.capability); duplicate.presets.push(duplicate.presets[0]);
 assert.equal(context.projectCommonAppsCapability(duplicate), null);
+const cloudflare = capability.presets.find(item => item.id === 'cloudflare');
+const visibleOperations = capability.presets.flatMap(preset => context.commonAppCreationOperations(preset));
+assert.equal(visibleOperations.length, 15, 'new permission selectors retain the same visible operation count');
+assert.deepEqual(copy(context.commonAppCreationOperations(cloudflare).map(item => item.id)), ['zones_sdk_v1', 'dns_records_sdk_v1']);
+assert.deepEqual(copy(context.commonAppCreationOperations(cloudflare).map(item => item.label)), ['List zones', 'Read DNS records in one zone']);
+assert.equal(cloudflare.operations.length, 4, 'legacy descriptors remain in the advertised catalog');
+assert.equal(context.commonAppCreationOperations(null).length, 0);
+for (const id of ['zones', 'dns_records']) assert.equal(cloudflare.operations.find(item => item.id === id).available_for_creation, false);
+const legacyOnly = {...cloudflare, operations: cloudflare.operations.filter(item => item.available_for_creation === false)};
+assert.equal(context.commonAppCreationOperations(legacyOnly).length, 0);
+const omittedFlag = copy(cloudflare.operations[0]); delete omittedFlag.available_for_creation;
+assert.equal(context.commonAppCreationOperations({operations: [omittedFlag]})[0].id, omittedFlag.id, 'absent marker remains compatible');
+for (const malformed of [null, 'false', 0, 1, {}, []]) {
+  const invalid = copy(fixture.capability); invalid.presets.find(item => item.id === 'cloudflare').operations[0].available_for_creation = malformed;
+  assert.equal(context.projectCommonAppsCapability(invalid), null);
+}
 const samples = {model: 'test-model', max_output_tokens: 256, channel: 'C0123456789', channel_id: '123456789012345678',
   page_id: '01234567-89ab-cdef-0123-456789abcdef', block_id: '01234567-89ab-cdef-0123-456789abcdef',
   sender: 'alerts@example.com', recipient: 'operator@example.com', project_id: '12345',
@@ -35,6 +51,8 @@ for (const preset of capability.presets) for (const operation of preset.operatio
     capabilities: {common_apps: capability, response_modes: ['unfiltered_json_or_empty_v2'], credential_input_modes: ['replace_exact'],
       host_approvals: {available: true, generic_rules: true, operation_bundles: []}}};
   const rule = {...context.commonAppRuleFields(preset, operation.id, scope), name: operation.label, application_id: app.id, credential_id: credential.id};
+  assert.equal(context.commonAppOperation(catalog, rule).id, operation.id, 'saved operation lookup includes legacy profiles');
+  assert(context.commonAppAvailable(catalog, credential, operation.id), 'legacy profile remains available to its existing rules');
   assert(context.commonAppRuleValid(rule, credential, catalog), preset.id);
   assert(context.operatorRuleContentValid(rule, credential), preset.id);
   assert(context.operatorRuleSupported(rule, catalog), preset.id);
@@ -61,10 +79,29 @@ for (const preset of capability.presets) for (const operation of preset.operatio
   operations++;
 }
 const connect = readFileSync(resolve(ROOT, 'serverware/operator_demo_web/workspace_connect.js'), 'utf8');
+assert.equal(operations, 17, 'all new and retained legacy descriptors remain valid and exportable');
+assert(connect.includes('commonAppCreationOperations(commonPreset()).map(item => ({id: item.id, name: item.label}))'));
+assert(connect.includes('commonAppCreationOperations(commonPreset()).find(item => item.id === element(\'connect-operation\').value)'));
+// Execute the actual creation draft function with inert scope inputs. This
+// catches injected legacy select values without mounting a browser or posting.
+const draftStart = connect.indexOf('  function draftRule() {');
+const draftEnd = connect.indexOf("\n  element('connect-access-form').addEventListener", draftStart);
+assert(draftStart > 0 && draftEnd > draftStart);
+const cloudflareCredential = {id: ids.credential, status: 'active', app_preset: 'cloudflare', auth_type: cloudflare.auth_type, header_name: cloudflare.header_name};
+const cloudflareCatalog = {credentials: [cloudflareCredential], applications: [{id: ids.app, status: 'active', proxy_authentication: 'bearer'}], allowed_upstreams: ['https://api.cloudflare.com'],
+  capabilities: {common_apps: capability, response_modes: ['unfiltered_json_or_empty_v2'], credential_input_modes: ['replace_exact']}};
+Object.assign(context, {credential: () => cloudflareCredential, commonPreset: () => cloudflare, catalog: () => cloudflareCatalog,
+  selectedApplication: ids.app, selectedCredential: ids.credential, supported: rule => context.operatorRuleSupported(rule, cloudflareCatalog)});
+for (const operationId of ['zones_sdk_v1', 'dns_records_sdk_v1', 'zones', 'dns_records']) {
+  context.document = {getElementById: id => ({value: id === 'connect-operation' ? operationId : samples[id.replace('connect-common-scope-', '')]})};
+  const run = () => vm.runInContext('(' + connect.slice(draftStart, draftEnd).trim() + ')()', context, {timeout: 1000});
+  if (operationId.endsWith('_sdk_v1')) assert.equal(run().app_operation, operationId);
+  else assert.throws(run, 'legacy operation cannot be injected into a new permission draft');
+}
 assert(connect.includes("'access-rules/common-app'"));
 assert(connect.includes('commonAppRulePayload(result[key]), commonAppRulePayload(review.rule)'));
 assert(connect.includes('commonPolicyHash: result.policy.policy_hash'));
 const handoff = readFileSync(resolve(ROOT, 'serverware/operator_demo_web/workspace_proxy_audit.js'), 'utf8');
 for (const field of ['common_app:', 'request_body: request.body', 'request_query: request.query', 'automatic_retries: 0']) assert(handoff.includes(field));
-console.log(JSON.stringify({ok: true, providers: capability.presets.length, operations, groups: 9,
+console.log(JSON.stringify({ok: true, providers: capability.presets.length, operations, visibleOperations: visibleOperations.length, groups: 11,
   scope: 'pure catalog, derived authority, public request examples and download contract; no provider or browser traffic'}));

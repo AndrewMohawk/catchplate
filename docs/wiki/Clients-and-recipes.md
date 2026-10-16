@@ -236,6 +236,11 @@ The [common-app recipes](https://github.com/AndrewMohawk/serverware/blob/main/ex
 cover the guided OpenAI, Anthropic, Gemini, OpenRouter, Slack, Discord, Notion,
 Stripe, Resend, GitLab, Cloudflare and Sentry presets. The service example uses
 ordinary Python HTTP requests; the AI example uses the actual provider SDKs.
+The separate `services_python.py` recipe uses standard Slack, Stripe and
+Cloudflare Python SDKs plus the maintained third-party Notion client. It reads
+one explicit page or sends one explicitly confirmed Slack message; it does not
+auto-paginate or retry. New Cloudflare permissions support its SDK metadata
+headers; legacy permissions retain their original authority and Requests recipe.
 Use the supplied public dummy credentials, approved request shapes and explicit
 proxy/CA configuration, never the real provider secret.
 

@@ -17,8 +17,28 @@ from types import SimpleNamespace
 
 from scripts.check_operator_catalog import COLLECTIONS, PREFIX, OperatorCatalogCheck
 from scripts.check_operator_demo import SHA256, require, token_file
-from scripts.check_operator_ordinary_client import ZERO_COUNTERS, DRAIN_COUNTERS
+from scripts.check_operator_ordinary_client import DRAIN_COUNTERS
 from serverware.operator_demo import _destinations, origin
+
+LOSS_COUNTERS = ("dropped", "required_failed")
+AUDIT_COUNTERS = LOSS_COUNTERS + ("send_failed",) + DRAIN_COUNTERS
+
+
+def audit_drained(audit, *, expected_send_failed=None):
+    """Require no reported loss or pending delivery, without erasing history.
+
+    The ordinary Rust retry owner counts failed event-attempts in send_failed;
+    an eventual authenticated ACK drains its pending counters but does not
+    decrement that lifetime counter. This is not a durable restart audit proof.
+    """
+    require(isinstance(audit, dict) and audit.get("enabled") is True
+            and all(type(audit.get(key)) is int and audit[key] >= 0 for key in AUDIT_COUNTERS),
+            "audit delivery counters are invalid")
+    require(all(audit[key] == 0 for key in LOSS_COUNTERS), "audit delivery reported loss or required failure")
+    require(expected_send_failed is None or type(expected_send_failed) is int
+            and expected_send_failed >= 0 and audit["send_failed"] == expected_send_failed,
+            "audit failed-attempt counter differs from its expected baseline")
+    return all(audit[key] == 0 for key in DRAIN_COUNTERS)
 
 
 class ReadonlyPair(OperatorCatalogCheck):
@@ -39,6 +59,10 @@ class ReadonlyPair(OperatorCatalogCheck):
                 and SHA256.fullmatch(policy["policy_hash"])
                 and type(policy.get("sequence")) is int and policy["sequence"] > 0,
                 "catalog signed policy metadata is invalid")
+        capabilities = snapshot.get("capabilities")
+        require(isinstance(capabilities, dict) and type(capabilities.get("oauth")) is bool
+                and (capabilities.get("google_oauth") is None or isinstance(capabilities["google_oauth"], dict)),
+                "catalog capability metadata is invalid")
         self.snapshot = snapshot
         return snapshot
 
@@ -56,10 +80,14 @@ def main():
     parser.add_argument("--policy-hash", required=True)
     parser.add_argument("--revision", type=int, required=True)
     parser.add_argument("--sequence", type=int, required=True)
+    parser.add_argument("--expected-audit-send-failed", type=int,
+        help="Optional exact lifetime failed-event-attempt baseline; never resets the gate counter")
     pins = parser.parse_args()
     signal.alarm(45)
     require(os.getuid() == os.getgid() == 10001 and pins.revision > 0 and pins.sequence > 0,
             "retained app identity required")
+    require(pins.expected_audit_send_failed is None or pins.expected_audit_send_failed >= 0,
+            "audit failed-attempt baseline must be nonnegative")
     require(re.fullmatch(r"sha256:[0-9a-f]{64}", pins.binary_sha256)
             and re.fullmatch(r"sha256:[0-9a-f]{64}", pins.policy_hash), "exact public pins required")
     require(os.environ.get("SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST") == pins.binary_sha256,
@@ -78,19 +106,16 @@ def main():
     while True:
         health = check.health()
         audit = health.get("audit", {})
-        require(all(type(audit.get(key)) is int and audit[key] >= 0 for key in ZERO_COUNTERS + DRAIN_COUNTERS)
-                and all(audit[key] == 0 for key in ZERO_COUNTERS), "audit delivery failed")
-        if all(audit[key] == 0 for key in DRAIN_COUNTERS):
+        if audit_drained(audit, expected_send_failed=pins.expected_audit_send_failed):
             break
         time.sleep(min(0.2, check.timeout()))
     require(catalog["revision"] == pins.revision and catalog["policy"]["sequence"] == pins.sequence,
             "retained catalog pins differ")
-    require(catalog["capabilities"].get("oauth") is False
-            and catalog["capabilities"].get("google_oauth") is None, "Google unexpectedly enabled")
     return {"ok": True, "binary_digest": pins.binary_sha256, "policy_hash": pins.policy_hash,
         "revision": pins.revision, "sequence": pins.sequence,
         "counts": {key: len(catalog[key]) for key in ("credentials", "applications", "access_rules")},
-        "audit": {key: audit[key] for key in ZERO_COUNTERS + DRAIN_COUNTERS},
+        "audit": {key: audit[key] for key in AUDIT_COUNTERS},
+        "historical_failed_event_attempts": audit["send_failed"],
         "mutations_or_proxy_requests": False, "provider_or_production_acceptance": False}
 
 

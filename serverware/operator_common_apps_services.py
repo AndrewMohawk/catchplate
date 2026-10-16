@@ -5,10 +5,18 @@ references and the supported subset are documented in docs/common-apps.md.
 """
 from __future__ import annotations
 
+from copy import deepcopy
+
 
 HEADERS = ["accept", "accept-language", "sec-fetch-mode", "user-agent"]
 UUID = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 EMAIL = r"^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$"
+_CLOUDFLARE_SDK_HEADERS = [
+    "api-version", "x-stainless-lang", "x-stainless-package-version",
+    "x-stainless-os", "x-stainless-arch", "x-stainless-runtime",
+    "x-stainless-runtime-version", "x-stainless-async",
+    "x-stainless-retry-count", "x-stainless-read-timeout",
+]
 
 
 def _scope(key, label, pattern, placeholder):
@@ -36,6 +44,23 @@ def _read(identifier, label, description, origin, path, *, scope=(), query=(), h
         "scope_fields": list(scope), "request_fields": [], "query_keys": list(query),
         "allowed_headers": HEADERS + list(headers), "field_rules": {},
         "value_rules": [], "example_body": None, "notes": list(notes), **extra}
+
+
+def _cloudflare_sdk_profiles(legacy):
+    """New grants admit the pinned SDK headers; retained grants never widen.
+
+    Cloudflare 5.9.0 removes Content-Type from its final GET requests. Both
+    profiles remain strictly bodyless; this does not enable JSON GET bodies.
+    Keep old descriptors available for validating and downloading old rules.
+    """
+    current = []
+    for previous in legacy:
+        spec = deepcopy(previous)
+        spec["id"] += "_sdk_v1"
+        spec["allowed_headers"] += _CLOUDFLARE_SDK_HEADERS
+        spec["notes"].append("Supports the reviewed Cloudflare Python SDK metadata headers; requests remain bodyless and read-only.")
+        current.append(spec)
+    return current + [{**previous, "available_for_creation": False} for previous in legacy]
 
 
 PRESETS = [
@@ -139,7 +164,7 @@ PRESETS = [
                 "Pagination response headers are not forwarded; request explicit bounded pages."])],
         auth_type="header", header_name="PRIVATE-TOKEN", secret_label="Project access token",
         secret_hint="Store the raw GitLab project access token with read_api; Serverware injects PRIVATE-TOKEN."),
-    _provider("cloudflare", "Cloudflare", "Read permitted zones or DNS records in one exact zone.", [
+    _provider("cloudflare", "Cloudflare", "Read permitted zones or DNS records in one exact zone.", _cloudflare_sdk_profiles([
         _read("zones", "List zones", "List zones visible to this restricted Cloudflare API token; never modify DNS.",
             "https://api.cloudflare.com", "/client/v4/zones", query=["name", "status", "page", "per_page", "order", "direction"],
             notes=["Use a restricted API token with Zone:Read on only the intended zones.",
@@ -149,7 +174,7 @@ PRESETS = [
             scope=[_scope("zone_id", "Zone ID", r"^[0-9a-f]{32}$", "0123456789abcdef0123456789abcdef")],
             query=["name", "type", "page", "per_page", "order", "direction"],
             notes=["Use a restricted API token with DNS:Read for this zone.",
-                "This credential does not use the Global API Key plus account email scheme."])],
+                "This credential does not use the Global API Key plus account email scheme."])]),
         secret_label="Restricted API token", secret_hint="Store a scoped Cloudflare API token, not a Global API Key. This preset only grants reads."),
     _provider("sentry", "Sentry", "Read issues for one exact project in one organization.", [
         _read("project_issues", "Read one project's issues", "Use the current organization-issues endpoint with one required project selector.",

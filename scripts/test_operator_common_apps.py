@@ -6,6 +6,7 @@ encryption, signing and audit; only gate health observation is substituted.
 """
 from copy import deepcopy
 import ast
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -58,6 +59,79 @@ def flow_for(body, url, headers=None):
 
 
 class RegistryTests(unittest.TestCase):
+    def test_cloudflare_retained_profiles_render_identically(self):
+        # Captured from the existing profiles before adding the SDK versions.
+        expected = {"zones": "1f2f8340d034d412768d91ecbbcbc3439deac0332629a9bb9b6733a8631f58f8",
+            "dns_records": "c177d3c145d5feb5f501c8f00f74486516cd62894d662d61c80aea0f711f89d2"}
+        app = common.preset("cloudflare")
+        for identifier, digest in expected.items():
+            _, spec = common.operation("cloudflare", identifier)
+            rule, credential, bundle = fixture(app, spec)
+            common.validate_rule(rule, credential)
+            encoded = json.dumps(bundle, sort_keys=True, separators=(",", ":")).encode()
+            self.assertEqual(hashlib.sha256(encoded).hexdigest(), digest)
+            self.assertIs(spec["available_for_creation"], False)
+
+    def test_cloudflare_sdk_profiles_admit_only_known_headers_on_exact_bodyless_reads(self):
+        from serverware import adapters, policy_bundle
+        headers = {"accept": "application/json", "user-agent": "Cloudflare/Python 5.9.0",
+            "api-version": "2026-10-15", "x-stainless-lang": "python",
+            "x-stainless-package-version": "5.9.0", "x-stainless-os": "Linux",
+            "x-stainless-arch": "x64", "x-stainless-runtime": "CPython",
+            "x-stainless-runtime-version": "3.12.3", "x-stainless-async": "false",
+            "x-stainless-retry-count": "0", "x-stainless-read-timeout": "30"}
+        for identifier in ("zones_sdk_v1", "dns_records_sdk_v1"):
+            app, spec = common.operation("cloudflare", identifier)
+            rule, credential, bundle = fixture(app, spec)
+            snapshot = policy_bundle.compile_policy_bundle(bundle, verify_signature=False, validate_schema=True)
+            route = snapshot.routes[0]
+            request = route.adapter_config["request"]
+            self.assertEqual((request["bodyMode"], request["maxBodyBytes"], request["allowedMediaTypes"]),
+                ("none", 0, []))
+            self.assertEqual(bundle["routes"][0]["credentialHeader"],
+                {"mode": "replaceExact", "expectedValue": "Bearer serverware-cloudflare-placeholder-v1"})
+            adapter = adapters.get_adapter("generic.rest")
+
+            def admit(*, body=b"", extra=None, query=""):
+                flow = SimpleNamespace(metadata={}, request=SimpleNamespace(method="GET",
+                    pretty_url=rule["upstream_url"] + query, raw_content=body,
+                    headers={**headers, **(extra or {})}))
+                return adapter.validate_request(flow, route, {})
+
+            self.assertTrue(admit().allowed)
+            self.assertTrue(admit(query="?page=2&per_page=5").allowed)
+            self.assertFalse(admit(body=b"{}").allowed)
+            self.assertFalse(admit(extra={"content-type": "application/json"}).allowed)
+            for name in ("x-auth-key", "x-auth-email", "x-auth-user-service-key", "cf-account-id",
+                    "x-stainless-raw-response", "x-unreviewed-header"):
+                with self.subTest(operation=identifier, header=name):
+                    self.assertFalse(admit(extra={name: "unreviewed"}).allowed)
+            self.assertFalse(admit(query="?account.id=unreviewed").allowed)
+            principal = "agent:operator-demo:" + APP_ID
+            target = rule["upstream_url"].removeprefix("https://api.cloudflare.com")
+            self.assertIsNone(snapshot.match_route("https", "api.cloudflare.com", 443, "POST", target, principal))
+            self.assertIsNone(snapshot.match_route("https", "api.cloudflare.com", 443, "GET", target + "/other", principal))
+            with self.assertRaises(schema.CatalogIntegrityError):
+                common.validate_rule({**rule, "placeholder": "Bearer unexpected"}, credential)
+            _, old = common.operation("cloudflare", identifier.removesuffix("_sdk_v1"))
+            old_route = policy_bundle.compile_policy_bundle(fixture(app, old)[2],
+                verify_signature=False, validate_schema=True).routes[0]
+            old_flow = SimpleNamespace(metadata={}, request=SimpleNamespace(method="GET",
+                pretty_url=rule["upstream_url"], raw_content=b"", headers=headers))
+            self.assertFalse(adapter.validate_request(old_flow, old_route, {}).allowed)
+
+    def test_cloudflare_capability_keeps_legacy_descriptors_out_of_new_choices(self):
+        from serverware import operator_demo
+        with patch.object(operator_demo, "settings", return_value={"allowed_upstreams": ["https://api.cloudflare.com"]}):
+            capability = common.capability()
+        app = next(item for item in capability["presets"] if item["id"] == "cloudflare")
+        self.assertEqual([item["id"] for item in app["operations"]],
+            ["zones_sdk_v1", "dns_records_sdk_v1", "zones", "dns_records"])
+        self.assertEqual([item["id"] for item in app["operations"] if item["available_for_creation"]],
+            ["zones_sdk_v1", "dns_records_sdk_v1"])
+        self.assertEqual(sum(item["available_for_creation"] for app in capability["presets"]
+            for item in app["operations"]), 15)
+
     def test_common_app_post_has_exact_profile_and_body_route_admission(self):
         from serverware import operator_demo
         from serverware.operator_catalog_api import MUTATION_PATHS, router

@@ -129,7 +129,7 @@ customer-write permissions here.
 [customers](https://docs.stripe.com/api/customers/list).
 
 The preset uses an exact Bearer dummy header. Stripe accepts bearer
-authentication, but a client that emits HTTP Basic must be explicitly configured
+authentication, and the Python SDK recipe uses it. A client that emits HTTP Basic must be explicitly configured
 through its documented authentication hook; a different header will be refused.
 [Stripe authentication](https://docs.stripe.com/api/authentication).
 
@@ -169,6 +169,10 @@ zones uses Zone:Read and exposes zones accessible to that token. Reading DNS
 records uses DNS:Read for the selected zone ID. All preset methods are GET;
 creating or changing DNS is not included. Query filters do not narrow the
 stored key's provider-side permissions.
+New Cloudflare permissions include the bounded metadata-header profile needed
+by the pinned Python SDK. Existing permissions keep their original header
+allowlist and remain usable with the Requests recipe; their authority is not
+silently widened during an upgrade.
 [List zones](https://developers.cloudflare.com/api/resources/zones/methods/list/),
 [list DNS records](https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/list/).
 
@@ -193,7 +197,9 @@ custom permissions.
 Use the [common-app examples](../examples/common-apps/README.md) for reviewed
 request shapes and transport configuration. The AI example uses the actual
 provider SDKs. The generic Python example uses ordinary HTTP requests for the
-service presets. A preset's existence is not a claim that every native SDK,
+service presets. A separate standard-library recipe uses the Slack, Stripe and
+Cloudflare SDKs and the maintained third-party Notion Python client, including
+explicit single-page pagination. A preset's existence is not a claim that every native SDK,
 CLI or pagination helper works without configuration.
 
 - Requests use exact HTTPS hosts, methods and paths; unknown destinations,
@@ -209,6 +215,8 @@ CLI or pagination helper works without configuration.
 - Response metadata is not forwarded. SDK pagination relying on `Link` or
   `X-Next-Page`, or retry logic relying on `Retry-After`, is not guaranteed.
   Disable automatic retries for writes and use bounded explicit pagination.
+  Notion, Stripe and Cloudflare recipes use their JSON pagination fields; each
+  invocation still makes only one request.
 - A provider operation can succeed even when Serverware withholds its response.
   Inspect audit and provider state before deliberately repeating a write.
 - Optional host-trusted approval returns HTTP 428 before dispatch. Review the

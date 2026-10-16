@@ -74,9 +74,17 @@ class OperationTests(unittest.TestCase):
             kwargs = {"action": True, "confirmed": True}
         return self.operations.prepare(alias, args, **kwargs)
 
-    def test_all_fifteen_operations_are_typed_and_prepare_without_transport(self):
+    def test_current_and_retained_operations_are_typed_and_prepare_without_transport(self):
         descriptors = self.operations.describe()
-        self.assertEqual(len(descriptors), 15)
+        self.assertEqual(len(descriptors), 17)
+        choices = [(provider["id"], operation["id"])
+            for provider in engine._PRESETS.values() for operation in provider["operations"]
+            if operation.get("available_for_creation", True)]
+        self.assertEqual(len(choices), 15)
+        self.assertIn(("cloudflare", "zones_sdk_v1"), choices)
+        self.assertIn(("cloudflare", "dns_records_sdk_v1"), choices)
+        self.assertNotIn(("cloudflare", "zones"), choices)
+        self.assertNotIn(("cloudflare", "dns_records"), choices)
         self.assertEqual(len({item["provider"] for item in descriptors}), 12)
         self.assertNotIn(TOKEN, json.dumps(descriptors))
         self.assertNotIn(str(self.directory), json.dumps(descriptors))

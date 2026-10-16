@@ -5,6 +5,9 @@ in your script. The same Requests example covers Slack, Discord, Notion, Stripe,
 Resend, GitLab, Cloudflare and Sentry. It also accepts the four AI presets; the
 official SDK example below is usually more convenient for those.
 
+The [service SDK example](#standard-service-sdks) also supports Slack, Notion,
+Stripe and Cloudflare through their normal Python client methods.
+
 These are deliberately scoped operations, not blanket access to each provider.
 The proxy enforces the selected destination, method, resource and body policy.
 The application has only a public placeholder in the provider-authentication
@@ -71,6 +74,52 @@ parameters explicitly, such as:
 That example is for GitLab. Query keys vary by operation; unknown keys, duplicate
 keys and attempts to override a configured selector are rejected before sending.
 Response pagination headers are not guaranteed to survive proxy filtering.
+
+## Standard service SDKs
+
+`services_python.py` uses Slack's asynchronous SDK, Stripe's SDK, Cloudflare's
+SDK and the maintained third-party `notion-client` package. It supports the
+existing scoped operations above, not each library's entire API. Install its
+pinned Python 3.12 dependencies once:
+
+```sh
+python3.12 -m venv .venv-services
+.venv-services/bin/pip install -r requirements-services.txt
+.venv-services/bin/python services_python.py --config ./serverware-client.private.json
+```
+
+That command performs one read for Notion, Stripe or Cloudflare. For Slack,
+prepare the body using `request.py --print-example-body`, review it, then run:
+
+```sh
+.venv-services/bin/python services_python.py --config ./serverware-client.private.json \
+  --body ./request.json --execute-write
+```
+
+Reads return one page, with the provider's JSON pagination fields preserved.
+Request another page explicitly using the downloaded operation's permitted
+query arguments, such as `--query page_size=10 --query start_cursor=CURSOR`
+for Notion block children, `--query limit=10 --query starting_after=CUSTOMER_ID`
+for Stripe customers, or `--query page=2 --query per_page=10` for Cloudflare.
+The helper canonicalizes query encoding/order without changing the chosen
+parameters. It does not invoke SDK auto-pagination, retry requests or follow
+redirects. A page permission never authorizes following arbitrary child IDs.
+
+Use a newly created Cloudflare permission for this SDK recipe. Retained legacy
+Cloudflare permissions still work with `request.py`; they are not silently
+expanded to admit the SDK's extra metadata headers. The new selector keeps the
+same readable operation names.
+
+Slack's supported asynchronous transport uses one verified trust store for
+both proxy TLS and intercepted-provider TLS: public roots plus the Serverware
+CA (and a private proxy CA when configured). Both hostnames are checked. The
+other three SDK transports use separate outer-proxy and provider trust stores.
+Never disable certificate verification to make a client work.
+
+Results include HTTP status, bounded provider JSON and `ok`. Slack `ok:false`
+and Cloudflare `success:false` are failures even with HTTP 200. HTTP 428 returns
+a validated approval path and an explicit identical-retry instruction; no
+approval, retry or additional page request happens automatically.
 
 ## Official AI SDKs
 

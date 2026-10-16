@@ -96,6 +96,21 @@ class OperatorCatalogAssets(unittest.TestCase):
             self.assertEqual(index[name][0], 'section')
             self.assertTrue(any(tag == 'a' and attrs.get('href') == '#' + name for tag, attrs, _ in items))
 
+    def test_mcp_help_is_a_static_local_client_guide_beside_private_config(self):
+        document = operator_demo_portal.render()
+        links = [(tag, attrs, form) for tag, attrs, form in self.elements() if attrs.get('id') == 'client-mcp-guide']
+        self.assertEqual(len(links), 1)
+        tag, attrs, form = links[0]
+        self.assertEqual(tag, 'a')
+        self.assertIsNone(form)
+        self.assertEqual(attrs, {'id': 'client-mcp-guide',
+            'href': 'https://github.com/AndrewMohawk/serverware/blob/main/examples/mcp/README.md',
+            'target': '_blank', 'rel': 'noopener noreferrer'})
+        self.assertLess(document.index('id="download-config"'), document.index('id="client-mcp-help"'))
+        self.assertLess(document.index('id="client-mcp-help"'), document.index('id="client-examples"'))
+        self.assertIn('For selected supported presets, run the local MCP helper with your downloaded client config.', document)
+        self.assertIn('Provider keys stay server-side; this is not a hosted MCP or admin endpoint.', document)
+
     def test_navigation_separates_credentials_clients_and_permissions_from_setup_action(self):
         document = operator_demo_portal.render()
         parsed = Elements(document)

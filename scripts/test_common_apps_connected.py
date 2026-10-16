@@ -49,6 +49,8 @@ SDK_PINS = {"openai": "3.31.0", "anthropic": "1.15.0", "google-genai": "2.31.0",
     "httpx2": "2.13.1", "httpx": "0.28.1", "slack-sdk": "3.45.0", "notion-client": "3.1.0",
     "stripe": "16.0.0", "cloudflare": "5.9.0", "aiohttp": "3.14.5"}
 AI_PROVIDERS = frozenset({"openai", "anthropic", "gemini", "openrouter"})
+SDK_STACK = Path("/client-work/sdk-anthropic.frames.txt")
+SDK_STACK_LIMIT = 65536
 
 
 def sdk_audit_target(method, url):
@@ -93,11 +95,39 @@ def sdk_negative(args):
     return 1
 
 
+def sdk_anthropic_diagnostic(args):
+    """One real helper call, not CLI acceptance; stack frames never include locals."""
+    import faulthandler
+    import resource
+
+    fixture.assert_isolated(sdk_smoke=True)
+    require(set(os.environ) <= {"LC_CTYPE"}, "clean SDK child environment required")
+    logging.disable(logging.CRITICAL)
+    helper = sdk_module("anthropic")
+    config = helper.load_configuration(args.config)
+    require(helper.validate_scope(config, "Hi")[0] == "anthropic", "diagnostic provider differs")
+    resource.setrlimit(resource.RLIMIT_FSIZE, (SDK_STACK_LIMIT, SDK_STACK_LIMIT))
+    descriptor = os.open(SDK_STACK, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "wb", buffering=0) as frames:
+        faulthandler.dump_traceback_later(10, repeat=False, file=frames, exit=False)
+        try:
+            with helper.http_client(config, "anthropic") as client:
+                result = helper.infer(config, "Hi", client=client)
+        except Exception as error:
+            print(json.dumps({"ok": False, "exceptionType": type(error).__name__}))
+            return 1
+        finally:
+            faulthandler.cancel_dump_traceback_later()
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
 class CommonAppsCheck(OperatorCatalogCheck):
     audit_drained = OrdinaryClientCheck.audit_drained
 
     def __init__(self, args):
         require(not (args.mcp_smoke and args.sdk_smoke), "choose one connected profile")
+        require(not args.sdk_anthropic_diagnostic or args.sdk_smoke, "diagnostic requires SDK profile")
         fixture.assert_isolated(args.sdk_smoke)
         super().__init__(argparse.Namespace(**{**vars(args), "upstream_address": "127.0.0.1"}))
         self.credential, self.phase, self.last = fixture.TOKEN, "preflight", None
@@ -333,6 +363,40 @@ class CommonAppsCheck(OperatorCatalogCheck):
                 checks.append(dict(self.last))
         return checks
 
+    def dispatch_anthropic_diagnostic(self, rule):
+        self.phase = "sdk-anthropic-diagnostic"
+        path = self.sdk_configurations("anthropic", rule)["allowed"]
+        argv = [sys.executable, "-I", "-B", "/app/" + SCRIPT,
+            "sdk-anthropic-diagnostic-child", "--config", str(path)]
+        timed_out = False
+        with subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env={}, start_new_session=True) as child:
+            try:
+                output, error = child.communicate(timeout=min(40, self.timeout()))
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                os.killpg(child.pid, signal.SIGKILL)
+                output, error = child.communicate(timeout=5)
+            finally:
+                if child.poll() is None:
+                    os.killpg(child.pid, signal.SIGKILL)
+                    child.wait(timeout=5)
+        require(len(output) <= 65536 and len(error) <= 65536, "diagnostic output exceeded bound")
+        self.clean(output); self.clean(error)
+        stack = SDK_STACK.read_bytes() if SDK_STACK.is_file() else b""
+        require(len(stack) <= SDK_STACK_LIMIT, "diagnostic stack exceeded bound")
+        self.clean(stack)
+        observed = self.provider_observations()
+        self.last = {"diagnosticOnly": True, "cliVerified": False, "timedOut": timed_out,
+            "sdkExit": child.returncode, "stderrPresent": bool(error), "providerArrivals": observed["total"],
+            "stackFile": str(SDK_STACK), "stackBytes": len(stack), "stackTrace": stack.decode("utf-8", errors="replace")}
+        require(not timed_out and child.returncode == 0 and not error, "Anthropic diagnostic child failed")
+        require(json.loads(output) == {"provider": "anthropic", "status": "end_turn", "text": "Hello"}
+            and observed["total"] == 1 and observed["attempts"][0]["accepted"] is True,
+            "Anthropic diagnostic response differs")
+        return {"schema": "serverware.anthropicSdkDiagnostic/v1", "ok": True, "syntheticOnly": True,
+            "realProviderVerified": False, "stockSdkVerified": False, "diagnostic": self.last, "provider": observed}
+
     def run(self):
         self.admin_token = token_file(self.args.admin_token_file)
         self.health()
@@ -344,6 +408,8 @@ class CommonAppsCheck(OperatorCatalogCheck):
             collection="applications", result_key="application", event="operator_catalog.application.created", creates=True, token=True)
         rules, rule_values, mcp_rule = {}, {}, None
         specs = fixture.SDK_SPECS if self.args.sdk_smoke else {"openai": fixture.SPECS["openai"]} if self.args.mcp_smoke else fixture.SPECS
+        if self.args.sdk_anthropic_diagnostic:
+            specs = {"anthropic": fixture.SDK_SPECS["anthropic"]}
         for name, spec in specs.items():
             self.phase = "create-" + name
             credential, _, _ = self.mutate("/credentials", {"name": self.run_id + "-" + name,
@@ -360,6 +426,8 @@ class CommonAppsCheck(OperatorCatalogCheck):
             if self.args.mcp_smoke:
                 mcp_rule = rule
         self.wait_catalog_loaded("common_apps_loaded")
+        if self.args.sdk_anthropic_diagnostic:
+            return self.dispatch_anthropic_diagnostic(rule_values["anthropic"])
         checks, arrivals = [], 0
         if self.args.mcp_smoke:
             checks = self.dispatch_mcp(mcp_rule)
@@ -404,7 +472,7 @@ class CommonAppsCheck(OperatorCatalogCheck):
             require(Counter(row.get("authority") for row in connects) == Counter({spec["host"] + ":443": 2 for spec in specs.values()})
                 and all(row.get("method") == "CONNECT" and row.get("status_code") == 200 and row.get("outcome") == "established"
                     and row.get("target") == row.get("authority") and row.get("policy_hash") == self.policy_hash
-                    and row.get("principal_id") == self.application["id"] for row in connects),
+                    and row.get("principal_id") == self.application["principal_id"] for row in connects),
                 "SDK CONNECT policy or application binding differs")
             require(self.catalog()["policy"]["policy_hash"] == self.policy_hash and self.health()["policy_hash"] == self.policy_hash,
                 "SDK final policy changed")
@@ -457,6 +525,7 @@ def run(args):
             "r=o.open('https://api.openai.com/_fixture/observations',timeout=2); raise SystemExit(0 if r.status==200 else 1)")
         services["edge"]["command"] = ["-m", "scripts.operator_common_apps_fixture", "edge"]
         sdk_smoke = args.stock_sdk_packages is not None
+        require(not args.sdk_anthropic_diagnostic or sdk_smoke, "diagnostic requires prepared SDK packages")
         if sdk_smoke:
             for name in ("network-files", "network", "provider", "edge"):
                 services[name]["command"].append("--sdk-smoke")
@@ -483,6 +552,8 @@ def run(args):
                     for name, version in SDK_PINS.items()), "prepared stock SDK package directory required")
             services["check"].update(image=PYTHON_IMAGE, entrypoint=["/usr/local/bin/python", "-I", "-B"])
             services["check"]["command"].append("--sdk-smoke")
+            if args.sdk_anthropic_diagnostic:
+                services["check"]["command"].append("--sdk-anthropic-diagnostic")
             services["check"]["volumes"].append(recipe.base.bind(packages, MCP_PACKAGES))
         runner.project, runner.services = config["name"], services
         require(not runner.container_rows("preexisting") and runner.no_project_networks("preexisting-networks"), "project already exists")
@@ -495,7 +566,8 @@ def run(args):
         runner.save("run.claim.json", {"sourceCommit": args.commit, "source": str(source), "binarySha256": args.expected_binary_sha256,
             "checkerSha256": recipe.base.digest(source / SCRIPT), "images": images, "jobRoot": str(root), "syntheticOnly": True,
             "mcpSdkPackages": str(args.mcp_sdk_packages) if args.mcp_sdk_packages else None,
-            "stockSdkPackages": str(args.stock_sdk_packages) if sdk_smoke else None, "stockSdkPins": SDK_PINS if sdk_smoke else {}})
+            "stockSdkPackages": str(args.stock_sdk_packages) if sdk_smoke else None, "stockSdkPins": SDK_PINS if sdk_smoke else {},
+            "diagnosticOnly": args.sdk_anthropic_diagnostic})
         (root / "runtime").mkdir(mode=0o700)
         compose_file = root / "compose.json"
         with compose_file.open("x") as stream:
@@ -541,7 +613,8 @@ def run(args):
                 clean = False
         terminal = {"success": success, "cleanup": clean, "phase": phase, "failure": failure,
             "sourceCommit": args.commit, "binarySha256": args.expected_binary_sha256,
-            "elapsedSeconds": round(time.monotonic() - begun, 3), "syntheticOnly": True, "realProviderVerified": False}
+            "elapsedSeconds": round(time.monotonic() - begun, 3), "syntheticOnly": True, "realProviderVerified": False,
+            "diagnosticOnly": args.sdk_anthropic_diagnostic}
         runner.save("terminal.json", terminal)
         print(json.dumps(terminal, sort_keys=True), flush=True)
     return 0 if success and clean else 1
@@ -559,6 +632,8 @@ def main():
         help="Opt into only two MCP OpenAI calls, using an existing Python 3.12 site-packages tree")
     host.add_argument("--stock-sdk-packages", type=Path,
         help="Opt into eight real SDK successes and eight Rust scope denials using existing Python 3.12 packages")
+    host.add_argument("--sdk-anthropic-diagnostic", action="store_true",
+        help="Only one Anthropic helper call with a 10-second stack snapshot; not CLI acceptance")
     client = modes.add_parser("check")
     for name in ("control-base", "management-base", "proxy-url", "operator-origin", "expected-binary-sha256", "expected-curl-sha256"):
         client.add_argument("--" + name, required=True)
@@ -569,12 +644,17 @@ def main():
     client.add_argument("--timeout-seconds", type=int, default=180)
     client.add_argument("--mcp-smoke", action="store_true")
     client.add_argument("--sdk-smoke", action="store_true")
+    client.add_argument("--sdk-anthropic-diagnostic", action="store_true")
     negative = modes.add_parser("sdk-negative")
     negative.add_argument("--config", type=Path, required=True)
+    diagnostic = modes.add_parser("sdk-anthropic-diagnostic-child")
+    diagnostic.add_argument("--config", type=Path, required=True)
     args = parser.parse_args()
     os.umask(0o077)
     if args.mode == "sdk-negative":
         return sdk_negative(args)
+    if args.mode == "sdk-anthropic-diagnostic-child":
+        return sdk_anthropic_diagnostic(args)
     if args.mode == "run":
         for name in ("DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "DOCKER_API_VERSION"):
             os.environ.pop(name, None)

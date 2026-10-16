@@ -5,6 +5,7 @@ No provider credentials or contact. The lifecycle child uses real SQLite,
 encryption, signing and audit; only gate health observation is substituted.
 """
 from copy import deepcopy
+import ast
 import json
 import os
 from pathlib import Path
@@ -57,6 +58,34 @@ def flow_for(body, url, headers=None):
 
 
 class RegistryTests(unittest.TestCase):
+    def test_common_app_post_has_exact_profile_and_body_route_admission(self):
+        from serverware import operator_demo
+        from serverware.operator_catalog_api import MUTATION_PATHS, router
+        path = "/api/operator-demo/access-rules/common-app"
+        with patch.object(operator_demo, "active", return_value=True):
+            self.assertTrue(operator_demo.active())
+            self.assertTrue(operator_demo.request_allowed("POST", path))
+            for method in ("GET", "HEAD", "OPTIONS", "PUT", "PATCH", "DELETE", "TRACE"):
+                self.assertFalse(operator_demo.request_allowed(method, path), method)
+            for nearby in (path + "/", path + "/other", path + "-other"):
+                self.assertFalse(operator_demo.request_allowed("POST", nearby), nearby)
+        self.assertIn(path, MUTATION_PATHS)
+        self.assertEqual([route.methods for route in router.routes if route.path == path], [{"POST"}])
+        # Exercise the actual middleware classifier without booting a server.
+        tree = ast.parse((ROOT / "serverware/app.py").read_text())
+        selected = [node for node in tree.body if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "_OPERATOR_CATALOG_BODY_POST_PATHS"
+                for target in node.targets) or isinstance(node, ast.FunctionDef)
+            and node.name == "_operator_catalog_body_is_route_owned"]
+        self.assertEqual(len(selected), 2)
+        namespace = {}
+        exec(compile(ast.Module(body=selected, type_ignores=[]), "<actual-body-classifier>", "exec"), namespace)
+        owns = namespace["_operator_catalog_body_is_route_owned"]
+        self.assertTrue(owns("POST", path, operator_active=True))
+        self.assertFalse(owns("POST", path, operator_active=False))
+        self.assertFalse(owns("GET", path, operator_active=True))
+        self.assertFalse(owns("POST", path + "/other", operator_active=True))
+
     def test_every_preset_compiles_and_examples_pass_actual_constraints(self):
         from serverware import constraints, policy_bundle
         identifiers = [app["id"] for app in common.presets()]

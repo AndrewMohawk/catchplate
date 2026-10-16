@@ -285,6 +285,7 @@ def request_allowed(method: str, path: str) -> bool:
         "/api/operator-demo/applications/renewal/cancel",
         "/api/operator-demo/workloads/renew",
         "/api/operator-demo/applications/rotate-token", "/api/operator-demo/access-rules",
+        "/api/operator-demo/access-rules/common-app",
         "/api/operator-demo/access-rules/revoke", "/api/operator-demo/access-rules/gmail-read",
         "/api/operator-demo/access-rules/approval",
         "/api/operator-demo/access-rules/github",

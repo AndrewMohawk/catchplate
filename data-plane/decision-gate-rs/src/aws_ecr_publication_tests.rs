@@ -70,7 +70,19 @@ fn ecr_closed_policy_and_schema() {
     policy["routes"] = json!([raw]);
     policy["credentials"] = json!([{"id":"credential:ecr","credentialType":"static","provider":"operator-demo","providerSubject":SUBJECT,
         "injection":{"type":"awsEcrSigningV1"}}]);
-    validate_policy_capabilities(&policy).unwrap();
+    assert_eq!(RESPONSE_BYTES, 25 * 1024 * 1024);
+    assert_eq!(
+        policy["routes"][0]["adapter"]["config"]["response"]["maxBodyBytes"],
+        json!(RESPONSE_BYTES)
+    );
+    validate_policy_capabilities(&policy).expect("closed ECR policy admits its exact 25 MiB limit");
+    for limit in [MAX_BUFFERED_RESPONSE_BODY_BYTES, RESPONSE_BYTES + 1] {
+        let mut changed = policy.clone();
+        changed["routes"][0]["adapter"]["config"]["response"]["maxBodyBytes"] = json!(limit);
+        assert!(validate_policy_capabilities(&changed)
+            .expect_err("ECR response limit must remain exact, not an arbitrary larger allowance")
+            .contains("ECR config differs from its closed contract"));
+    }
     validate_route(&route()).unwrap();
     validate_route_response_release_mode(&route()).unwrap();
     policy["apiVersion"] = json!("serverware.policy/v1");

@@ -12714,9 +12714,15 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             let max_body_bytes = max_body_bytes.as_u64().ok_or_else(|| {
                 format!("route {route_id} response maxBodyBytes must be an unsigned integer")
             })?;
-            if max_body_bytes > MAX_BUFFERED_RESPONSE_BODY_BYTES {
+            // ECR's already-validated closed profile has its own bounded ACK limit.
+            let maximum = if adapter_type == aws_ecr_publication::ADAPTER {
+                aws_ecr_publication::RESPONSE_BYTES
+            } else {
+                MAX_BUFFERED_RESPONSE_BODY_BYTES
+            };
+            if max_body_bytes > maximum {
                 return Err(format!(
-                    "route {route_id} response maxBodyBytes must be <= {MAX_BUFFERED_RESPONSE_BODY_BYTES}"
+                    "route {route_id} response maxBodyBytes must be <= {maximum}"
                 ));
             }
         }
@@ -76507,6 +76513,14 @@ mod tests {
             json!(MAX_BUFFERED_RESPONSE_BODY_BYTES),
         ));
         validate_policy_capabilities(&bounded).expect("16 MiB response limit is supported");
+
+        let ecr_sized_generic = policy_with_route(generic_policy_route(
+            "none",
+            json!(aws_ecr_publication::RESPONSE_BYTES),
+        ));
+        assert!(validate_policy_capabilities(&ecr_sized_generic)
+            .expect_err("ECR's 25 MiB exception must not apply to generic REST")
+            .contains("must be <= 16777216"));
     }
 
     #[test]

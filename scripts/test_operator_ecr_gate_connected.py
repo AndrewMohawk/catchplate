@@ -329,6 +329,10 @@ class EcrCheck(OperatorCatalogCheck):
 
 
 def check(args):
+    def deadline_expired(_signum, _frame):
+        raise TimeoutError("connected checker deadline exceeded")
+
+    signal.signal(signal.SIGALRM, deadline_expired)
     signal.alarm(180)
     instance = None
     try:

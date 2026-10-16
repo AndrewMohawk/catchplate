@@ -59,7 +59,7 @@ class CommonAppsCheck(OperatorCatalogCheck):
         self.snapshot = value
         return value
 
-    def observations(self):
+    def provider_observations(self):
         status, value = self.json_request(self.provider, "/_fixture/observations", context=self.upstream_ca)
         require(status == 200 and set(value) == {"total", "attempts"}, "fixture counter unavailable")
         return value
@@ -88,7 +88,7 @@ class CommonAppsCheck(OperatorCatalogCheck):
         self.clean(output); self.clean(error)
         wire, separator, tail = output.rpartition(b"\nserverware-common-apps:")
         match = re.fullmatch(rb"([0-9]{3}):([0-9]{3})\n", tail) if separator else None
-        observed = self.observations()
+        observed = self.provider_observations()
         self.last = {"case": case, "curlExit": code, "connectStatus": int(match[1]) if match else None,
             "httpStatus": int(match[2]) if match else None, "providerArrivals": observed["total"], "stderrPresent": bool(error)}
         try:
@@ -114,7 +114,7 @@ class CommonAppsCheck(OperatorCatalogCheck):
         self.health()
         initial = self.catalog()
         require(initial["revision"] == 1 and all(not initial[key] for key in COLLECTIONS)
-            and self.observations() == {"total": 0, "attempts": []}, "fixture must be fresh")
+            and self.provider_observations() == {"total": 0, "attempts": []}, "fixture must be fresh")
         self.application, self.client_token, _ = self.mutate("/applications", {"name": self.run_id,
             "token_lifetime_seconds": 3600, "proxy_authentication": "basic_and_bearer_v1"},
             collection="applications", result_key="application", event="operator_catalog.application.created", creates=True, token=True)
@@ -156,7 +156,7 @@ class CommonAppsCheck(OperatorCatalogCheck):
             selected = [row for row in attempts if row["event"].get("route_id") == route]
             require(Counter(row["event_type"] for row in selected) == Counter({START: 1, RELEASE: 1})
                 and all(row["event"].get("policy_hash") == self.policy_hash for row in selected), "signed policy audit binding differs")
-        observed = self.observations()
+        observed = self.provider_observations()
         require(observed["total"] == 3 and all(row["accepted"] for row in observed["attempts"]), "provider assertions differ")
         return {"schema": "serverware.commonAppsConnectedCheck/v1", "ok": True, "syntheticOnly": True,
             "realProviderVerified": False, "stockSdkVerified": False, "dataPlaneBinaryDigest": self.args.expected_binary_sha256,

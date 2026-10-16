@@ -147,6 +147,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     from operator_install.config import InstallError
 
+    if not args.json:
+        if args.command == "build":
+            print("Checking build inputs. The first source build may take several minutes; later starts do not rebuild.", file=sys.stderr, flush=True)
+        elif args.command == "start":
+            print(f"Starting the installed instance (up to {args.timeout} seconds). No build or image download.", file=sys.stderr, flush=True)
     diagnostic_path = None
     try:
         result = dispatch(args)

@@ -207,7 +207,14 @@ class InstallerTests(unittest.TestCase):
                 self.assertEqual((info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)), (10001, 10001, 0o700))
             for name in ("app-data", "gate-data", "provider-custody", "x-custody", "notification-custody", "ecr-artifacts"):
                 self.assertEqual(list((self.state / name).iterdir()), [])
-            tokens = [(self.state / "service-secrets" / name).read_bytes().strip() for name in installed.TOKEN_FILES]
+            from serverware.config import _read_service_credential_file
+            tokens = []
+            for name in installed.TOKEN_FILES:
+                path = self.state / "service-secrets" / name
+                raw = path.read_bytes()
+                self.assertEqual(raw, raw.strip(), "service tokens must satisfy the production no-whitespace reader")
+                self.assertEqual(_read_service_credential_file(path, setting_name="test-service-token"), raw.decode("ascii"))
+                tokens.append(raw)
             self.assertEqual(len(set(tokens)), 7)
             public = (self.state / "manifest.json").read_bytes() + (self.state / "compose.json").read_bytes() + json.dumps(result).encode()
             for secret in [PASSWORD, Path(self.values["tls_private_key"]).read_bytes(), *tokens]:
@@ -522,6 +529,17 @@ class InstallerTests(unittest.TestCase):
         self.ignore_stop = True
         with patch.object(process, "run", side_effect=self.docker), self.assertRaises(config.InstallError):
             lifecycle.stop(self.state)
+
+    def test_crash_loop_fails_promptly_without_sleep_or_starting_later_services(self):
+        self.retained_installation()
+        self.running = {"serverware": "restarting"}
+        with patch.object(process, "run", side_effect=self.docker), \
+                patch.object(lifecycle.time, "sleep", side_effect=AssertionError("known crash loop was polled")):
+            with self.assertRaises(config.InstallError):
+                lifecycle.start(self.state)
+            with self.assertRaises(config.InstallError):
+                lifecycle._wait_healthy(self.manifest, "serverware", float("inf"))
+        self.assertFalse(any("up" in command for command in self.commands))
 
     def test_running_image_or_resource_role_mismatch_refuses_adoption(self):
         self.retained_installation()

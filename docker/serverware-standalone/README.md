@@ -6,8 +6,10 @@ Authelia, Traefik or the original homelab deployment. The console uses an
 administrator username/password; applications use their own Serverware client
 tokens through the separate proxy hostname.
 
-**Status:** implementation and isolated acceptance are in progress. These steps
-are not a migration recipe for the existing running instance. Host administrators
+**Status:** committed candidate; fresh-install acceptance is pending. The cached
+build passed, but the default source build and corrected empty-instance startup
+have not yet passed. See the [verification record](../../docs/standalone-installation-verification.md).
+These steps are not a migration recipe for the existing running instance. Host administrators
 remain trusted: control of the server can bypass its policies. No TEE or hardware
 approval guarantee is claimed.
 

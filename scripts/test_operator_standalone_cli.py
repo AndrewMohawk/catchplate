@@ -100,6 +100,18 @@ class CommandLineTests(unittest.TestCase):
             cli.show({"operation": "init", "status": "initialized", "state_dir": "/private/my instance"}, as_json=False)
         self.assertIn("Next: sudo python3 scripts/serverware_standalone.py start --state-dir '/private/my instance'", output.getvalue())
 
+    def test_long_commands_explain_wait_before_dispatch(self):
+        errors = io.StringIO()
+        def build(_args):
+            self.assertIn("first source build may take several minutes", errors.getvalue())
+            return {"status": "built"}
+        with patch.object(cli, "dispatch", side_effect=build), redirect_stderr(errors), redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["build"]), 0)
+        with patch.object(cli, "dispatch", return_value={"status": "built"}), redirect_stderr(io.StringIO()) as machine_errors, \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["build", "--json"]), 0)
+        self.assertEqual(machine_errors.getvalue(), "")
+
 
 if __name__ == "__main__":
     unittest.main()

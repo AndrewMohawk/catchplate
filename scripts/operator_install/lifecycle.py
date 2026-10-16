@@ -117,14 +117,20 @@ def _publication_ready(manifest) -> bool:
     return True
 
 
+def _service_failed(service: str, status: str) -> InstallError:
+    if service not in SERVICES or status not in {"exited", "dead", "removing", "restarting"}:
+        return InstallError("An installation service failed before readiness; inspect status and Docker service logs. State was preserved.")
+    return InstallError(f"{service} is {status} before readiness; inspect status and this service's Docker logs. State was preserved; no later service was started.")
+
+
 def _wait_healthy(manifest, service, deadline) -> None:
     while time.monotonic() < deadline:
         status = _service_status(manifest, service)
         if status == {"state": "running", "health": "healthy"}:
             if service != "serverware" or _publication_ready(manifest):
                 return
-        if status["state"] in {"exited", "dead", "removing"}:
-            raise InstallError("A service exited before readiness; inspect installation status and service logs. State was preserved.")
+        if status["state"] in {"exited", "dead", "removing", "restarting"}:
+            raise _service_failed(service, status["state"])
         time.sleep(min(1, max(0, deadline - time.monotonic())))
     raise InstallError("Readiness timed out; no later service was started. Inspect status before retrying; state was preserved.")
 
@@ -151,6 +157,8 @@ def start(state_dir: Path, timeout=120) -> dict:
         deadline = time.monotonic() + timeout
         for service in SERVICES:
             current = _service_status(manifest, service)
+            if current["state"] == "restarting":
+                raise _service_failed(service, "restarting")
             if current["state"] not in {"running", "restarting"}:
                 if time.monotonic() >= deadline:
                     raise InstallError("Readiness timed out before the next service; no later service was started.")

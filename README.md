@@ -113,10 +113,15 @@ remaining real-provider work.
 
 ## Self-hosting and contributing
 
-The running instance is available now. Read the [self-hosting status and configuration activation guide](docs/self-hosting.md)
-before planning another installation. A portable, supported fresh-install
-quickstart is still a gap: the [retained deployment](docker/serverware-operator-demo/README.md)
-records this instance's configuration and is **not** a new-install command.
+The running instance is available now. A new
+[standalone installer candidate](docker/serverware-standalone/README.md) packages
+the app, proxy and authenticated TLS edge without homelab dependencies.
+**Fresh-install acceptance is still pending:** the cached-artifact build passed,
+but the default source build and corrected empty-instance startup are not yet
+accepted. See the [verification record](docs/standalone-installation-verification.md)
+and [self-hosting/activation guide](docs/self-hosting.md).
+The [retained deployment](docker/serverware-operator-demo/README.md)
+records the existing instance and is **not** a new-install command.
 Do not apply its state paths, identity or credentials to another installation.
 The older [development reference](docs/development-reference.md) covers a
 different engineering stack, not the current instance's onboarding path.

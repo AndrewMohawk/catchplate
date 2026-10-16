@@ -129,7 +129,9 @@ def initialize(config_path: Path, password: bytes) -> dict:
             "edge-secrets/tls.crt": certificate, "edge-secrets/tls.key": key,
             "edge-secrets/htpasswd": config["admin_username"].encode() + b":" + hashed + b"\n",
             "edge-secrets/operator-admin-header.conf": b'proxy_set_header X-Serverware-Admin-Token "' + tokens["admin.token"] + b'";\n',
-            **{"service-secrets/" + name: value + b"\n" for name, value in tokens.items()}}
+            # The app's service-credential reader requires exact bytes without
+            # surrounding whitespace. These are not newline-delimited files.
+            **{"service-secrets/" + name: value for name, value in tokens.items()}}
         for name, data in files.items():
             state.write_file(root / name, data, owner=0 if name == "compose.json" else 10001)
         process.run(["docker", "compose", "--project-name", config["project_name"], "--file", str(root / "compose.json"),

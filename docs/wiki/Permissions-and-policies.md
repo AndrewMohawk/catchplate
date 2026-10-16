@@ -27,6 +27,27 @@ For a new supported JSON permission, use the offered whole-JSON request/response
 
 This means **no optional content filtering**, not unrestricted forwarding. Destination, path/method, body format/size, admitted headers/query parameters, credential-reflection checks and response validation still apply. Existing restricted permissions keep their restrictions; closing **Add restrictions** does not remove choices. [JSON compatibility contract](https://github.com/AndrewMohawk/serverware/blob/main/docs/ordinary-client-compatibility.md).
 
+## Optional Gmail age limit
+
+**All mail — no age restriction** remains the default, and existing grants are
+unchanged. When the instance offers the compatible Read Gmail capability, select
+**Only messages from the last N days**, enter 1–3650 days, and review that limit
+before saving. This restricts one client's permission, not the connected Google
+account or its OAuth scope. Leaving response fields unfiltered does not remove
+the age limit.
+
+The check uses Gmail's stored `internalDate`, not the mail's `Date` header or a
+search query. Restricted lists need explicit `maxResults` of 1–32. If any row's
+age evidence is missing, invalid, too old or future-dated, the whole page is
+blocked; rows are not silently dropped. The saved policy is included in the
+downloaded SDK configuration. A client's `after:<epoch-seconds>` query helps
+select recent mail but never substitutes for the proxy's checks.
+
+Connected synthetic acceptance and the preserved-state deployment/public/browser
+checks pass. Google remains unconfigured; real-Google acceptance is separate.
+Do not assume the control is available on an older instance. See the
+[current Gmail guide](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-gmail-job-verification.md#optional-last-n-days-policy--connected-acceptance-passed-and-deployed).
+
 ## Set up a custom JSON endpoint
 
 Use the advanced form in **Permissions** when no provider preset matches your supported JSON API:

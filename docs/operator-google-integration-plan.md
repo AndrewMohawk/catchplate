@@ -4,11 +4,14 @@
 
 ## Status and objective
 
-October 16 follow-up: the optional last-N-days permission contract is approved
-and source implementation is in progress. Existing unrestricted grants and
-ordered SDK queries remain unchanged. Its build, connected, deployment and
-real-Google acceptance are not established by the earlier receipts below; see
-the [current age-policy contract](operator-gmail-job-verification.md#optional-last-n-days-policy--implementation-in-progress).
+October 16 follow-up: `549119d9` implements the optional last-N-days permission,
+with checker `c4033b17` and focused backend/UI/client/MCP/compiled-helper checks
+passing. Existing unrestricted grants and ordered SDK queries remain unchanged.
+Normal Rust `13ad08c0…` and corrected source `8b0277f0` passed connected synthetic
+acceptance; the preserved-state app/gate rollout and public/browser checks also
+pass. Google remains unconfigured, so real-Google acceptance is separate. The
+earlier receipts below are historical. See the
+[current age-policy contract](operator-gmail-job-verification.md#optional-last-n-days-policy--connected-acceptance-passed-and-deployed).
 
 The first-Google administrator setup now has focused retained-state verification:
 six selected groups passed using 18 fresh-process workers, including activation,

@@ -37,8 +37,10 @@ preparing another; completed and cancelled IDs are not reusable.
 
 Message-age limits are a separate application-permission choice, not a different
 OAuth scope or administrator setup. All mail remains the unrestricted default.
-The additive last-N-days mode is in implementation, not yet accepted or deployed;
-see its [contract and verification boundary](operator-gmail-job-verification.md#optional-last-n-days-policy--implementation-in-progress).
+The additive last-N-days mode passed focused and connected synthetic checks;
+source `8b0277f0` / normal Rust `13ad08c0…` is deployed with preserved state and
+passing public/browser checks. Google remains unconfigured; real-Google acceptance
+is separate. See its [contract and verification boundary](operator-gmail-job-verification.md#optional-last-n-days-policy--connected-acceptance-passed-and-deployed).
 
 ## Retained-state contract
 

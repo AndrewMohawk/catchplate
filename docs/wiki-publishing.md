@@ -21,6 +21,8 @@ GitHub session. Missing initialization and Wiki access remain undistinguished;
 the source guides have not been published to the Wiki. The October 15 late-day
 recheck again confirmed `private: true`, `has_wiki: true` and administrator
 access, while the authenticated Wiki Git lookup still returned the same error.
+The October 16 authenticated `ls-remote` recheck again returned `Repository not
+found` (exit 128); no access-state change or Wiki publication was established.
 
 An authorized repository maintainer must open the Wiki while signed into
 GitHub. If it offers **Create the first page**, keep the title **Home**, paste

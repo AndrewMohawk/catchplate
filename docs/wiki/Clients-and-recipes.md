@@ -163,6 +163,20 @@ JSON, and expired or mismatched configurations are refused. These examples read
 an inbox sample; the file never selects a command or supplies a Google token.
 Keep the JSON private, for example with `chmod 600`.
 
+Gmail's default remains **All mail — no age restriction**. If the instance
+offers the optional 1–3650-day limit, choose it on the permission and download
+that permission's complete configuration; the Node, Python and Go SDK recipes
+carry the saved age policy without requiring you to rebuild it by hand. They
+use five-message pages and an explicit `after:<epoch-seconds>` convenience query
+held constant across page tokens. The query is not proof: the proxy checks
+Gmail `internalDate`, permits at most 32 messages per restricted list and blocks
+the whole page if evidence fails. Editing the file does not change the proxy's
+saved restriction.
+This mode passed connected synthetic acceptance and is deployed with passing
+public/browser checks. Google remains unconfigured, so real-Google use is still
+unverified. See the
+[Gmail age guide](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-gmail-job-verification.md#optional-last-n-days-policy--connected-acceptance-passed-and-deployed).
+
 | Job and required permission | Node.js | Python | Go |
 | --- | --- | --- | --- |
 | Gmail inbox sample — **Read Gmail → Official Gmail SDK** | [client.mjs](https://github.com/AndrewMohawk/serverware/tree/main/examples/google-gmail-node) | [gmail.py](https://github.com/AndrewMohawk/serverware/tree/main/examples/google-gmail-python) | [gmail-example](https://github.com/AndrewMohawk/serverware/tree/main/examples/google-gmail-go) |

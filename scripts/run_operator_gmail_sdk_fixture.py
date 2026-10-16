@@ -205,7 +205,8 @@ class GmailSdkRun(Run):
             require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700)
         require(not list(args.job_root.iterdir()) and not list(args.evidence.iterdir()))
         self.save("run.claim.json", {"schema": "serverware.privateGmailSdkRunClaim/v1",
-            "sourceCommit": args.commit, "jobRoot": str(args.job_root)})
+            "sourceCommit": args.commit, "jobRoot": str(args.job_root),
+            **({"ageProfile": True} if getattr(args, "age_profile", False) else {})})
         phase, success, armed, clean = "inputs", False, False, False
         errors, failure = [], None
         begun = time.monotonic()
@@ -299,11 +300,15 @@ class GmailSdkRun(Run):
                 exit_code = int(self.command("checker-wait", ["docker", "wait", checker], 190))
                 raw = self.command("checker-result", ["docker", "logs", checker], 5)
                 result = json.loads(raw)
-                importlib.import_module("scripts.check_operator_gmail_sdk").validate_success_result(result)
-                require(result["schema"] == (recipe.profiles.CHECK_SCHEMA if paired else "serverware.privateGmailSdkCheck/v1"))
+                age_profile = getattr(args, "age_profile", False)
+                if age_profile:
+                    importlib.import_module("scripts.check_operator_gmail_sdk_age").validate_result(result)
+                else:
+                    importlib.import_module("scripts.check_operator_gmail_sdk").validate_success_result(result)
+                    require(result["schema"] == (recipe.profiles.CHECK_SCHEMA if paired else "serverware.privateGmailSdkCheck/v1"))
                 if paired:
                     require(result["sdkDependenciesSha256"] == args.expected_dependencies_sha256
-                        and result["nodeExampleSha256"] == recipe.profiles.NODE_SHA256)
+                        and (age_profile or result["nodeExampleSha256"] == recipe.profiles.NODE_SHA256))
             terminal = json.loads(self.command("checker-state", ["docker", "inspect", "--format", "{{json .State}}", checker], 5))
             require(exit_code == 0 and terminal["Status"] == "exited" and terminal["ExitCode"] == 0 and not terminal["OOMKilled"])
             if paired:
@@ -335,6 +340,7 @@ def main():
         parser.add_argument("--" + name, type=sha256, required=True)
     parser.add_argument("--browser-permission", action="store_true")
     parser.add_argument("--sdk-pair", action="store_true")
+    parser.add_argument("--age-profile", action="store_true")
     for name in ("go", "node", "node-modules", "python-runtime", "python-packages"):
         parser.add_argument("--" + name, type=absolute_path)
     for name in ("expected-go-sha256", "expected-dependencies-sha256"):

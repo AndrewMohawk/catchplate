@@ -235,13 +235,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lifetime-seconds", type=int, default=240)
     parser.add_argument("--sdk-pair", action="store_true")
+    parser.add_argument("--age-profile", action="store_true")
     args = parser.parse_args()
     base.require(120 <= args.lifetime_seconds <= 300)
+    base.require(not args.age_profile or args.sdk_pair)
     base.assert_isolated_network()
     stopped = threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stopped.set())
-    fixture = GmailSdkFixture(sdk_pair=args.sdk_pair)
+    if args.age_profile:
+        from scripts.operator_gmail_sdk_age_fixture import GmailAgeFixture
+        fixture = GmailAgeFixture()
+    else:
+        fixture = GmailSdkFixture(sdk_pair=args.sdk_pair)
     front = base._BoundedServer(("127.0.0.1", 443), base._ControlFront, base.server_context(base.PKI))
     thread = threading.Thread(target=front.serve_forever, daemon=True)
     try:

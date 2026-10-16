@@ -60,10 +60,11 @@ def dependencies_sha256(value):
 
 
 def build(source, binary, initializer, root, go, *, expected_binary_sha256, expected_go_sha256,
-          browser_permission=False, sdk_pair=False, node=None, node_modules=None,
+          browser_permission=False, sdk_pair=False, age_profile=False, node=None, node_modules=None,
           python_runtime=None, python_packages=None, expected_dependencies_sha256=None):
     base.require(type(browser_permission) is bool, "browser permission opt-in differs")
     base.require(type(sdk_pair) is bool and not (sdk_pair and browser_permission), "paired browser mode refused")
+    base.require(type(age_profile) is bool and (not age_profile or sdk_pair), "age profile requires paired Python payload")
     if sdk_pair:
         base.require(go is None and expected_go_sha256 is None
             and all(isinstance(path, Path) and path.is_absolute() and ".." not in path.parts
@@ -113,6 +114,9 @@ def build(source, binary, initializer, root, go, *, expected_binary_sha256, expe
             base.bind(LIBATOMIC, "/usr/lib/x86_64-linux-gnu/libatomic.so.1")]
     else:
         check["command"] += ["--expected-go-sha256", expected_go_sha256]
+    if age_profile:
+        services["provider"]["command"].append("--age-profile")
+        check["command"].append("--age-profile")
     if browser_permission:
         check["command"].append("--browser-permission")
         check["stdin_open"] = True
@@ -154,9 +158,12 @@ def build(source, binary, initializer, root, go, *, expected_binary_sha256, expe
 
 
 def pair_kwargs(args):
+    base.require(not getattr(args, "age_profile", False) or getattr(args, "sdk_pair", False),
+        "age profile requires paired Python payload")
     if not getattr(args, "sdk_pair", False):
         return {}
-    return {"sdk_pair": True, **{name: getattr(args, name) for name in
+    return {"sdk_pair": True, **({"age_profile": True} if getattr(args, "age_profile", False) else {}),
+        **{name: getattr(args, name) for name in
         ("node", "node_modules", "python_runtime", "python_packages", "expected_dependencies_sha256")}}
 
 
@@ -225,6 +232,8 @@ def prepare(args):
         receipt.pop("goSha256")
         receipt.update(schema="serverware.privateGmailSdkPreparation/v2", nodeSha256=profiles.NODE_SHA256,
             sdkDependenciesSha256=args.expected_dependencies_sha256)
+    if getattr(args, "age_profile", False):
+        receipt["ageProfile"] = True
     if args.write:
         (args.job_root / "runtime").mkdir(mode=0o700)
         for name, value in (("compose.json", config), ("preparation.json", receipt)):
@@ -245,6 +254,7 @@ def main():
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--browser-permission", action="store_true")
     parser.add_argument("--sdk-pair", action="store_true")
+    parser.add_argument("--age-profile", action="store_true")
     for name in ("go", "node", "node-modules", "python-runtime", "python-packages"):
         parser.add_argument("--" + name, type=Path)
     for name in ("expected-go-sha256", "expected-dependencies-sha256"):

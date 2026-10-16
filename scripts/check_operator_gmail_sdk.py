@@ -489,8 +489,13 @@ def client_environment(application, token, phase):
         "SERVERWARE_PROXY_TOKEN": token, "SERVERWARE_CA_FILE": str(inner), "SERVERWARE_PROXY_CA_FILE": str(outer)}
 
 
-def run_example(environment, seconds, *, command=COMMAND):
+def run_example(environment, seconds, *, command=COMMAND, config_file=None):
     require(command in (COMMAND, *profiles.COMMANDS.values()), "Gmail SDK fixed entrypoint differs")
+    if config_file is not None:
+        require(command == profiles.COMMANDS["python"] and config_file in
+            (Path("/client-work/gmail-age-unrestricted.json"), Path("/client-work/gmail-age-recent.json")),
+            "Gmail age configuration path differs")
+        command = (*command, "--config", str(config_file))
     require(0 < seconds <= 30 and set(environment) == {"LANG", "SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID",
         "SERVERWARE_PROXY_TOKEN", "SERVERWARE_CA_FILE", "SERVERWARE_PROXY_CA_FILE"}, "Gmail SDK process boundary differs")
     deadline = time.monotonic() + seconds
@@ -689,6 +694,9 @@ class GmailSdkCheck(base.GoogleRefreshCheck):
             self.deny(client + ":" + phase if client else phase, application, token, provider)
 
     def run(self):
+        if getattr(self.args, "age_profile", False):
+            from scripts.check_operator_gmail_sdk_age import run
+            return run(self)
         self.health(); self.admin_token = token_file(self.args.admin_token_file)
         initial = self.catalog()
         require(initial["revision"] == 1 and all(not initial[k] and initial["limits"][k]["retained"] == 0 for k in COLLECTIONS),
@@ -920,6 +928,7 @@ def run_checks(args):
             and args.combined_ca_file == TRUST_FILES["combined"], "Gmail SDK fixed endpoint or trust path differs")
         paired = getattr(args, "sdk_pair", False)
         selected_cases(paired)
+        require(not getattr(args, "age_profile", False) or paired, "age profile requires paired Python payload")
         require(not (paired and getattr(args, "browser_permission", False)), "paired browser mode refused")
         require((args.expected_go_sha256 is None and type(args.expected_dependencies_sha256) is str
             and HEX.fullmatch(args.expected_dependencies_sha256)) if paired else
@@ -933,11 +942,17 @@ def run_checks(args):
         return check.run()
     except Exception as error:
         paired = getattr(args, "sdk_pair", False) is True
-        phase = check.phase if check is not None and check.phase in ("startup", "revoke", "browser_permission", *selected_phases(paired)) else "startup"
+        extra = ()
+        schema = profiles.CHECK_SCHEMA if paired else SCHEMA
+        if getattr(args, "age_profile", False):
+            from scripts.check_operator_gmail_sdk_age import SCHEMA as schema
+            from scripts.operator_gmail_sdk_age_fixture import PHASES as age_phases
+            extra = tuple("age:" + value for value in (*age_phases, "revoke", "revoked"))
+        phase = check.phase if check is not None and check.phase in ("startup", "revoke", "browser_permission", *selected_phases(paired), *extra) else "startup"
         observation = getattr(check, "client_result", None)
         if type(observation) is not dict or observation.get("phase") != phase:
             observation = None
-        return {"schema": profiles.CHECK_SCHEMA if paired else SCHEMA, "ok": False, "syntheticOnly": True, "realGoogleVerified": False,
+        return {"schema": schema, "ok": False, "syntheticOnly": True, "realGoogleVerified": False,
             "productionReady": False, "phase": phase, "clientResult": observation,
             "failureSite": failure_site(error, Path(__file__).resolve().parents[1]),
             "error": "acceptance_check_failed" if isinstance(error, CheckFailure) else "acceptance_internal_failure"}
@@ -956,6 +971,7 @@ def main():
     parser.add_argument("--timeout-seconds", type=int, default=180)
     parser.add_argument("--browser-permission", action="store_true")
     parser.add_argument("--sdk-pair", action="store_true")
+    parser.add_argument("--age-profile", action="store_true")
     args = parser.parse_args()
     def expired(_signum, _frame):
         raise CheckFailure("Gmail SDK process deadline exceeded")

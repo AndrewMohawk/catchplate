@@ -141,6 +141,10 @@ const tests = [
       assert(await page.locator('#load-error').isVisible());
       await page.locator('[data-pending-select="' + ID + '"]').click();
       assert.equal(new URL(page.url()).pathname, '/approvals/' + ID); assert.equal(new URL(page.url()).hash, '#pending-actions');
+      assert((await selected(page).innerText()).includes('Permission name unavailable'));
+      const details = selected(page).locator('[data-pending-exact-details]');
+      assert.equal(await details.getAttribute('open'), null);
+      await details.locator('summary').click();
       assert((await selected(page).innerText()).includes(ID)); assert((await selected(page).innerText()).includes(INJECTED));
       assert(!(await page.locator('#pending-actions').innerText()).includes(PRIVATE));
       assert.equal(await page.locator('#pending-actions img, #pending-actions script').count(), 0);
@@ -164,10 +168,10 @@ const tests = [
   }],
   ['deep link survives reload and a missing exact request never falls back', async (browser, html, artifacts) =>
     fixture(browser, html, artifacts, 'deep-link', {path: '/approvals/' + ID, rows: [approval(), approval({id: OTHER})]}, async (page, state) => {
-      await ready(page); assert((await selected(page).innerText()).includes(ID));
-      assert(!(await selected(page).innerText()).includes(OTHER));
+      await ready(page); assert((await selected(page).textContent()).includes(ID));
+      assert(!(await selected(page).textContent()).includes(OTHER));
       await page.reload({waitUntil: 'domcontentloaded'}); await ready(page);
-      assert.equal(new URL(page.url()).pathname, '/approvals/' + ID); assert((await selected(page).innerText()).includes(ID));
+      assert.equal(new URL(page.url()).pathname, '/approvals/' + ID); assert((await selected(page).textContent()).includes(ID));
       state.rows = [approval({id: OTHER})]; await page.locator('#pending-actions-refresh').click(); await ready(page);
       assert((await selected(page).innerText()).includes('not found'));
       assert(!(await selected(page).innerText()).includes(OTHER)); assert.equal(new URL(page.url()).pathname, '/approvals/' + ID);

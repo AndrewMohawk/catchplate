@@ -87,6 +87,34 @@ function pendingApprovalLocation(pathname) {
   const id = pathname.slice('/approvals/'.length);
   return pendingApprovalUUID.test(id) ? {id, invalid: false} : {id: null, invalid: true};
 }
+function projectPendingCatalog(value) {
+  // Labels only: never retain credentials, authority documents or client tokens.
+  if (!value || !['applications', 'credentials', 'access_rules'].every(key => Array.isArray(value[key]) && value[key].length <= 1024)) return null;
+  const fields = {applications: ['id', 'principal_id', 'name', 'status'], credentials: ['id', 'name', 'status'],
+    access_rules: ['id', 'route_id', 'application_id', 'credential_id', 'name', 'status']};
+  return Object.fromEntries(Object.entries(fields).map(([collection, keys]) => [collection,
+    value[collection].map(item => Object.fromEntries(keys.map(key => [key, typeof item?.[key] === 'string' ? item[key] : null])))]));
+}
+function pendingApprovalLabels(item, catalog) {
+  const match = (collection, key, id, kind) => {
+    if (!catalog || !id) return {label: kind + ' name unavailable', record: null};
+    const found = catalog[collection].filter(record => record[key] === id);
+    if (found.length > 1) return {label: 'Ambiguous ' + kind.toLowerCase(), record: null};
+    if (!found.length) return {label: 'Unknown ' + kind.toLowerCase(), record: null};
+    const record = found[0];
+    if (record.status === 'revoked') return {label: 'Revoked ' + kind.toLowerCase(), record: null};
+    if (record.status !== 'active' || !record.id || !record.name || record.name.length > 128 || /[\u0000-\u001f\u007f]/.test(record.name))
+      return {label: kind + ' name unavailable', record: null};
+    return {label: record.name, record};
+  };
+  const client = match('applications', 'principal_id', item.principal_id, 'Client');
+  const credential = match('credentials', 'id', item.credential_id, 'Credential');
+  const permission = match('access_rules', 'route_id', item.route_id, 'Permission');
+  // An exact route label is not enough if its current resource bindings changed.
+  if (permission.record && (!client.record || !credential.record || permission.record.application_id !== client.record.id ||
+      permission.record.credential_id !== credential.record.id)) permission.label = 'Permission binding unavailable or changed';
+  return {client: client.label, credential: credential.label, permission: permission.label};
+}
 function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
   const el = id => document.getElementById(id);
   const node = (tag, text, className) => {
@@ -97,7 +125,7 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
   };
   let visible = false, generation = 0, controller = null, loading = false;
   let capability = null, rows = null, requestedId = null, invalidLink = false, opener = null, opening = false;
-  let selectedRecord, hostReview = null;
+  let selectedRecord, hostReview = null, publicCatalog = null;
   const hostMode = () => capability?.mode === 'host_trusted_v1';
   const status = message => { el('pending-actions-status').textContent = message; };
   const hold = id => {
@@ -141,22 +169,36 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
       ['Policy', item.policy_hash || 'Unavailable']]) details.append(node('dt', label), node('dd', value));
     return details;
   }
+  function exactDetails(item) {
+    const details = node('details'); details.dataset.pendingExactDetails = item.id;
+    details.append(node('summary', 'Exact request details'), metadata(item));
+    return details;
+  }
+  function namedSummary(item) {
+    const names = pendingApprovalLabels(item, publicCatalog), summary = node('div');
+    summary.dataset.pendingNames = item.id;
+    summary.append(node('p', 'Client: ' + names.client, 'small'), node('p', 'Credential: ' + names.credential, 'small'));
+    return {names, summary};
+  }
   function renderSelected() {
     const selected = el('pending-actions-selected');
     selected.replaceChildren(); selected.hidden = !requestedId && !invalidLink;
     if (invalidLink) { selected.append(node('p', 'This approval link is invalid. No private review was requested.')); return; }
     if (!requestedId) return;
-    selected.append(node('h2', 'Selected request'), node('code', requestedId));
-    if (rows === null) { selected.append(node('p', 'Refresh pending actions to locate this exact request.')); return; }
+    if (rows === null) { selected.append(node('h2', 'Selected request'), node('code', requestedId), node('p', 'Refresh pending actions to locate this exact request.')); return; }
     const item = rows.find(row => row.id === requestedId) || (selectedRecord?.id === requestedId ? selectedRecord : null);
     if (!item) {
+      selected.append(node('h2', 'Selected request'), node('code', requestedId));
       selected.append(node('p', selectedRecord === null ?
         'This request was not found. No other request was selected.' :
         'Loading the status of this exact request…'));
       return;
     }
+    const {names, summary} = namedSummary(item);
+    selected.append(node('h2', names.permission), summary,
+      node('p', 'Names are labels from the current catalog and may have changed. The exact request identifiers and review binding remain authoritative.', 'small muted'));
     selected.append(node('p', 'Status: ' + item.status[0].toUpperCase() + item.status.slice(1), 'badge'));
-    selected.append(metadata(item));
+    selected.append(exactDetails(item));
     if (item.status !== 'pending') {
       if (hostMode()) {
         selected.append(node('p', item.status === 'approved' ?
@@ -240,8 +282,9 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
         finally { if (version === generation) { opening = false; render(); } }
       }); selected.append(button); return;
     }
-    selected.append(node('h3', 'Request review'), node('p', hostApprovalWarning, 'notice'),
-      node('pre', JSON.stringify(hostReview.document, null, 2)),
+    const reviewedDetails = node('details'); reviewedDetails.dataset.hostReviewDetails = item.id;
+    reviewedDetails.append(node('summary', 'Exact reviewed request · headers, queries and hashes'), node('pre', JSON.stringify(hostReview.document, null, 2)));
+    selected.append(node('h3', 'Request review'), node('p', hostApprovalWarning, 'notice'), reviewedDetails,
       node('p', 'Request body contents are not displayed; the body hash binds this approval to the exact submitted bytes. Approve only if you recognize the request.', 'notice'),
       node('p', 'Approval permits one explicit retry of exactly this request; it does not execute it. Never automatically replay an uncertain provider operation.', 'small muted'));
     for (const [decision, label] of [['approve', 'Approve once'], ['deny', 'Deny']]) {
@@ -275,9 +318,10 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
     el('pending-actions-access').textContent = openingReason();
     el('pending-actions-list').replaceChildren(...(rows || []).map(item => {
       const card = node('article', undefined, 'card'); card.dataset.pendingApprovalId = item.id;
+      const {names, summary} = namedSummary(item);
       const heading = node('div', undefined, 'connection-head');
-      heading.append(node('h3', item.route_id), node('span', Date.parse(item.expires_at) <= Date.now() ? 'Expired · refresh status' : 'Pending', 'badge'));
-      card.append(heading, node('p', item.method + ' · ' + (item.principal_id || 'Principal unavailable'), 'small'), node('p', 'Expires ' + item.expires_at, 'small muted'));
+      heading.append(node('h3', names.permission), node('span', Date.parse(item.expires_at) <= Date.now() ? 'Expired · refresh status' : 'Pending', 'badge'));
+      card.append(heading, summary, node('p', item.method + ' · Expires ' + new Date(item.expires_at).toLocaleString(), 'small muted'), exactDetails(item));
       const button = node('button', 'Select request', 'secondary'); button.dataset.pendingSelect = item.id;
       button.disabled = loading || opening;
       button.addEventListener('click', () => {
@@ -363,17 +407,20 @@ function createPendingActionsView({onAuthenticationLost = () => {}} = {}) {
   }
   function authenticationLost() {
     ++generation; controller?.abort(); controller = null; loading = false; opening = false;
-    capability = null; rows = null; selectedRecord = undefined; hostReview = null;
+    capability = null; rows = null; selectedRecord = undefined; hostReview = null; publicCatalog = null;
     status('Your Serverware session could not be verified. Reload and sign in again.'); render();
   }
   el('pending-actions-refresh').addEventListener('click', () => { void refresh(); });
   window.addEventListener('pagehide', () => show(false));
   render();
-  return {show, refresh, authenticationLost, setReviewOpener(value) {
+  return {show, refresh, authenticationLost, setCatalog(value) {
+    publicCatalog = projectPendingCatalog(value);
+    if (visible) render(); // Display-only: no fetch, review reset, decision or token change.
+  }, setReviewOpener(value) {
     if (value !== null && typeof value !== 'function') throw new Error('Invalid review controller');
     opener = value; render();
   }};
 }
 if (typeof module !== 'undefined' && module.exports) module.exports = {
   projectApprovalCapabilities, projectApprovalMetadata, projectPendingApprovals, projectHostApprovalReview,
-  pendingApprovalLocation, createPendingActionsView};
+  pendingApprovalLocation, projectPendingCatalog, pendingApprovalLabels, createPendingActionsView};

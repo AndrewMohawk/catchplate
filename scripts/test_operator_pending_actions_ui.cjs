@@ -26,6 +26,12 @@ const approval = (changes = {}) => ({id: ID, status: 'pending', route_id: 'synth
   url: 'sha256:' + 'a'.repeat(64), requested_at: new Date(NOW - 1000).toISOString(), expires_at: new Date(NOW + 600000).toISOString(),
   principal_id: 'agent:synthetic-client', credential_id: 'synthetic-credential', credential_version: 1,
   policy_hash: 'sha256:' + 'b'.repeat(64), ...changes});
+const labelCatalog = () => ({
+  applications: [{id: 'client-id', principal_id: approval().principal_id, name: 'Release automation', status: 'active'}],
+  credentials: [{id: approval().credential_id, name: 'Production reporting key', status: 'active'}],
+  access_rules: [{id: 'permission-id', route_id: approval().route_id, name: 'Read release status', status: 'active',
+    application_id: 'client-id', credential_id: approval().credential_id}]
+});
 const hostApproval = (changes = {}) => approval({assurance: 'host-trusted', reviewer_id: 'user:operator',
   consumed_at: null, approved_until: null, ...changes});
 const hostReview = (changes = {}) => ({assurance: 'host-trusted', approval: hostApproval(),
@@ -116,6 +122,55 @@ function workspaceFixture(handler) {
     verify() { assert.deepEqual(faults, []); }};
 }
 const tests = [
+  ['catalog labels retain only public join fields and require exact unique active bindings', () => {
+    const api = load(), raw = labelCatalog();
+    raw.credentials[0].secret = PRIVATE; raw.applications[0].client_token = PRIVATE;
+    raw.access_rules[0].authority = PRIVATE;
+    const projected = api.projectPendingCatalog(raw);
+    assert(!JSON.stringify(projected).includes(PRIVATE));
+    assert.deepEqual(copy(api.pendingApprovalLabels(approval(), projected)), {
+      client: 'Release automation', credential: 'Production reporting key', permission: 'Read release status'});
+    for (const value of [null, {}, {...raw, credentials: null}, {...raw, applications: Array(1025).fill({})}])
+      assert.equal(api.projectPendingCatalog(value), null);
+    for (const [collection, label] of [['applications', 'Client'], ['credentials', 'Credential'], ['access_rules', 'Permission']]) {
+      const key = {applications: 'client', credentials: 'credential', access_rules: 'permission'}[collection];
+      for (const [change, expected] of [
+        [items => [], 'Unknown ' + label.toLowerCase()],
+        [items => [items[0], items[0]], 'Ambiguous ' + label.toLowerCase()],
+        [items => [{...items[0], status: 'revoked'}], 'Revoked ' + label.toLowerCase()],
+        [items => [{...items[0], name: 'line\nbreak'}], label + ' name unavailable'],
+        [items => [{...items[0], status: 'unknown'}], label + ' name unavailable']]) {
+        const changed = labelCatalog(); changed[collection] = change(changed[collection]);
+        const names = api.pendingApprovalLabels(approval(), api.projectPendingCatalog(changed));
+        assert.equal(names[key], expected);
+        if (key !== 'permission') assert.equal(names.permission, 'Permission binding unavailable or changed');
+      }
+    }
+    for (const patch of [{application_id: 'other-client'}, {credential_id: 'other-credential'}]) {
+      const changed = labelCatalog(); Object.assign(changed.access_rules[0], patch);
+      assert.equal(api.pendingApprovalLabels(approval(), api.projectPendingCatalog(changed)).permission,
+        'Permission binding unavailable or changed');
+    }
+    assert.equal(api.pendingApprovalLabels(approval(), null).client, 'Client name unavailable');
+  }],
+  ['named pending cards and selection use text nodes while exact review identifiers remain in details', async () => {
+    const f = fixture({rows: [approval()]}), catalog = labelCatalog();
+    catalog.applications[0].name = INJECTED;
+    f.view.setCatalog(catalog); assert.equal(f.calls.length, 0);
+    await f.show({requestedId: ID});
+    for (const target of ['pending-actions-list', 'pending-actions-selected']) {
+      const elements = descendants(f.node(target)), shown = f.node(target).textContent;
+      assert(shown.includes(INJECTED)); assert(shown.includes('Production reporting key'));
+      assert(shown.includes('Read release status')); assert(!elements.some(item => item.tagName === 'img'));
+      const detail = elements.find(item => item.dataset.pendingExactDetails === ID);
+      for (const exact of [ID, approval().principal_id, approval().route_id, approval().credential_id,
+        approval().url, approval().expires_at, approval().policy_hash]) assert(detail.textContent.includes(exact));
+    }
+    assert(f.node('pending-actions-selected').textContent.includes('may have changed'));
+    f.view.setCatalog(null);
+    assert(f.node('pending-actions-selected').textContent.includes('Client name unavailable'));
+    assert.equal(f.calls.length, 2); f.verify();
+  }],
   ['closed capabilities reject malformed or contradictory authority', () => {
     const api = load(); assert.deepEqual(copy(api.projectApprovalCapabilities(capability())), capability());
     for (const change of [{extra: true}, {schema: 'other'}, {can_list: 1}, {can_open_native_review: 'false'},
@@ -348,6 +403,23 @@ const tests = [
   }],
 ];
 const hostTests = [
+  ['catalog label refresh preserves the exact open host review without a new request or decision', async () => {
+    const f = fixture({host: true, handler: ({path}) => path === CAP ? response(hostCapability()) :
+      path === HOST ? response([hostApproval()]) : response(hostReview())});
+    f.view.setCatalog(labelCatalog()); await f.show({requestedId: ID});
+    await f.buttons()[0].events.click(); await flush();
+    assert.equal(f.calls.length, 3);
+    const updated = labelCatalog(); updated.access_rules[0].name = 'Renamed permission label';
+    f.view.setCatalog(updated);
+    assert(f.node('pending-actions-selected').textContent.includes('Renamed permission label'));
+    const details = descendants(f.node('pending-actions-selected')).find(item => item.dataset.hostReviewDetails === ID);
+    assert(details.textContent.includes(hostReview().document.body_sha256));
+    assert.deepEqual(f.buttons().map(button => button.textContent), ['Approve once', 'Deny']);
+    assert(f.buttons().every(button => !button.disabled)); assert.equal(f.calls.length, 3);
+    assert(!f.calls.some(call => call.path.endsWith('/decision')));
+    f.view.authenticationLost(); await f.show({requestedId: ID});
+    assert(!f.node('pending-actions-selected').textContent.includes('Renamed permission label')); f.verify();
+  }],
   ['host capability is distinct from native and rejects contradictory availability', () => {
     const api = load(); assert.deepEqual(copy(api.projectApprovalCapabilities(hostCapability())), hostCapability());
     for (const patch of [{mode: 'native'}, {can_open_native_review: true}, {can_review: false},

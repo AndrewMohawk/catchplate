@@ -68,6 +68,7 @@ else {
   connect = createConnectView(workspace, applications, proxy);
   const notifications = createNotificationsView(workspace);
   const pendingActions = createPendingActionsView({onAuthenticationLost: workspace.authenticationLost});
+  workspace.subscribe(() => pendingActions.setCatalog(workspace.state.catalog));
   pendingActions.setReviewOpener(id => {
     if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id))
       throw new Error('Invalid protected review identifier');

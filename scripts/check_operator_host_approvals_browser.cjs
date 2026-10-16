@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const {mkdtempSync} = require('node:fs');
 const {join} = require('node:path');
-const {fixture, NOW} = require('./test_operator_catalog_browser.cjs');
+const {fixture, NOW, application, credential, rule} = require('./test_operator_catalog_browser.cjs');
 const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
 const ORIGIN = 'https://operator-catalog.example.test', PREFIX = '/api/operator-demo/approvals';
 const ID = '11111111-1111-4111-8111-111111111111', OTHER = '22222222-2222-4222-8222-222222222222';
@@ -18,7 +18,11 @@ async function main() {
   const directory = mkdtempSync('/tmp/serverware-host-approval-smoke-'), requests = [], errors = [];
   const browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-background-networking']});
   try {
-    await fixture(browser, {}, async (page, state) => {
+    const savedClient = application({name: 'Release automation', principal_id: row(ID).principal_id});
+    const savedCredential = credential({id: row(ID).credential_id, name: 'Production reporting key'});
+    const savedRule = rule({name: 'Submit release report', route_id: row(ID).route_id,
+      application_id: savedClient.id, credential_id: savedCredential.id, upstream_url: row(ID).url, methods: ['POST']});
+    await fixture(browser, {applications: [savedClient], credentials: [savedCredential], rules: [savedRule]}, async (page, state) => {
       const records = new Map([ID, OTHER].map(id => [id, row(id)]));
       const reply = (route, value) => route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(value)});
       page.on('pageerror', error => errors.push(error.message));
@@ -51,9 +55,27 @@ async function main() {
       await page.getByRole('button', {name: 'Review request', exact: true}).click();
       await page.getByRole('button', {name: 'Approve once', exact: true}).waitFor();
       const selected = page.locator('#pending-actions-selected');
+      for (const name of [savedClient.name, savedCredential.name, savedRule.name])
+        assert((await selected.innerText()).includes(name));
+      assert((await selected.innerText()).includes('may have changed'));
+      const exact = selected.locator('[data-pending-exact-details]');
+      assert.equal(await exact.getAttribute('open'), null);
+      await exact.locator('summary').click();
+      for (const value of [ID, row(ID).principal_id, row(ID).credential_id, row(ID).route_id, row(ID).url, DIGEST])
+        assert((await exact.innerText()).includes(value));
+      await exact.locator('summary').click();
+      const reviewed = selected.locator('[data-host-review-details]');
+      await reviewed.locator('summary').click();
+      assert((await reviewed.innerText()).includes('body_sha256'));
+      assert((await reviewed.innerText()).includes(DIGEST));
+      await reviewed.locator('summary').click();
       assert((await selected.innerText()).includes('Request body contents are not displayed'));
       assert((await selected.innerText()).includes('server administrator can bypass'));
       await page.screenshot({path: join(directory, 'desktop-review.png'), fullPage: true});
+      await page.setViewportSize({width: 390, height: 844});
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await page.screenshot({path: join(directory, 'mobile-named-review.png'), fullPage: true});
+      await page.setViewportSize({width: 1280, height: 960});
       await page.getByRole('button', {name: 'Approve once', exact: true}).click();
       await selected.getByText(/Explicitly retry exactly the same request once/).waitFor();
       await page.locator('[data-pending-select="' + OTHER + '"]').click();
@@ -69,7 +91,8 @@ async function main() {
       assert.deepEqual(state.consoleErrors, []); assert.deepEqual(errors, []);
       assert.equal(new URL(page.url()).pathname, '/approvals/' + OTHER);
     });
-    console.log(JSON.stringify({ok: true, scope: 'rendered synthetic host-approval UI only', requests, errors, screenshots: directory}));
+    console.log(JSON.stringify({ok: true, scope: 'rendered named pending actions and synthetic host-approval UI only',
+      liveRequests: 0, providerRequests: 0, requests, errors, screenshots: directory}));
   } finally { await browser.close(); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

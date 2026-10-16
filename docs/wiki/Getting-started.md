@@ -10,10 +10,9 @@ Need to create the provider integration first? Use the [GitHub App walkthrough](
 
 ## 1. Save the provider credential
 
-1. Open **Credentials → Add credential**.
-2. Select the provider. For GitHub, choose a personal access token or an existing GitHub App installation; these have different inputs and verification behavior.
-3. Give it a useful name, such as `Issue triage — GitHub`, and complete the provider form.
-4. Save and review the returned credential. Saving in this mode creates no client, token or permission.
+1. Open **Credentials** and choose a provider directly. GitHub personal access tokens and GitHub Apps have separate choices.
+2. Paste the key or complete the provider's required details. The suggested credential name is already filled in; change it if you want.
+3. Choose **Save credential** and review the saved result. No client, proxy token or permission is created. Ordinary key forms also support Enter to save.
 
 For Google, use the offered consent flow instead of pasting access or refresh tokens into the manual-key form. If the provider is unavailable, follow [provider setup](https://github.com/AndrewMohawk/serverware/wiki/Proxy-and-CA); do not imitate a missing provider preset with a generic key.
 

@@ -24,13 +24,15 @@
         <article id="connect-method-choice" class="card"><h2>Choose a provider or set up manually</h2>
           <div id="connect-common-app-picker" hidden><label for="connect-common-search">Find an app</label><input id="connect-common-search" type="search" placeholder="Search AI, messaging, payments, developer tools…" autocomplete="off"><label for="connect-common-category">Category</label><select id="connect-common-category"><option value="all">All common apps</option><option value="ai">AI</option><option value="services">Work and developer tools</option></select><div id="connect-common-apps" class="actions"></div><p id="connect-common-empty" class="small muted" hidden>No apps match this search.</p><p class="small muted">Choose an app for guided keys and scoped permissions. A saved key grants no access. Destinations are approved separately in <a href="#proxy">Proxy setup</a>.</p></div>
           <div class="actions"><button id="connect-use-saved" class="secondary" disabled>Use a saved credential</button><button id="connect-google" class="secondary" disabled>Google connection unavailable</button><button id="connect-use-github" class="secondary" disabled>GitHub</button><button id="connect-use-npm" class="secondary" disabled>npm</button><button id="connect-use-x" class="secondary" disabled>X · username lookup</button><button id="connect-use-alchemy" class="secondary" disabled>Alchemy · chain status</button><button id="connect-use-key" class="secondary" disabled>Manual API key</button></div>
+          <button id="connect-x-account" class="secondary" hidden disabled>Connect X account · text posting</button>
+          <details><summary>Provider availability and setup details</summary>
           <p id="connect-ecr-status" class="small muted">AWS credentials are saved in Credentials. ECR publishing needs advertised owner and proxy readiness; a manual header key is not a substitute.</p>
           <p id="connect-google-status" class="small muted">Google connection is unavailable until this deployment advertises its supported consent profile. Do not paste Google access or refresh tokens.</p>
-          <button id="connect-x-account" class="secondary" hidden disabled>Connect X account · text posting</button>
           <p id="connect-github-status" class="small muted">GitHub presets require an enabled destination and their paired proxy implementation.</p>
           <p id="connect-npm-status" class="small muted">npm metadata lookup is unavailable until this deployment advertises its paired proxy support. No install, publish, tarball downloads or npm audit.</p>
           <p id="connect-x-status" class="small muted">X app-only username lookup requires its advertised preset and approved api.x.com destination. No posting or user OAuth.</p>
           <p id="connect-alchemy-status" class="small muted">Alchemy chain-status reads require their advertised JSON-RPC preset and a separately approved mainnet or Sepolia origin. A manual key is not an Alchemy preset.</p>
+          </details>
         </article>
         <form id="connect-credential-form" class="card" autocomplete="off" hidden><fieldset id="connect-credential-fields" disabled>
           <h2 id="connect-credential-heading">Provider connection</h2>
@@ -38,8 +40,10 @@
           <div id="connect-credential-new">
             <div id="connect-github-type-group" hidden><label for="connect-github-type">GitHub connection</label><select id="connect-github-type" disabled><option value="github_token_v1">Personal access token</option><option value="github_app_v1">GitHub App</option></select></div>
             <label for="connect-credential-name">Give this credential a name</label><input id="connect-credential-name" maxlength="128" placeholder="My API key" required>
+            <details id="connect-credential-auth-details"><summary>Authentication settings · Bearer by default</summary>
             <div id="connect-credential-auth-group"><label for="connect-credential-auth-type">How the provider expects it</label><select id="connect-credential-auth-type"><option value="bearer">Bearer token</option><option value="header">API key in a custom header</option></select></div>
             <div id="connect-credential-header-group" hidden><label for="connect-credential-header-name">Provider header name</label><input id="connect-credential-header-name" maxlength="128" placeholder="X-API-Key" disabled></div>
+            </details>
             <div id="connect-provider-secret-group"><label id="connect-credential-secret-label" for="connect-credential-secret">Provider key or token</label><input id="connect-credential-secret" type="password" maxlength="8192" autocomplete="new-password" spellcheck="false" required>
             <p class="small muted">Stored encrypted by this development server. Cleared when submitted, never returned to apps. Saving it does not test the provider key or grant access.</p></div>
             <p id="connect-github-token-note" class="small muted" hidden>Use a GitHub personal access token limited to the intended repositories and issue permissions. Serverware does not renew it. Apps use a public dummy token, never this provider token.</p>
@@ -191,9 +195,26 @@ user-agent</textarea><p class="small muted">Provider authentication and JSON Con
       <details id="overview-diagnostics" class="card"><summary>Diagnostics (optional)</summary><p>Inspect an optional synthetic connection check without changing your saved connections. Opening diagnostics does not create resources, renew tokens or send a request.</p><button id="overview-try-demo" type="button" class="secondary" aria-expanded="false" aria-controls="overview-demo-panel">Inspect synthetic connection check</button><article id="overview-demo-panel" class="card" hidden><h2>Synthetic API connection check</h2><p>These saved permissions target <code>https://demo-upstream:8443/echo</code>, using the methods shown on each row. This diagnostic fixture is not a provider integration. Choose the exact saved application you intend to use.</p><p id="overview-demo-status" role="status" aria-live="polite">Loading saved permissions...</p><div id="overview-demo-list" class="stack"></div><p class="small muted">Client setup needs that application's saved proxy token and the public CA. Serverware does not retrieve, renew, or create a token by opening this list. A request is sent only when you explicitly run the client.</p></article></details>
     </section>
     <section id="credentials" class="page" aria-labelledby="credentials-title" hidden>
-      <h1 id="credentials-title">Credentials</h1><p class="intro">Provider accounts and keys held by Serverware, such as a GitHub App, Google account or npm token. Save each credential once, then separately choose which <a href="#applications">clients</a> may use it. Saving a credential grants no access.</p>
-      <label for="credential-storage-type">What would you like to save?</label>
-      <select id="credential-storage-type" disabled><option value="manual">Provider account or API key</option><option id="credential-storage-aws-option" value="aws" disabled>AWS credentials</option></select>
+      <h1 id="credentials-title">Credentials</h1><p class="intro">Choose a provider and save its key or account. Secrets stay in Serverware; client access is a separate, optional next step.</p>
+      <article id="credential-form" class="card"><fieldset id="credential-fields" disabled>
+        <div class="heading"><h2>Add a credential</h2><span class="small muted">Saving grants no access</span></div>
+        <label for="credential-provider-search">Find a provider</label><input id="credential-provider-search" type="search" placeholder="Search providers…" autocomplete="off">
+        <div id="credential-provider-picker" class="credential-provider-grid">
+          <button type="button" class="secondary" data-credential-provider="github_token" disabled>GitHub personal access token</button>
+          <button type="button" class="secondary" data-credential-provider="github_app" disabled>GitHub App</button>
+          <button type="button" class="secondary" data-credential-provider="npm" disabled>npm token</button>
+          <button id="credential-google-connect" type="button" class="secondary" data-credential-provider="google" disabled>Google account</button>
+          <button type="button" class="secondary" data-credential-provider="aws" disabled>AWS credentials</button>
+          <button type="button" class="secondary" data-credential-provider="x" disabled>X app token</button>
+          <button id="credential-x-account" type="button" class="secondary" data-credential-provider="x_account" disabled>X account</button>
+          <button type="button" class="secondary" data-credential-provider="alchemy" disabled>Alchemy key</button>
+          <button type="button" class="secondary" data-credential-provider="manual" disabled>Manual API key</button>
+          <div id="credential-common-providers" class="credential-provider-grid"></div>
+        </div><p id="credential-provider-empty" class="small muted" hidden>No providers match this search.</p>
+        <p class="small muted credential-safety-note">Use a least-privilege key. Provider secrets are never included in client configuration.</p>
+        <button id="credential-add" type="button" hidden>Add credential</button>
+      </fieldset></article>
+      <select id="credential-storage-type" hidden aria-label="Credential editor" disabled><option value="manual">Provider account or API key</option><option id="credential-storage-aws-option" value="aws" disabled>AWS credentials</option></select>
       <p id="aws-storage-availability" class="small muted" hidden>AWS credential storage is unavailable until advertised by this deployment.</p>
       <form id="aws-credential-form" class="card" autocomplete="off" hidden><fieldset id="aws-credential-fields" disabled>
         <h2>Save AWS credentials</h2><p class="notice">Saving grants no client access. ECR needs its own scoped permission and a separate review of each staged image.</p>
@@ -206,8 +227,8 @@ user-agent</textarea><p class="small muted">Provider authentication and JSON Con
           <label for="aws-credential-expires-at">Session expires at (UTC)</label><input id="aws-credential-expires-at" maxlength="20" placeholder="2026-12-31T23:59:59Z" autocomplete="off" spellcheck="false" disabled>
         </div>
         <p class="small muted">Enter the complete tuple issued together by AWS. Temporary credentials require both a session token and an exact UTC expiry. No credential discovery or automatic renewal. Access key IDs and secrets are never returned by the inventory; they are cleared on submission, kind changes and navigation. No AWS validation request is made.</p>
-        <button id="aws-credential-save" type="submit">Save AWS credentials</button>
-      </fieldset><p id="aws-credential-status" role="status" aria-live="polite"></p></form>
+        <div class="actions"><button id="aws-credential-save" type="submit">Save AWS credentials</button></div>
+      </fieldset><button id="aws-credential-cancel" type="button" class="secondary">Choose another provider</button><p id="aws-credential-status" role="status" aria-live="polite"></p></form>
       <section id="aws-replace-panel" class="card" aria-labelledby="aws-replace-title" hidden>
         <h2 id="aws-replace-title">Replace AWS credentials</h2>
         <p>Replace the entire tuple together. The saved identity is retained; no application permission is granted. This does not revoke the old credentials at AWS.</p>
@@ -224,8 +245,7 @@ user-agent</textarea><p class="small muted">Provider authentication and JSON Con
         </fieldset></form>
       </section>
       <p id="aws-replace-status" role="status" aria-live="polite"></p>
-      <article id="credential-form" class="card"><fieldset id="credential-fields" disabled><h2>Add a credential</h2><p>Choose GitHub App or personal access token, Google, npm, X, Alchemy, or a manual API key. Available options depend on this instance. This saves a credential only; you can assign clients later.</p><button id="credential-add" type="button">Add credential</button></fieldset></article>
-      <details class="card"><summary>Google account consent and recovery</summary><p id="credential-oauth-status">Google connection is unavailable until this deployment advertises its supported consent profile. Do not paste Google access or refresh tokens.</p><button id="credential-google-connect" disabled>Google account connection unavailable</button></details><div class="heading"><h2>Saved credentials</h2><button id="credentials-refresh" class="secondary">Refresh</button></div><p class="small muted">Remove permissions before revoking a credential. Local revocation does not revoke the key at its provider.</p><p id="credential-action-status" role="status" aria-live="polite"></p><div id="credentials-list" class="stack"></div>
+      <details class="card"><summary>Google account availability and recovery</summary><p id="credential-oauth-status">Google connection is unavailable until this deployment advertises its supported consent profile. Do not paste Google access or refresh tokens.</p></details><div class="heading"><h2>Saved credentials</h2><button id="credentials-refresh" class="secondary">Refresh</button></div><p class="small muted">Remove permissions before revoking a credential. Local revocation does not revoke the key at its provider.</p><p id="credential-action-status" role="status" aria-live="polite"></p><div id="credentials-list" class="stack"></div>
       <section id="x-account-panel" class="card" aria-labelledby="x-account-title" hidden>
         <h2 id="x-account-title">Connect an X account</h2>
         <p>Authorize the saved X application, then grant posting to a Serverware app separately. Do not paste X access or refresh tokens.</p>

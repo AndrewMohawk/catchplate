@@ -187,8 +187,8 @@ async function privacy(page) {
   assert(!JSON.stringify(storage).includes(SECRET));
 }
 async function credentialForm(page) {
-  await ready(page); await view(page, 'credentials'); await page.locator('#credential-add').click();
-  await page.locator('#connect-use-key').click(); await page.locator('#connect-credential-name').fill('Recovery test key');
+  await ready(page); await view(page, 'credentials'); await page.locator('#credentials [data-credential-provider="manual"]').click();
+  await page.locator('#connect-credential-name').fill('Recovery test key');
   await page.locator('#connect-credential-secret').fill(SECRET);
 }
 async function held(page) {

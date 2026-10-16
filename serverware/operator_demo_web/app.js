@@ -58,7 +58,7 @@ else {
   const workspace = createOperatorWorkspace();
   let reauthorization; let xAccounts; let connect;
   createCredentialsView(workspace, {reauthorize: id => reauthorization.open(id), disconnectX: id => xAccounts.disconnect(id),
-    add: () => connect.addCredential(), use: id => connect.selectCredential(id)}); createAccessRulesView(workspace);
+    add: template => connect.addCredential(template), canAdd: () => connect.canAddCredential(), use: id => connect.selectCredential(id)}); createAccessRulesView(workspace);
   const applications = createApplicationsView(workspace);
   reauthorization = createGoogleReauthorizationView(workspace, applications);
   const proxy = createProxyView(workspace, applications); const audit = createAuditView(workspace);

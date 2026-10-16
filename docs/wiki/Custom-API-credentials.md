@@ -20,7 +20,10 @@ Never put the provider secret into the client, a URL, the dummy-value field, sou
 
 The operator must already have approved your API's HTTPS origin, for example `https://api.example.test`. Check **Proxy setup → Proxy destinations**. If the actual origin is absent, use the [destination configuration procedure](https://github.com/AndrewMohawk/serverware/wiki/Proxy-and-CA#let-the-proxy-reach-a-new-provider) with the deployment owner. Preparing a destination change is not live activation; a permission cannot add a host or wildcard.
 
-Open **Credentials → Add credential → Manual API key**:
+Open **Credentials → Manual API key**:
+
+Bearer authentication is the default. For a custom-header API, expand
+**Authentication settings** and select **API key in a custom header**.
 
 | Field | Bearer-token API | Custom-header API |
 | --- | --- | --- |

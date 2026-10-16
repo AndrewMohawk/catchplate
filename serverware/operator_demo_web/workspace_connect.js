@@ -58,6 +58,34 @@ function createConnectView(workspace, applications, proxy) {
   const githubCreationAvailable = () => newGithubApp() ? githubAppDestinationAvailable(catalog()) :
     element('connect-github-type').value === 'github_token_v1' && Boolean(projectGithubCapability(catalog()?.capabilities.github));
   const writable = () => Boolean(catalog() && !workspace.state.busy && !workspace.state.uncertain);
+  const canAddCredential = () => writable() && !checkpoint && connectionMethod !== 'google' && workspace.ready('credentials');
+  function credentialTemplateAvailable(template) {
+    if (!template || !['key', 'github', 'npm', 'x', 'alchemy', 'common'].includes(template.method)) return false;
+    if (template.method === 'common') return Boolean(commonAppPreset(catalog(), template.appPreset));
+    if (template.method === 'github') return template.githubType === 'github_app_v1' ? githubAppDestinationAvailable(catalog()) :
+      template.githubType === 'github_token_v1' && Boolean(catalog()?.capabilities.github);
+    if (template.method === 'npm') return Boolean(catalog()?.capabilities.npm);
+    if (template.method === 'x') return xDestinationAvailable(catalog());
+    if (template.method === 'alchemy') return alchemyDestinationAvailable(catalog());
+    return true;
+  }
+  function chooseCredentialTemplate(template) {
+    if (!credentialTemplateAvailable(template)) return false;
+    connectionMethod = template.method; selectedCommonApp = template.appPreset || '';
+    if (template.method === 'github') element('connect-github-type').value = template.githubType;
+    const names = {key: 'API key', github: template.githubType === 'github_app_v1' ? 'GitHub App' : 'GitHub token',
+      npm: 'npm token', x: 'X lookup token', alchemy: 'Alchemy key', common: (commonAppPreset(catalog(), selectedCommonApp)?.label || 'App') + ' key'};
+    element('connect-credential-name').value = names[template.method];
+    if (template.method === 'x') element('connect-x-name').value = names.x;
+    if (template.method === 'alchemy') element('connect-alchemy-name').value = names.alchemy;
+    element('connect-credential-choice').value = '';
+    return true;
+  }
+  function focusCredentialSecret() {
+    const id = connectionMethod === 'x' ? 'connect-x-secret' : connectionMethod === 'alchemy' ? 'connect-alchemy-secret' :
+      newGithubApp() ? 'connect-github-app-id' : 'connect-credential-secret';
+    requestAnimationFrame(() => { if (location.hash === '#connect' && !element(id).disabled) element(id).focus(); });
+  }
   const credential = () => catalog()?.credentials.find(item => item.id === selectedCredential && item.status === 'active' && (!isAwsCredential(item) || ecrAvailable(catalog(), item)));
   const commonPreset = () => catalog()?.capabilities?.common_apps ? commonAppPreset(catalog(), connectionMethod === 'common' ? selectedCommonApp : credential()?.app_preset) : null;
   const application = () => catalog()?.applications.find(item => item.id === selectedApplication && item.status === 'active');
@@ -366,7 +394,8 @@ function createConnectView(workspace, applications, proxy) {
     fields('connect-alchemy-new', connectionMethod === 'alchemy');
     fields('connect-application-new', newApp); fields('connect-rule-new', newRule);
     fields('connect-credential-auth-group', connectionMethod === 'key');
-    fields('connect-github-type-group', connectionMethod === 'github');
+    element('connect-credential-auth-details').hidden = connectionMethod !== 'key';
+    fields('connect-github-type-group', connectionMethod === 'github' && !saveOnly);
     fields('connect-provider-secret-group', newCredential && !['x', 'alchemy'].includes(connectionMethod) && !newGithubApp());
     fields('connect-github-app-fields', newGithubApp());
     for (const option of element('connect-github-type').options) option.disabled = option.value === 'github_app_v1' ?
@@ -926,8 +955,8 @@ function createConnectView(workspace, applications, proxy) {
       button.disabled = !writable() || Boolean(checkpoint) || !workspace.ready('credentials');
       button.addEventListener('click', () => {
         if (step !== 0 || connectionMethod !== null || !writable() || checkpoint || !workspace.ready('credentials')) return;
-        selectedCommonApp = item.id; connectionMethod = 'common'; element('connect-credential-secret').value = '';
-        element('connect-credential-name').value = item.label + ' key'; element('connect-credential-choice').value = ''; render();
+        element('connect-credential-secret').value = '';
+        chooseCredentialTemplate({method: 'common', appPreset: item.id}); render(); focusCredentialSecret();
       });
       return button;
     }));
@@ -944,11 +973,13 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; element('connect-github-private-key').value = '';
     if (method === 'github') element('connect-github-type').value = catalog()?.capabilities.github ? 'github_token_v1' : 'github_app_v1';
     if (['github', 'npm'].includes(method)) element('connect-credential-secret').value = '';
-    connectionMethod = method;
-    element('connect-credential-choice').value = ''; render();
+    if (method === 'saved') { connectionMethod = method; element('connect-credential-choice').value = ''; }
+    else chooseCredentialTemplate({method, ...(method === 'github' ? {githubType: element('connect-github-type').value} : {})});
+    render(); if (method !== 'saved') focusCredentialSecret();
   });
   element('connect-method-change').addEventListener('click', () => {
     if (step !== 0 || !['key', 'github', 'npm', 'x', 'alchemy', 'common', 'saved'].includes(connectionMethod) || !writable() || checkpoint) return;
+    if (saveOnly) { resetDraft(); location.hash = 'credentials'; requestAnimationFrame(() => element('credential-provider-search').focus()); return; }
     element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; element('connect-github-private-key').value = '';
     if (connectionMethod === 'saved') savedChoice = element('connect-credential-choice').value;
     if (['github', 'npm', 'common'].includes(connectionMethod)) element('connect-credential-secret').value = '';
@@ -975,6 +1006,9 @@ function createConnectView(workspace, applications, proxy) {
     resetDraft(); location.hash = saveOnly ? 'credentials' : 'overview';
   });
   element('connect-start-over').addEventListener('click', () => {
+    if (saveOnly && savedCredential && writable() && !checkpoint) {
+      resetDraft(); location.hash = 'credentials'; requestAnimationFrame(() => element('credential-provider-search').focus()); return;
+    }
     if (workspace.state.busy || checkpoint || !window.confirm('Start another setup? Confirmed resources remain saved. Save any one-time token before creating another application. Nothing will be revoked.')) return;
     resetDraft(); message('Start a new setup. Existing resources and any held token remain.'); goto(0);
   });
@@ -991,7 +1025,8 @@ function createConnectView(workspace, applications, proxy) {
     if (!selectCredential(savedCredential)) message('This exact saved credential is unavailable for setup. Review Credentials; no request was sent.');
   });
   element('connect-saved-done').addEventListener('click', () => { if (!workspace.state.busy) location.hash = 'credentials'; });
-  element('connect-credential-form').addEventListener('invalid', () => {
+  element('connect-credential-form').addEventListener('invalid', event => {
+    if (element('connect-credential-auth-details').contains(event.target)) element('connect-credential-auth-details').open = true;
     if (newGithubApp()) element('connect-github-private-key').value = '';
     if (connectionMethod === 'x') element('connect-x-secret').value = '';
     if (connectionMethod === 'alchemy') element('connect-alchemy-secret').value = '';
@@ -999,10 +1034,11 @@ function createConnectView(workspace, applications, proxy) {
   window.addEventListener('hashchange', () => { element('connect-credential-secret').value = ''; element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; element('connect-github-private-key').value = ''; });
   window.addEventListener('pagehide', () => { element('connect-credential-secret').value = ''; element('connect-x-secret').value = ''; element('connect-alchemy-secret').value = ''; element('connect-github-private-key').value = ''; });
   workspace.subscribe(render);
-  return {addCredential() {
-    if (!writable() || checkpoint || connectionMethod === 'google' || !workspace.ready('credentials')) return false;
+  return {canAddCredential, addCredential(template) {
+    if (!canAddCredential() || template !== undefined && !credentialTemplateAvailable(template)) return false;
     resetDraft(); saveOnly = true; message('Choose a provider or manual API key. Saving creates no client or permission.');
-    location.hash = 'connect'; goto(0); return true;
+    if (template) { chooseCredentialTemplate(template); message('Save this credential. Client access can be configured later.'); }
+    location.hash = 'connect'; goto(0); if (template) focusCredentialSecret(); return true;
   }, startSetup() {
     // Reopening the selected consent panel is navigation, not a new setup.
     // Keep its write hold and exact attempt intact until explicit completion

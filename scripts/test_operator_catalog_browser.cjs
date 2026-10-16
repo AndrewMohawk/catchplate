@@ -18,6 +18,7 @@ const VIEWS = ['overview', 'credentials', 'applications', 'access-rules', 'proxy
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 const LIMITS = {credentials: 16384, 'credentials/revoke': 1024, applications: 2048,
   'applications/revoke': 1024, 'applications/rotate-token': 2048, 'access-rules': 32768, 'access-rules/revoke': 1024};
+const CREDENTIAL_CREATES = ['credentials', 'credentials/github-token', 'credentials/npm-token'];
 const NOTIFICATIONS = '/api/operator-demo/notifications';
 const NOTIFICATION_LIMITS = {[NOTIFICATIONS + '/settings']: 16384, [NOTIFICATIONS + '/test']: 1024};
 const X_CONFIGURATION = '/api/operator-demo/oauth/x/configuration/v1';
@@ -170,7 +171,8 @@ async function fixture(browser, options, exercise) {
       if (request.method() === 'GET' && url.pathname === '/api/operator-demo/catalog' && !url.search) {
         state.catalogCalls++;
         if (state.catalogStatus !== 200) { state.expectedFailures.add(url.pathname); return await answer(route, {detail: 'synthetic access refusal'}, state.catalogStatus); }
-        return await answer(route, options.invalidCatalog ? {...catalog(state), productionReady: true} : catalog(state));
+        const value = options.catalogTransform ? options.catalogTransform(catalog(state)) : catalog(state);
+        return await answer(route, options.invalidCatalog ? {...value, productionReady: true} : value);
       }
       if (request.method() === 'GET' && url.pathname === X_CONFIGURATION && !url.search) {
         const headers = request.headers();
@@ -206,6 +208,15 @@ async function fixture(browser, options, exercise) {
         return await options.notificationHandler({route, request, path: url.pathname, body, state, answer});
       }
       const name = url.pathname.startsWith('/api/operator-demo/') ? url.pathname.slice('/api/operator-demo/'.length) : '';
+      // Optional credential-only rendered fixture. Exact paths and the ordinary
+      // credential byte/count/framing bounds remain mandatory; defaults unchanged.
+      if (typeof options.credentialHandler === 'function' && CREDENTIAL_CREATES.includes(name)) {
+        if (request.method() !== 'POST' || url.search || !bytes || bytes.length > LIMITS.credentials || state.posts.length >= 16)
+          return await refuse('unknown or unbounded credential operation');
+        assert(request.headers()['content-type']?.startsWith('application/json'));
+        const body = JSON.parse(bytes.toString()); state.posts.push({name, body});
+        return await options.credentialHandler({route, name, body, state, answer});
+      }
       if (request.method() !== 'POST' || !Object.hasOwn(LIMITS, name) || url.search || !bytes || bytes.length > LIMITS[name] || state.posts.length >= 16)
         return await refuse('unknown or unbounded operation');
       assert(request.headers()['content-type']?.startsWith('application/json'));
@@ -238,6 +249,7 @@ async function fixture(browser, options, exercise) {
     for (const entry of state.consoleErrors) assert(entry.url && state.expectedFailures.has(new URL(entry.url).pathname), 'unexpected browser console error');
     assert(state.requests.every(item => item.method === 'GET' || item.method === 'POST' &&
       (Object.hasOwn(LIMITS, item.path.slice('/api/operator-demo/'.length)) ||
+        typeof options.credentialHandler === 'function' && CREDENTIAL_CREATES.includes(item.path.slice('/api/operator-demo/'.length)) ||
         typeof options.notificationHandler === 'function' && Object.hasOwn(NOTIFICATION_LIMITS, item.path))));
   } finally { await context.close(); }
 }
@@ -263,8 +275,8 @@ async function noToken(page) {
   for (const id of ['copy-token', 'reveal-token', 'dismiss-token', 'download-config']) assert(await page.locator('#' + id).isDisabled(), id);
 }
 async function addCredential(page, custom = false) {
-  await ready(page); await view(page, 'credentials'); await page.locator('#credential-add').click();
-  await page.locator('#connect-use-key').click(); await page.locator('#connect-credential-name').fill('Shared provider key');
+  await ready(page); await view(page, 'credentials'); await page.locator('#credentials [data-credential-provider="manual"]').click();
+  await page.locator('#connect-credential-name').fill('Shared provider key');
   if (custom) { await page.locator('#connect-credential-auth-type').selectOption('header'); await page.locator('#connect-credential-header-name').fill('X-API-Key'); }
   await page.locator('#connect-credential-secret').fill(SECRET); await page.locator('#connect-credential-next').click();
   await view(page, 'credentials');
@@ -308,7 +320,8 @@ const tests = [
     assert.deepEqual(state.posts, [{name: 'credentials', body: {name: 'Shared provider key', auth_type: 'bearer', header_name: 'Authorization', secret: SECRET,
       expected_revision: 1, expected_policy_hash: digest(1)}}]);
     assert.equal(await page.locator('#connect-credential-secret').inputValue(), ''); assert(!await page.locator('#credential-form input[type="url"]').count());
-    assert.equal(await page.locator('#credential-form input, #credential-form textarea').count(), 0); assert.equal(state.applications.length, 0); assert.equal(state.rules.length, 0);
+    assert.equal(await page.locator('#credential-form input:not([type="search"]), #credential-form textarea').count(), 0);
+    assert.equal(await page.locator('#credential-provider-search').count(), 1); assert.equal(state.applications.length, 0); assert.equal(state.rules.length, 0);
     assert.equal(state.active, digest(1)); assert(!(await page.locator('body').innerText()).includes(SECRET));
     assert(await page.locator('#credential-google-connect').isDisabled()); await noToken(page);
   })],

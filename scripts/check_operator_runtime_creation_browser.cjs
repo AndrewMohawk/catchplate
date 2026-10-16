@@ -414,7 +414,7 @@ async function run(args) {
     await page.goto(PUBLIC + '/', {waitUntil: 'networkidle'});
     need(lastCatalog?.revision === original.revision && loaded(lastCatalog), 'browser_baseline_drifted');
     phase = 'create_credential'; await navigate('credentials');
-    await page.locator('#credential-add').click(); await page.locator('#connect-use-key').click();
+    await page.locator('#credentials [data-credential-provider="manual"]').click();
     await page.locator('#connect-credential-name').fill(resourceName(runId, 0)); await page.locator('#connect-credential-secret').fill(secret);
     await perform(0, false, () => page.locator('#connect-credential-next').click());
     need(await page.locator('#connect-credential-secret').inputValue() === '', 'submitted_secret_not_cleared');

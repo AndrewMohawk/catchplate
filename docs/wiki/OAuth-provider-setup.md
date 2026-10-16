@@ -36,7 +36,7 @@ If Prepare's response is lost, use **Check operation result (read only)**; do no
 
 ## Google: connect or reauthorize an account
 
-1. When consent is available, open **Credentials → Add credential → Google**, enter an account label, then **Continue to Google**. Save and clear any one-time Serverware client token before navigating away.
+1. When consent is available, open **Credentials** and choose the Google account connection, enter an account label, then **Continue to Google**. This is separate from a Google Gemini API key. Save and clear any one-time Serverware client token before navigating away.
 2. Choose the intended Google account and consent. Return to the same Serverware console and inspect the saved account; use **Refresh Google status** if the result is uncertain. Do not paste access/refresh tokens or manually replay a callback URL.
 3. Select **Use this credential for a client** and grant **Read Gmail** separately. Choose **Official Gmail SDK** for the supplied Node/Python/Go examples, then configure the proxy token and CA. The supported client operations are message listing and message reads, not the entire Gmail API. [Gmail job contract](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-gmail-job-verification.md).
 

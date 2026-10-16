@@ -95,7 +95,8 @@ function createGoogleView(workspace, applications, connect) {
     const enabled = Boolean(capability());
     const available = enabled && !workspace.state.busy && !workspace.state.uncertain && !checking;
     for (const id of ['connect-google', 'credential-google-connect']) {
-      element(id).textContent = enabled ? 'Connect Google' : 'Google connection unavailable';
+      element(id).textContent = id === 'credential-google-connect' ? 'Google account' : enabled ? 'Connect Google' : 'Google connection unavailable';
+      element(id).title = enabled ? 'Connect a Google account using consent; not a Gemini API key.' : 'Google account consent is not configured. Review Proxy setup.';
       element(id).disabled = !available;
     }
     for (const id of ['connect-google-status', 'credential-oauth-status']) {

@@ -206,7 +206,8 @@ const tests = [
     })],
   ['Credentials uses one save-only provider editor and explicit client setup from its saved receipt', browser => fixture(browser,
     capabilities, async (page, state) => {
-      await ready(page); await view(page, 'credentials'); await page.locator('#credential-add').click();
+      await ready(page); await view(page, 'credentials'); await page.locator('#credentials [data-credential-provider="manual"]').click();
+      await page.locator('#connect-credential-form').waitFor({state: 'visible'});
       assert.equal(await page.locator('#connect-title').innerText(), 'Add credential');
       assert.equal(await page.locator('#credential-secret').count(), 0);
       assert.equal(await page.locator('#connect-credential-secret').count(), 1);
@@ -240,7 +241,8 @@ const tests = [
       await page.locator('#one-time-access').waitFor({state: 'visible'}); await ready(page);
       const before = JSON.stringify(state.applications);
       assert.equal(await page.locator('#client-token').inputValue(), token(IDS.application));
-      await view(page, 'credentials'); await page.locator('#credential-add').click();
+      await view(page, 'credentials'); await page.locator('#credentials [data-credential-provider="manual"]').click();
+      await page.locator('#connect-credential-form').waitFor({state: 'visible'});
       await fillCredential(page, 'Independent provider credential'); await page.locator('#connect-credential-next').click();
       await page.locator('#connect-credential-saved').waitFor({state: 'visible'}); await idle(page);
       assert.equal(await page.locator('#client-token').inputValue(), token(IDS.application));

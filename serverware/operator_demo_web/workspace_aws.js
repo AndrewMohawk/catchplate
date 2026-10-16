@@ -89,6 +89,7 @@ function createAwsCredentialsView(workspace) {
     element('aws-storage-availability').hidden = selector.value !== 'aws';
     element('credential-fields').disabled = selector.value !== 'manual' || !workspace.ready('credentials');
     element('aws-credential-fields').disabled = !available || !workspace.ready('credentials');
+    element('aws-credential-cancel').disabled = workspace.state.busy;
     element('aws-storage-availability').textContent = available && projectEcrCapability(workspace.state.catalog?.capabilities.ecr_publication) ?
       'Save AWS credentials, then use them with a client and an exact ECR publishing permission. Whole-image approval is mandatory. Saving does not test AWS access or renew credentials.' : available ? operatorAwsNotice +
       ' Save or replace credentials only. No AWS validation request, application access or automatic renewal.' :
@@ -190,7 +191,17 @@ function createAwsCredentialsView(workspace) {
   form.addEventListener('submit', event => submit(event, false));
   element('aws-replace-form').addEventListener('submit', event => submit(event, true));
   element('aws-replace-cancel').addEventListener('click', () => { close(); status('aws-replace-status', 'Replacement cancelled. No request was sent.'); });
+  element('aws-credential-cancel').addEventListener('click', () => {
+    if (workspace.state.busy) return;
+    clear('aws-credential'); selector.value = 'manual'; render(); element('credential-provider-search').focus();
+  });
   for (const event of ['hashchange', 'pagehide']) window.addEventListener(event, () => { clear('aws-credential'); close(); });
   workspace.subscribe(render);
-  return {open, render};
+  return {open, render, openAdd() {
+    if (!writable() || !workspace.ready('credentials') || !awsStorageAvailable(workspace.state.catalog)) return false;
+    clear('aws-credential'); close(); selector.value = 'aws';
+    element('aws-credential-name').value = 'AWS credentials';
+    element('aws-credential-kind').value = 'long_term'; element('aws-credential-expires-at').value = '';
+    status('aws-credential-status', ''); render(); element('aws-credential-access-key-id').focus(); return true;
+  }};
 }

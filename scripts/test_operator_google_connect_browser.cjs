@@ -365,8 +365,8 @@ const tests = [
       assert.equal(state.posts.length, 0); assert.equal(observed.posts.length, 0);
     })],
   ['management Google entry and Leave restore the exact save-only receipt without creating access', browser => fixture(browser, {}, async (page, state, observed) => {
-    await view(page, 'credentials'); await page.locator('#credential-add').click();
-    await page.locator('#connect-use-key').click(); await page.locator('#connect-credential-name').fill('Saved before Google');
+    await view(page, 'credentials'); await page.locator('#credentials [data-credential-provider="manual"]').click();
+    await page.locator('#connect-credential-name').fill('Saved before Google');
     await page.locator('#connect-credential-secret').fill('synthetic-layout-save-only-key');
     await page.locator('#connect-credential-next').click(); await page.locator('#connect-credential-saved').waitFor({state: 'visible'});
     await ready(page); assert.equal(await page.locator('#connect-title').innerText(), 'Add credential');

@@ -14,7 +14,7 @@ Serverware lets your scripts, services, agents and CI jobs use provider credenti
 | **Clients** | Your workloads, each with an expiring Serverware proxy token | Issue triage script, inbox worker or release workflow |
 | **Permissions** | What one client may do using one credential | Read issues in one repository; publish one named package |
 
-**Set up access** connects those three things in one guided flow. It is an action, not another kind of account. **Credentials → Add credential** uses the same editor but stops after saving: it creates no client, proxy token or permission. A **GitHub App** is a provider credential; it is not a Serverware client.
+**Set up access** connects those three things in one guided flow. It is an action, not another kind of account. To save a key, choose its provider directly on **Credentials**, paste the key and save. The name and provider settings are prefilled; no client, proxy token or permission is created. A **GitHub App** is a provider credential; it is not a Serverware client.
 
 ## Choose your task
 

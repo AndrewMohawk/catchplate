@@ -55,14 +55,16 @@ There are three separate things to configure:
 - **Permissions:** choose what a client may do with a credential. For
   example, “Issue triage may read issues and comments in this GitHub repository.”
 
-**Set up access** is an action, not another navigation section. **Credentials →
-Add credential** uses the same provider editor in save-only mode: it creates no
-client, proxy token or permission. On a saved credential, **Use with a client**
+**Set up access** is an action, not another navigation section. To save a key,
+open **Credentials**, choose its provider, paste the key and **Save credential**.
+Provider settings and an editable name are filled in for you. This creates no
+client, proxy token or permission; GitHub App and OAuth connections still need
+their provider-specific setup. On a saved credential, **Use with a client**
 continues setup with that exact credential selected, without asking for its
 secret again. A GitHub App is a provider credential, not a Serverware client.
-This flow is deployed in `35817cf5` and passed the actual read-only desktop/mobile
-check; the separate isolated journey verified saving, reuse, proxy access and
-revocation. See the [walkthrough checkpoint](docs/operator-demo.md#navigation-update--deployed-october-13).
+The underlying save-and-assign flow passed an isolated journey covering saving,
+reuse, proxy access and revocation. See the
+[walkthrough checkpoint](docs/operator-demo.md#navigation-update--deployed-october-13).
 **Proxy setup** provides
 the proxy address, public CA download and client instructions; **Audit log**
 shows recorded changes and request outcomes. New supported JSON permissions need

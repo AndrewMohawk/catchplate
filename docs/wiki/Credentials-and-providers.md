@@ -6,7 +6,9 @@ A credential is a provider account or key stored by Serverware. It is not your c
 
 ## Save once, assign separately
 
-Open **Credentials → Add credential**, choose the provider, enter a descriptive name and complete its form. After saving, choose **Back to Credentials** to stop, or **Set up access for a client** to assign it. A saved card's **Use with a client** reuses that exact credential without retrieving or reentering its secret.
+Open **Credentials** and choose a provider directly. For an API key or token, paste the secret and choose **Save credential** (or press Enter). The provider's authentication settings and an editable name are already filled in. GitHub App, AWS and OAuth connections ask for their required details instead of pretending they are single API keys.
+
+After saving, choose **Back to Credentials** to stop, **Add another credential** to save another, or **Set up access for a client** to assign it. A saved card's **Use with a client** reuses that exact credential without retrieving or reentering its secret.
 
 Provider options are capability-dependent. An unavailable destination or unsupported operation must be configured first; saving a manual key does not turn it into a provider-specific connection. Response filtering belongs to a permission, not credential storage. [Shared editor](https://github.com/AndrewMohawk/serverware/blob/main/serverware/operator_demo_web/workspace_connect.js).
 
@@ -14,13 +16,13 @@ Provider options are capability-dependent. An unavailable destination or unsuppo
 
 For a complete read-only example, follow [Create and install a GitHub App](https://github.com/AndrewMohawk/serverware/wiki/GitHub-App-setup), including provider-console settings, IDs, private-key storage and client verification.
 
-**Personal access token:** choose **GitHub → Personal access token**, name it and enter a token limited to the intended repository and Issues rights. Saving does not check its provider validity or renew it.
+**Personal access token:** choose **GitHub personal access token** and paste a token limited to the intended repository and Issues rights. Keep the suggested name or edit it. Saving does not check its provider validity or renew it.
 
-**GitHub App:** first create/install the App in GitHub for the required repository. In Serverware choose **GitHub → GitHub App**, then supply:
+**GitHub App:** first create/install the App in GitHub for the required repository. In Serverware choose **GitHub App**, then supply:
 
 - A connection name.
 - Numeric GitHub **App ID**, not its OAuth client ID.
-- Numeric installation ID.
+- Numeric installation ID only if you want to specify it; otherwise Serverware discovers the matching installation.
 - Exact repository owner/name.
 - The connection's maximum Issues access: read, or read/create.
 - The App private-key PEM.
@@ -34,7 +36,7 @@ Then assign **Read issues and comments** or **Read and create issues/comments** 
 The [Google/X OAuth setup guide](https://github.com/AndrewMohawk/serverware/wiki/OAuth-provider-setup#google-operator-application-setup) walks the operator through the provider console, callback registration, fixed scopes and activation before account consent.
 
 1. The proxy operator configures the Google OAuth application under **Proxy setup**; see [provider application setup](https://github.com/AndrewMohawk/serverware/wiki/Proxy-and-CA).
-2. In **Credentials → Add credential**, choose Google when available, label the account, and use **Continue to Google**.
+2. In **Credentials**, choose the Google account connection when available, label the account, and use **Continue to Google**. This is separate from a Google Gemini API key.
 3. Return to Serverware and let it reconcile the exact saved account. If the result is uncertain, use the offered status check rather than starting another consent attempt.
 4. Explicitly use that account with a client and grant **Read Gmail**. Choose **Official Gmail SDK** for the supplied Node/Python/Go projects, or the supported custom HTTP option for your own client.
 

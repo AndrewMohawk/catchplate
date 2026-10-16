@@ -61,8 +61,7 @@ retain the downloaded PEM. GitHub's current [private-key instructions](https://d
 describe this flow; older GitHub screens may call it **Generate a private key**.
 Never put the PEM in the example project, a workflow secret, chat or a screenshot.
 
-In Serverware, open **Credentials → Add credential → GitHub**, select
-**GitHub App**, and fill in:
+In Serverware, open **Credentials → GitHub App** and fill in:
 
 | Serverware field | Value for this example |
 | --- | --- |

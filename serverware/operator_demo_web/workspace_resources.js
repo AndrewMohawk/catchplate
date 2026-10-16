@@ -356,6 +356,55 @@ function createCredentialsView(workspace, actions = {}) {
   const replacement = createStaticKeyReplacementView(workspace);
   const githubAppReplacement = createGithubAppKeyReplacementView(workspace);
   const aws = createAwsCredentialsView(workspace);
+  const templates = {github_token: {method: 'github', githubType: 'github_token_v1'},
+    github_app: {method: 'github', githubType: 'github_app_v1'}, npm: {method: 'npm'}, manual: {method: 'key'},
+    x: {method: 'x'}, alchemy: {method: 'alchemy'}};
+  const add = template => {
+    if (!workspace.ready('credentials') || !actions.add?.(template))
+      element('credential-action-status').textContent = 'Another setup still needs review. Open Set up access to inspect its saved result before adding another credential.';
+  };
+  for (const [id, template] of Object.entries(templates))
+    document.querySelector('[data-credential-provider="' + id + '"]').addEventListener('click', () => add(template));
+  document.querySelector('[data-credential-provider="aws"]').addEventListener('click', () => {
+    if (workspace.ready('credentials') && actions.canAdd?.()) aws.openAdd();
+  });
+  element('credential-x-account').addEventListener('click', () => {
+    if (!workspace.state.catalog?.capabilities.x_oauth || !workspace.ready('credentials') || !actions.canAdd?.()) return;
+    element('x-account-panel').scrollIntoView({block: 'nearest'});
+    if (!element('x-account-name').value) element('x-account-name').value = 'My X account';
+    element('x-account-name').focus();
+  });
+  function filterProviders() {
+    const query = element('credential-provider-search').value.trim().toLowerCase(); let visible = 0;
+    for (const button of element('credential-provider-picker').querySelectorAll('button')) {
+      button.hidden = !button.textContent.toLowerCase().includes(query); if (!button.hidden) visible++;
+    }
+    element('credential-provider-empty').hidden = visible > 0;
+  }
+  element('credential-provider-search').addEventListener('input', filterProviders);
+  // The save-only controller reconciles its checkpoint after catalog listeners.
+  // Refresh its local availability when returning, without another API read.
+  window.addEventListener('hashchange', () => {
+    if (location.hash === '#credentials') renderProviders(workspace.state.catalog);
+  });
+  function renderProviders(catalog) {
+    const ready = workspace.ready('credentials') && Boolean(actions.canAdd?.());
+    const available = {github_token: Boolean(catalog?.capabilities.github), github_app: githubAppDestinationAvailable(catalog),
+      npm: Boolean(catalog?.capabilities.npm), manual: true, aws: awsStorageAvailable(catalog),
+      x: xDestinationAvailable(catalog), alchemy: alchemyDestinationAvailable(catalog), x_account: Boolean(catalog?.capabilities.x_oauth)};
+    for (const [id, enabled] of Object.entries(available)) {
+      const button = document.querySelector('[data-credential-provider="' + id + '"]');
+      button.disabled = !ready || !enabled;
+      button.title = enabled ? 'Save a credential; client permissions are configured separately.' : 'Not configured in this instance. Review provider and destination settings in Proxy setup.';
+    }
+    element('credential-common-providers').replaceChildren(...(catalog?.capabilities.common_apps?.presets || []).map(preset => {
+      const button = textNode('button', preset.id === 'gemini' ? 'Gemini API key' : preset.label, 'secondary');
+      button.type = 'button'; button.dataset.credentialApp = preset.id; button.disabled = !ready;
+      button.title = preset.secret_label + '. Saving grants no access.';
+      button.addEventListener('click', () => add({method: 'common', appPreset: preset.id})); return button;
+    }));
+    filterProviders();
+  }
   element('credential-add').addEventListener('click', () => {
     if (element('credential-storage-type').value === 'manual' && workspace.ready('credentials') && !actions.add?.())
       element('credential-action-status').textContent = 'Another setup still needs review. Open Set up access to inspect its saved result before adding another credential.';
@@ -364,6 +413,7 @@ function createCredentialsView(workspace, actions = {}) {
     const catalog = workspace.state.catalog;
     replacement.render();
     githubAppReplacement.render();
+    renderProviders(catalog);
     element('credential-fields').disabled = element('credential-storage-type').value !== 'manual' || !workspace.ready('credentials');
     if (!catalog) return;
     const entries = [], diagnostic = operatorDiagnosticResources(catalog);

@@ -149,7 +149,7 @@ async function fixture(browser, options, exercise) {
 }
 async function accounts(page) { await ready(page); await view(page, 'credentials'); }
 async function createForm(page) {
-  await accounts(page); await page.locator('#credential-storage-type').selectOption('aws');
+  await accounts(page); await page.locator('#credentials [data-credential-provider="aws"]').click();
   await page.locator('#aws-credential-form').waitFor({state: 'visible'});
   await page.locator('#aws-credential-name').fill('My AWS credentials');
 }
@@ -193,24 +193,24 @@ const tests = [
       'AWS-only guidance starts hidden for the default manual selection');
     for (const width of [1280, 390]) await fixture(browser, {credentials: []}, async (page, state, observed) => {
       await page.setViewportSize({width, height: 960}); await accounts(page);
-      const selector = page.locator('#credential-storage-type');
+      const picker = page.locator('#credentials [data-credential-provider="aws"]');
+      const cancel = page.locator('#aws-credential-cancel');
       const guidance = page.locator('#aws-storage-availability');
-      assert.equal(await selector.inputValue(), 'manual');
-      assert(!await guidance.isVisible()); assert(await page.locator('#credential-form').isVisible());
+      assert(!await guidance.isVisible()); assert(await page.locator('#credential-provider-picker').isVisible());
       assert(!await page.locator('#aws-credential-form').isVisible());
       await screenshot(page, 'manual-guidance-' + width);
-      await selector.selectOption('aws');
+      await picker.click();
       assert(await guidance.isVisible()); assert(await page.locator('#aws-credential-form').isVisible());
       assert(!await page.locator('#credential-form').isVisible());
       assert.equal(await guidance.innerText(), 'Stored only — ECR publishing not available yet. Save or replace credentials only. No AWS validation request, application access or automatic renewal.');
       await screenshot(page, 'aws-guidance-' + width);
-      await selector.selectOption('manual'); assert(!await guidance.isVisible());
-      await selector.selectOption('aws'); state.awsCapability = null; await refresh(page);
-      assert.equal(await selector.inputValue(), 'aws'); assert(await guidance.isVisible());
+      await cancel.click(); assert(!await guidance.isVisible());
+      await picker.click(); state.awsCapability = null; await refresh(page);
+      assert(await guidance.isVisible());
       assert.equal(await guidance.innerText(), 'AWS credential storage is not advertised by this deployment. Manual header credentials are not a substitute.');
       assert(await page.locator('#aws-credential-save').isDisabled());
-      await selector.selectOption('manual'); assert(!await guidance.isVisible());
-      assert(await page.locator('#credential-form').isVisible()); assert.equal(observed.posts.length, 0);
+      await cancel.click(); assert(!await guidance.isVisible());
+      assert(await page.locator('#credential-provider-picker').isVisible()); assert.equal(observed.posts.length, 0);
     });
   }],
   ...['long_term', 'session'].map(kind => [kind + ' complete create clears fields before response and grants nothing', browser =>
@@ -267,7 +267,7 @@ const tests = [
   ['type changes, cancel, navigation and pagehide clear unsent tuples', browser => fixture(browser, {}, async (page, state, observed) => {
     await createForm(page); await fillTuple(page, 'aws-credential', 'session');
     await page.locator('#aws-credential-kind').selectOption('long_term'); await privateAbsent(page);
-    await fillTuple(page, 'aws-credential'); await page.locator('#credential-storage-type').selectOption('manual'); await privateAbsent(page);
+    await fillTuple(page, 'aws-credential'); await page.locator('#aws-credential-cancel').click(); await privateAbsent(page);
     await openReplacement(page); await fillTuple(page, 'aws-replace'); await page.locator('#aws-replace-kind').selectOption('session'); await privateAbsent(page);
     await fillTuple(page, 'aws-replace', 'session'); await page.locator('#aws-replace-cancel').click(); await privateAbsent(page);
     assert(!await panel(page).isVisible()); await openReplacement(page); await fillTuple(page, 'aws-replace');

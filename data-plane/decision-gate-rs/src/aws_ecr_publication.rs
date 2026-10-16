@@ -512,12 +512,13 @@ fn dummy_signature(req: &DecisionRequest, config: &Value, action: &str) -> bool 
     ) else {
         return false;
     };
-    signed.headers().all(|(name, expected)| {
+    let matches = signed.headers().all(|(name, expected)| {
         if name == "host" && header(name).is_none() {
             return true;
         }
         header(name).is_some_and(|actual| actual == expected)
-    })
+    });
+    matches
 }
 pub(crate) fn validate_request(
     req: &DecisionRequest,

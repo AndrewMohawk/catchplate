@@ -219,12 +219,37 @@ def bootstrap() -> None:
         raise RuntimeError("sandbox bootstrap requires the dedicated runner")
     from catchplate import config, policy_bundle, development_sandbox_store
 
-    signed = policy_bundle.sign_policy_bundle(policy_bundle.demo_policy_bundle())
-    development_sandbox_store.commission_policy(signed)
+    migrated = os.path.lexists(config.DATA_DIR / "rebrand-receipt.json")
+    retained = development_sandbox_store.get_policy_high_water()
+    if retained is None:
+        if migrated:
+            raise RuntimeError("migrated sandbox authority is missing; refusing commissioning or reseed")
+        signed = policy_bundle.sign_policy_bundle(policy_bundle.demo_policy_bundle())
+        development_sandbox_store.commission_policy(signed)
+    else:
+        # A completed offline rebrand advances authority; restart must not
+        # manufacture sequence one or replace the immutable commissioned bytes.
+        with development_sandbox_store._connect() as connection:
+            original = connection.execute(
+                "SELECT signed_bundle_json FROM sandbox_policy WHERE singleton=1"
+            ).fetchone()[0]
+        if len(original.encode("utf-8")) > policy_bundle.MAX_POLICY_BUNDLE_BYTES:
+            raise RuntimeError("retained sandbox policy exceeds the policy size bound")
+        signed = json.loads(original)
+        from catchplate.demo_seed_policy import require_demo_semantics
+        require_demo_semantics(signed)
+        snapshot = policy_bundle.compile_policy_bundle(signed, verify_signature=True, validate_schema=True)
+        policy_id, sequence, epoch, policy_hash = policy_bundle._policy_snapshot_authority(snapshot)
+        development_sandbox_store.verify_policy_high_water(policy_id=policy_id, sequence=sequence,
+            rollback_epoch=epoch, policy_hash=policy_hash)
+        if original != policy_bundle.canonical_json(signed):
+            raise RuntimeError("retained sandbox policy is not its exact canonical signed original")
     raw = policy_bundle.canonical_json(signed).encode("utf-8")
     destination = config.POLICY_BUNDLE_PATH
     if destination.parent != config.DATA_DIR:
         raise RuntimeError("sandbox policy must remain in its dedicated data directory")
+    if retained is not None and not destination.exists():
+        raise RuntimeError("retained sandbox policy file is missing; refusing silent replacement")
     if destination.exists():
         if destination.is_symlink() or destination.read_bytes() != raw:
             raise RuntimeError("sandbox policy changed; refusing silent replacement")
@@ -238,6 +263,8 @@ def bootstrap() -> None:
             os.close(descriptor)
     from catchplate import app, db
     if db.get_credential("cred-demo-bearer") is None:
+        if migrated:
+            raise RuntimeError("migrated sandbox credential is missing; refusing reseed")
         app.seed_demo(_=None)
 
 

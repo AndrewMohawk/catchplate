@@ -125,8 +125,10 @@ The running instance is available now. A new
 the app, proxy and authenticated TLS edge without homelab dependencies.
 **Pre-rename isolated installation and lifecycle verified:** both build paths and fresh
 starts passed, with separate browser, persisted-state restart and TLS replacement
-checks. The renamed package still needs its own verification; public deployment
-and real-provider use remain separate. See the [verification record](docs/standalone-installation-verification.md)
+checks. The renamed image passed a fresh fixture-enabled install, retained-state
+startup and the migrated live sandbox's proxy/audit checks; this does not repeat
+every lifecycle check or prove main-public/real-provider acceptance. See the
+[rename evidence](docs/catchplate-rename.md), [verification record](docs/standalone-installation-verification.md)
 and [self-hosting/activation guide](docs/self-hosting.md).
 The [retained deployment](docker/catchplate-operator-demo/README.md)
 records the existing instance and is **not** a new-install command.

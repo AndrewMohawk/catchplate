@@ -521,7 +521,7 @@ and writes only the matching raw BPF bytes. After building the operator tool as
 described below, invoke its actual exported path:
 
 ```sh
-/srv/catchplate-fast/tmp/pilot-operator-tools/artifacts/usr/local/bin/serverware-export-custody-seccomp \
+/srv/catchplate-fast/tmp/pilot-operator-tools/artifacts/usr/local/bin/catchplate-export-custody-seccomp \
   --policy /srv/operator-guest-originals/seccomp-policy.json \
   --output /srv/operator-guest-originals/seccomp.bpf
 ```

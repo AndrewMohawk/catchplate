@@ -2,8 +2,8 @@
 
 # Retained synthetic sandbox
 
-This directory holds the renamed edge template for the existing, separate
-synthetic sandbox. It is not the ordinary product instance or a fresh-install
+This directory holds the renamed deployment model and edge template for the
+existing, separate synthetic sandbox. It is not the ordinary product instance or a fresh-install
 recipe. Use the [standalone installer](../catchplate-standalone/README.md) for a
 new ordinary installation.
 
@@ -23,8 +23,18 @@ The sandbox has its own three-database store, signed policy and nonce history.
 Use the [explicit sandbox migration](../../scripts/migrate_catchplate_sandbox.py)
 on a stopped private copy; do not run the ordinary migrator or initialize empty
 replacement state. Preserve the old recovery configuration and original data.
-The effective renamed Compose model must pin the accepted image, migrated
-mounts, secrets and network ownership before this template is used.
+The [Compose model](docker-compose.yml) pins the accepted paired image and
+expects already-migrated private state under
+`/srv/catchplate-fast/homelab_data/catchplate-sandbox`. It uses a separate internal
+subnet and a dynamically assigned edge address on the shared Traefik network,
+so the stopped original containers/network can remain available for rollback.
+The exact trusted Traefik peer is unchanged.
+
+The model is still **unarmed**: do not run `up` before the stopped-copy migration
+and its receipt have been verified. The `x-catchplate-migration` metadata is an
+operator checklist, not a Docker-enforced startup guard. The app's incomplete-
+migration checks are separate. Compose validation alone does not prove that
+state is migrated or that the new routes are serving.
 
 See the [rename checklist](../../docs/catchplate-rename.md) for accepted artifacts,
 remaining deployment work and immutable historical evidence.

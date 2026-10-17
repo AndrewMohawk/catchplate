@@ -1,0 +1,474 @@
+{
+  "name": "catchplate-sandbox",
+  "networks": {
+    "sandbox": {
+      "internal": true,
+      "ipam": {
+        "config": [
+          {
+            "subnet": "172.16.249.128/28"
+          }
+        ]
+      },
+      "name": "catchplate-sandbox_sandbox"
+    },
+    "traefik-v3-public": {
+      "external": true,
+      "ipam": {},
+      "name": "traefik-v3-public"
+    }
+  },
+  "services": {
+    "catchplate": {
+      "cap_drop": [
+        "ALL"
+      ],
+      "command": [],
+      "cpus": 2,
+      "depends_on": {
+        "demo-upstream": {
+          "condition": "service_healthy",
+          "required": true
+        }
+      },
+      "dns": [
+        "127.0.0.1"
+      ],
+      "entrypoint": [
+        "python",
+        "-B",
+        "-m",
+        "catchplate.development_sandbox_runner"
+      ],
+      "environment": {
+        "CATCHPLATE_ADMIN_TOKEN_FILE": "/run/secrets/catchplate/admin.token",
+        "CATCHPLATE_ADMIN_USER": "user:sandbox-operator",
+        "CATCHPLATE_DATA_DIR": "/data",
+        "CATCHPLATE_DATA_PLANE_AUDIT_TOKEN_FILE": "/run/secrets/catchplate/audit.token",
+        "CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN_FILE": "/run/secrets/catchplate/credential-lease.token",
+        "CATCHPLATE_DATA_PLANE_GRANT_CONSUME_TOKEN_FILE": "/run/secrets/catchplate/grant-consume.token",
+        "CATCHPLATE_DATA_PLANE_INSTANCE_ID": "spiffe://development.catchplate/decision-gate/local",
+        "CATCHPLATE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED": "0",
+        "CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN_FILE": "/run/secrets/catchplate/management.token",
+        "CATCHPLATE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN_FILE": "/run/secrets/catchplate/rate-limit-consume.token",
+        "CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN_FILE": "/run/secrets/catchplate/release-authorization.token",
+        "CATCHPLATE_DECISION_GATE_BASE": "http://decision-gate-rs:9091",
+        "CATCHPLATE_DEVELOPMENT_SANDBOX": "1",
+        "CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST": "sha256:73ebd4426aee420902bf3d6086d17f67b0ce12df56a4f7e2f27e6e7d45315ec1",
+        "CATCHPLATE_PUBLIC_URL": "https://catchplate-sandbox.example.com",
+        "CATCHPLATE_RELEASE_CHANNEL": "dev",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": "/app"
+      },
+      "healthcheck": {
+        "interval": "15s",
+        "retries": 4,
+        "start_period": "45s",
+        "test": [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:3000/healthz',timeout=2); raise SystemExit(0 if r.status==200 else 1)"
+        ],
+        "timeout": "3s"
+      },
+      "image": "sha256:239031aa68d723419d2d53f8f44f61d1487437898036a077767fe3c22f2ff7a9",
+      "init": true,
+      "logging": {
+        "driver": "local",
+        "options": {
+          "max-file": "2",
+          "max-size": "2m"
+        }
+      },
+      "mem_limit": "1073741824",
+      "networks": {
+        "sandbox": null
+      },
+      "pids_limit": 128,
+      "pull_policy": "never",
+      "read_only": true,
+      "restart": "unless-stopped",
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:rw,noexec,nosuid,nodev,size=32m,uid=10001,gid=10001,mode=0700"
+      ],
+      "user": "10001:10001",
+      "volumes": [
+        {
+          "bind": {
+            "create_host_path": false
+          },
+          "source": "/srv/catchplate-fast/homelab_data/catchplate-sandbox/app-data",
+          "target": "/data",
+          "type": "bind"
+        },
+        {
+          "bind": {
+            "create_host_path": false
+          },
+          "read_only": true,
+          "source": "/srv/catchplate-fast/homelab_data/catchplate-sandbox/service-secrets",
+          "target": "/run/secrets/catchplate",
+          "type": "bind"
+        },
+        {
+          "bind": {
+            "create_host_path": false
+          },
+          "read_only": true,
+          "source": "/srv/catchplate-fast/homelab_data/catchplate-sandbox/upstream-data/demo-upstream",
+          "target": "/demo-upstream",
+          "type": "bind"
+        }
+      ],
+      "working_dir": "/app"
+    },
+    "decision-gate-rs": {
+      "cap_drop": [
+        "ALL"
+      ],
+      "command": [
+        "gate"
+      ],
+      "cpus": 1,
+      "depends_on": {
+        "catchplate": {
+          "condition": "service_healthy",
+          "required": true
+        }
+      },
+      "dns": [
+        "127.0.0.1"
+      ],
+      "entrypoint": [
+        "python",
+        "-B",
+        "-m",
+        "scripts.operator_install.runtime"
+      ],
+      "environment": {
+        "CATCHPLATE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES": "1",
+        "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
+        "CATCHPLATE_CONTROL_PLANE_AUDIT_URL": "http://catchplate:3000/api/data-plane/audit",
+        "CATCHPLATE_CONTROL_PLANE_CREDENTIAL_LEASE_URL": "http://catchplate:3000/api/data-plane/credential-leases",
+        "CATCHPLATE_DATA_PLANE_AUDIT_BATCH_MAX": "1",
+        "CATCHPLATE_DATA_PLANE_AUDIT_TOKEN_FILE": "/run/secrets/catchplate/audit.token",
+        "CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN_FILE": "/run/secrets/catchplate/credential-lease.token",
+        "CATCHPLATE_DATA_PLANE_INSTANCE_ID": "spiffe://development.catchplate/decision-gate/local",
+        "CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN_FILE": "/run/secrets/catchplate/management.token",
+        "CATCHPLATE_DECISION_GATE_HOST": "0.0.0.0",
+        "CATCHPLATE_DECISION_GATE_MANAGEMENT_HOST": "0.0.0.0",
+        "CATCHPLATE_DECISION_GATE_MANAGEMENT_PORT": "9091",
+        "CATCHPLATE_DECISION_GATE_PORT": "9090",
+        "CATCHPLATE_DEVELOPMENT_SANDBOX": "1",
+        "CATCHPLATE_MITM_CA_CERT": "/data/mitmproxy/mitmproxy-ca-cert.pem",
+        "CATCHPLATE_MITM_CA_KEY": "/data/mitmproxy/mitmproxy-ca.pem",
+        "CATCHPLATE_POLICY_BUNDLE": "/data/policy-bundle.json",
+        "CATCHPLATE_POLICY_TRUST_ROOT_ATTESTATION_URL": "http://catchplate:3000/attestation",
+        "CATCHPLATE_RELEASE_CHANNEL": "dev",
+        "CATCHPLATE_UPSTREAM_CA_BUNDLE": "/demo-upstream/ca.pem"
+      },
+      "healthcheck": {
+        "interval": "15s",
+        "retries": 4,
+        "start_period": "30s",
+        "test": [
+          "CMD",
+          "/bin/bash",
+          "-ec",
+          "exec 3<>/dev/tcp/127.0.0.1/9091; printf 'GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3; read -r status <&3; [[ $$status == 'HTTP/1.1 200 '* ]]"
+        ],
+        "timeout": "3s"
+      },
+      "image": "sha256:239031aa68d723419d2d53f8f44f61d1487437898036a077767fe3c22f2ff7a9",
+      "init": true,
+      "logging": {
+        "driver": "local",
+        "options": {
+          "max-file": "2",
+          "max-size": "2m"
+        }
+      },
+      "mem_limit": "536870912",
+      "networks": {
+        "sandbox": null
+      },
+      "pids_limit": 128,
+      "pull_policy": "never",
+      "read_only": true,
+      "restart": "unless-stopped",
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:rw,noexec,nosuid,nodev,size=32m,uid=10001,gid=10001,mode=0700"
+      ],
+      "user": "10001:10001",
+      "volumes": [
+        {
+          "bind": {
+            "create_host_path": false
+          },
+          "read_only": true,
+          "source": "/srv/catchplate-fast/homelab_data/catchplate-sandbox/app-data",
+          "target": "/data",
+          "type": "bind"
+        },
+        {
+          "bind": {
+            "create_host_path": false
+          },
+          "read_only": true,
+          "source": "/srv/catchplate-fast/homelab_data/catchplate-sandbox/upstream-data/demo-upstream",
+          "target": "/demo-upstream",
+          "type": "bind"
+        },
+        {
+          "bind": {
+            "create_host_path": false
+          },
+          "read_only": true,
+          "source": "/srv/catchplate-fast/homelab_data/catchplate-sandbox/service-secrets/credential-lease.token",
+          "target": "/run/secrets/catchplate/credential-lease.token",
+          "type": "bind"
+        },
+        {
+          "bind": {
+            "create_host_path": false
+          },
+          "read_only": true,
+          "source": "/srv/catchplate-fast/homelab_data/catchplate-sandbox/service-secrets/audit.token",
+          "target": "/run/secrets/catchplate/audit.token",
+          "type": "bind"
+        },
+        {
+          "bind": {
+            "create_host_path": false
+          },
+          "read_only": true,
+          "source": "/srv/catchplate-fast/homelab_data/catchplate-sandbox/service-secrets/management.token",
+          "target": "/run/secrets/catchplate/management.token",
+          "type": "bind"
+        }
+      ]
+    },
+    "demo-upstream": {
+      "cap_drop": [
+        "ALL"
+      ],
+      "command": [
+        "scripts/demo_upstream.py"
+      ],
+      "cpus": 0.5,
+      "dns": [
+        "127.0.0.1"
+      ],
+      "entrypoint": [
+        "python",
+        "-B"
+      ],
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "healthcheck": {
+        "interval": "15s",
+        "retries": 4,
+        "start_period": "15s",
+        "test": [
+          "CMD",
+          "python",
+          "-c",
+          "import json,ssl,urllib.request; c=ssl.create_default_context(cafile='/data/demo-upstream/ca.pem'); o=urllib.request.build_opener(urllib.request.ProxyHandler({}),urllib.request.HTTPSHandler(context=c)); r=o.open('https://demo-upstream:8443/_test/request-count?method=GET&path=%2Fecho',timeout=2); b=r.read(65537); p=json.loads(b) if len(b)<=65536 else {}; raise SystemExit(0 if r.status==200 and type(p.get('count')) is int else 1)"
+        ],
+        "timeout": "3s"
+      },
+      "image": "sha256:239031aa68d723419d2d53f8f44f61d1487437898036a077767fe3c22f2ff7a9",
+      "init": true,
+      "logging": {
+        "driver": "local",
+        "options": {
+          "max-file": "2",
+          "max-size": "2m"
+        }
+      },
+      "mem_limit": "268435456",
+      "networks": {
+        "sandbox": null
+      },
+      "pids_limit": 128,
+      "pull_policy": "never",
+      "read_only": true,
+      "restart": "unless-stopped",
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:rw,noexec,nosuid,nodev,size=32m,uid=10001,gid=10001,mode=0700"
+      ],
+      "user": "10001:10001",
+      "volumes": [
+        {
+          "bind": {
+            "create_host_path": false
+          },
+          "source": "/srv/catchplate-fast/homelab_data/catchplate-sandbox/upstream-data",
+          "target": "/data",
+          "type": "bind"
+        }
+      ],
+      "working_dir": "/app"
+    },
+    "edge": {
+      "cap_drop": [
+        "ALL"
+      ],
+      "command": [
+        "nginx",
+        "-c",
+        "/tmp/nginx.conf",
+        "-g",
+        "daemon off;"
+      ],
+      "cpus": 0.25,
+      "entrypoint": null,
+      "environment": {
+        "NGINX_ENVSUBST_FILTER": "^TRAEFIK_IPV4$$",
+        "NGINX_ENVSUBST_OUTPUT_DIR": "/tmp",
+        "TRAEFIK_IPV4": "10.77.0.187"
+      },
+      "healthcheck": {
+        "interval": "30s",
+        "retries": 3,
+        "start_period": "5s",
+        "test": [
+          "CMD",
+          "wget",
+          "-q",
+          "-O",
+          "/dev/null",
+          "http://127.0.0.1:8081/edge-healthz"
+        ],
+        "timeout": "3s"
+      },
+      "image": "nginx@sha256:1ed1b0e1d7652937d6cbdaf4018c7b6fc009a7dd6c3047351e2eddda745de43f",
+      "labels": {
+        "com.centurylinklabs.watchtower.enable": "false",
+        "homepage.description": "Persistent synthetic development only; no production or hardware authority",
+        "homepage.group": "Apps & Data",
+        "homepage.href": "https://catchplate-sandbox.example.com/",
+        "homepage.name": "Catchplate Sandbox",
+        "traefik.docker.network": "traefik-v3-public",
+        "traefik.enable": "true",
+        "traefik.http.routers.catchplate-sandbox-lab.entrypoints": "websecure",
+        "traefik.http.routers.catchplate-sandbox-lab.middlewares": "localnetwork@file",
+        "traefik.http.routers.catchplate-sandbox-lab.rule": "Host(`catchplate-sandbox.lab.example.com`)",
+        "traefik.http.routers.catchplate-sandbox-lab.service": "catchplate-sandbox-edge",
+        "traefik.http.routers.catchplate-sandbox-lab.tls": "true",
+        "traefik.http.routers.catchplate-sandbox-public.entrypoints": "websecure",
+        "traefik.http.routers.catchplate-sandbox-public.middlewares": "authelia-public@file",
+        "traefik.http.routers.catchplate-sandbox-public.rule": "Host(`catchplate-sandbox.example.com`)",
+        "traefik.http.routers.catchplate-sandbox-public.service": "catchplate-sandbox-edge",
+        "traefik.http.routers.catchplate-sandbox-public.tls": "true",
+        "traefik.http.services.catchplate-sandbox-edge.loadbalancer.server.port": "8080"
+      },
+      "logging": {
+        "driver": "local",
+        "options": {
+          "max-file": "2",
+          "max-size": "1m"
+        }
+      },
+      "mem_limit": "67108864",
+      "networks": {
+        "sandbox": null,
+        "traefik-v3-public": {}
+      },
+      "pids_limit": 32,
+      "pull_policy": "never",
+      "read_only": true,
+      "restart": "unless-stopped",
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:rw,noexec,nosuid,nodev,size=8m,uid=1000,gid=1000,mode=0700"
+      ],
+      "user": "1000:1000",
+      "volumes": [
+        {
+          "bind": {
+            "create_host_path": false
+          },
+          "read_only": true,
+          "source": "/home/catchplate/catchplate/docker/catchplate-sandbox/config/nginx.conf.template",
+          "target": "/etc/nginx/templates/nginx.conf.template",
+          "type": "bind"
+        },
+        {
+          "bind": {
+            "create_host_path": false
+          },
+          "read_only": true,
+          "source": "/srv/catchplate-fast/homelab_data/catchplate-sandbox/edge-secrets",
+          "target": "/run/secrets/catchplate-edge",
+          "type": "bind"
+        }
+      ]
+    }
+  },
+  "x-catchplate-migration": {
+    "armed": false,
+    "baselineIdentitiesSha256": "cae33a8e1d7a62ebf20d36b430bbb611f9c05289ab1c8fd5932e6e69d6fc4051",
+    "baselineModelSha256": "d7833c2767918590c6329ca2b3ca9ef2cb2218ea83a3852bfe43df6caabe384c",
+    "note": "Prepared only. Do not apply before explicit cutover authorization and successful stopped-copy migration. Original containers and network are retained for rollback.",
+    "profileMigrationReady": false,
+    "requires": [
+      "canonical checkout move and exact template hash check",
+      "fresh no-overlap check for 172.16.249.128/28",
+      "explicit exact-old-container stop authorization",
+      "verified stopped-source byte-preserving archive and checkpointed copy",
+      "successful existing sandbox migration with retained audit/nonces and N+1 policy lineage",
+      "exact service token preservation and only edge header-prefix rewrite",
+      "explicit start and route/monitoring cutover authorization"
+    ],
+    "artifactSource": "95e18247169cede3e20b39672e5fbc9b22ba129a",
+    "edgeTemplateCommit": "19f68cff",
+    "edgeTemplateSha256": "a85bba46ccbd272bc52b18f962b06124bdd19dcf12d1c33065d4952a0126f439",
+    "caDecision": "Preserve all existing proxy and fixture CA bytes unchanged.",
+    "externalSandboxProxy": false,
+    "labDnsBoundary": "Existing private lab resolution; no new public lab DNS record."
+  },
+  "x-isolated": {
+    "cap_drop": [
+      "ALL"
+    ],
+    "dns": [
+      "127.0.0.1"
+    ],
+    "init": true,
+    "logging": {
+      "driver": "local",
+      "options": {
+        "max-file": "2",
+        "max-size": "2m"
+      }
+    },
+    "networks": [
+      "sandbox"
+    ],
+    "pids_limit": 128,
+    "pull_policy": "never",
+    "read_only": true,
+    "restart": "unless-stopped",
+    "security_opt": [
+      "no-new-privileges:true"
+    ],
+    "tmpfs": [
+      "/tmp:rw,noexec,nosuid,nodev,size=32m,uid=10001,gid=10001,mode=0700"
+    ],
+    "user": "10001:10001"
+  }
+}

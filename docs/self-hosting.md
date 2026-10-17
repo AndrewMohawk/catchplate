@@ -5,8 +5,13 @@
 ## Use the current instance
 
 Open the [retained instance](https://serverware.example.com/) with the homelab login.
-The Catchplate source rename is complete, but the renamed build, retained-state
-migration and hostname cutover are pending. Follow the [rename status](catchplate-rename.md);
+Access was restored without reboot at the October 17, 07:46:36 UTC checkpoint:
+verified console TLS/Authelia redirect and main lab CA/policy health passed.
+The page still says Serverware. Catchplate source/build and isolated startup
+checks are complete, but main retained-state migration and hostname cutover
+have not started. They remain paused while the original app/gate drain audit
+delivery; historical dropped events are not erased by recovery. The latest
+user instruction forbids reboot. Follow the [rename status](catchplate-rename.md);
 do not change an existing deployment's paths or private configuration by hand.
 It is already running: opening it does not build the proxy, start a pilot or
 require a security-key ceremony. Follow [Getting started](wiki/Getting-started.md)
@@ -23,11 +28,11 @@ Do not recreate its state, regenerate its keys or run a historical rollout scrip
 
 The [standalone installation guide](../docker/catchplate-standalone/README.md)
 provides the new host-trusted app/proxy/Nginx package and one JSON configuration.
-**Pre-rename isolated installation and lifecycle verified.** Both build paths and fresh
-starts passed, together with browser, persisted-state restart and TLS replacement
-checks. Those Serverware results do not verify the renamed Catchplate package;
-its build/startup checks are pending. Public deployment and real-provider use remain separate. Follow the
-[verification record](standalone-installation-verification.md) for current results.
+**Renamed isolated build/startup verified.** The Catchplate package passed a
+fresh fixture-enabled install and retained-state app/gate startup, separately
+from the older installation/lifecycle evidence. Those checks do not establish
+the main live cutover or real-provider use. Follow the [rename evidence](catchplate-rename.md#rename-evidence)
+and [installation verification record](standalone-installation-verification.md).
 It does not
 depend on the homelab login or retained deployment paths. You supply a Linux
 Docker host, two HTTPS hostnames, a certificate covering both, and a dedicated

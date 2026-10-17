@@ -252,7 +252,14 @@ class SandboxCheck:
         self.results.append("route_denials_without_upstream_dispatch")
 
         status, payload = self.request("/echo?reflectCredential=1")
-        require(status == 502 and payload == {"error": "response_credential_reflection"},
+        require(status == 502 and payload == {
+            "error": "response_credential_reflection",
+            "upstream_status": 200,
+            "upstreamDispatch": "response_received",
+            "providerOutcome": "unknown",
+            "retryProviderRequest": False,
+            "providerOperationMayHaveCommitted": False,
+        },
                 "reflected synthetic credential was not blocked")
         self.results.append("credential_reflection_blocked")
 

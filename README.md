@@ -12,8 +12,9 @@ restrict response data or require human approval.
 
 **Rename in progress:** the GitHub repository, source and built image are now
 Catchplate. Isolated fresh-install and migrated-state startup checks passed.
-The retained live installation still uses Serverware identities; its state and
-public hostname cutover remain pending. See the [rename checklist](docs/catchplate-rename.md).
+The main live installation still uses Serverware identities; its state and
+public hostname cutover remain pending. The separate synthetic sandbox is now
+running as Catchplate with its retained state. See the [rename checklist](docs/catchplate-rename.md).
 
 ## Start here
 

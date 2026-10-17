@@ -122,6 +122,15 @@
           "source": "/srv/catchplate-fast/homelab_data/catchplate-sandbox/upstream-data/demo-upstream",
           "target": "/demo-upstream",
           "type": "bind"
+        },
+        {
+          "bind": {
+            "create_host_path": false
+          },
+          "read_only": true,
+          "source": "/home/catchplate/catchplate/scripts/check_development_sandbox.py",
+          "target": "/app/scripts/check_development_sandbox.py",
+          "type": "bind"
         }
       ],
       "working_dir": "/app"
@@ -420,20 +429,13 @@
     }
   },
   "x-catchplate-migration": {
-    "armed": false,
+    "armed": true,
     "baselineIdentitiesSha256": "cae33a8e1d7a62ebf20d36b430bbb611f9c05289ab1c8fd5932e6e69d6fc4051",
     "baselineModelSha256": "d7833c2767918590c6329ca2b3ca9ef2cb2218ea83a3852bfe43df6caabe384c",
-    "note": "Prepared only. Do not apply before explicit cutover authorization and successful stopped-copy migration. Original containers and network are retained for rollback.",
-    "profileMigrationReady": false,
-    "requires": [
-      "canonical checkout move and exact template hash check",
-      "fresh no-overlap check for 172.16.249.128/28",
-      "explicit exact-old-container stop authorization",
-      "verified stopped-source byte-preserving archive and checkpointed copy",
-      "successful existing sandbox migration with retained audit/nonces and N+1 policy lineage",
-      "exact service token preservation and only edge header-prefix rewrite",
-      "explicit start and route/monitoring cutover authorization"
-    ],
+    "note": "Stopped-copy migration verified: 1014 audit events, 98 nonces, 12 routes, all service tokens and nine key/CA files retained. Policy sequence 1 to 2 at rollback epoch 1. Original containers, network and state remain stopped and preserved; do not run both writers.",
+    "profileMigrationReady": true,
+    "migrationEvidence": "/srv/catchplate-archive/homelab_data/catchplate-sandbox-cutover-fixed.Bcsw4oco",
+    "migrationId": "05d264c8-f8ee-4307-8ac6-6e5d1a251ac6",
     "artifactSource": "95e18247169cede3e20b39672e5fbc9b22ba129a",
     "edgeTemplateCommit": "19f68cff",
     "edgeTemplateSha256": "a85bba46ccbd272bc52b18f962b06124bdd19dcf12d1c33065d4952a0126f439",
